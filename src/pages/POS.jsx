@@ -8,7 +8,8 @@ import {
   apiFetch,
   fetchMobileMenu,
   fetchMobileCategories,
-  createOrder
+  createOrder,
+  resolveImageUrl
 } from '../utils/api';
 
 export default function POS({ user: propUser, token: propToken }) {
@@ -20,6 +21,12 @@ export default function POS({ user: propUser, token: propToken }) {
     const saved = localStorage.getItem('ARISO_RETAIL_USER');
     return saved ? JSON.parse(saved) : {};
   });
+
+  useEffect(() => {
+    if (propUser && Object.keys(propUser).length > 0) {
+      setUser(propUser);
+    }
+  }, [propUser]);
 
   const token = propToken || localStorage.getItem('ARISO_RETAIL_TOKEN') || '';
 
@@ -456,9 +463,6 @@ export default function POS({ user: propUser, token: propToken }) {
       setCustomerName('');
       setCustomerPhone('');
       setCustomerAddress('');
-      setOrderNotes('');
-      setSelectAllItems(false);
-      setSelectedCartItemIds([]);
       setCheckoutVisible(false);
       setCashReceived('');
       setActiveMobileTab('catalog');
@@ -575,11 +579,60 @@ export default function POS({ user: propUser, token: propToken }) {
       {/* HEADER */}
       <header style={{ ...styles.header, backgroundColor: colors.bgHeader, borderColor: colors.borderColor }} className="pos-header">
         <div style={styles.headerLeft}>
-          <span style={styles.logo}>🛍️</span>
-          <div>
-            <h1 style={{ ...styles.brandTitle, color: colors.textPrimary }} className="pos-brand-title">{t('brandName')}</h1>
-            <span style={styles.storeName}>{t('counterLabel')} • {t('cashierLabel')}: {user.name || 'Admin'}</span>
-          </div>
+          {user?.restaurant_logo_url ? (
+            <img
+              src={resolveImageUrl(user.restaurant_logo_url)}
+              alt="Logo"
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '6px',
+                marginRight: '8px',
+                objectFit: 'cover',
+                border: '1px solid',
+                borderColor: colors.borderColor
+              }}
+              onError={(e) => {
+                e.target.style.display = 'none';
+              }}
+            />
+          ) : (
+            <span style={styles.logo}>🛍️</span>
+          )}
+          {(() => {
+            const maxTitleWidth = windowWidth < 600 ? '90px' : windowWidth < 900 ? '140px' : windowWidth < 1200 ? '200px' : '320px';
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <h1
+                  style={{
+                    ...styles.brandTitle,
+                    color: colors.textPrimary,
+                    maxWidth: maxTitleWidth,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                  className="pos-brand-title"
+                  title={user?.restaurant_name || t('brandName')}
+                >
+                  {user?.restaurant_name || t('brandName')}
+                </h1>
+                <span
+                  style={{
+                    ...styles.storeName,
+                    maxWidth: maxTitleWidth,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    display: 'block'
+                  }}
+                  title={`${t('counterLabel')} • ${t('cashierLabel')}: ${user.name || 'Admin'}`}
+                >
+                  {t('counterLabel')} • {t('cashierLabel')}: {user.name || 'Admin'}
+                </span>
+              </div>
+            );
+          })()}
         </div>
 
         <div style={styles.headerRight}>
@@ -621,19 +674,6 @@ export default function POS({ user: propUser, token: propToken }) {
             🌐 {currentLangObj.nativeName}
           </button>
 
-          {/* Light / Dark Mode Toggle */}
-          <button
-            style={{
-              ...styles.headerIconBtn,
-              backgroundColor: isDark ? '#334155' : '#F1F5F9',
-              color: colors.textPrimary,
-              borderColor: colors.borderColor
-            }}
-            onClick={toggleThemeMode}
-            title="Toggle Light/Dark Mode"
-          >
-            {isDark ? '🌙' : '☀️'}
-          </button>
 
           <button style={styles.shortcutHelpBtn} onClick={() => setKeyboardHelpVisible(true)}>
             ⌨️ {t('shortcutsBtn')}
@@ -849,22 +889,84 @@ export default function POS({ user: propUser, token: propToken }) {
                       style={{
                         ...styles.productCard,
                         padding: cardPadding,
-                        backgroundColor: colors.bgCard,
                         borderColor: selectedProductIndex === idx ? colors.accentOrange : colors.borderColor,
-                        boxShadow: isDark ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.05)'
+                        boxShadow: isDark ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.05)',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        ...(product.image_url
+                          ? {
+                              backgroundImage: `url(${resolveImageUrl(product.image_url)})`,
+                              backgroundSize: 'cover',
+                              backgroundPosition: 'center',
+                            }
+                          : {
+                              backgroundColor: colors.bgCard,
+                            })
                       }}
                       onClick={() => handleSelectProduct(product)}
                     >
-                      <div style={styles.cardHeader}>
-                        <span style={{ ...styles.badge, ...(isWeight ? styles.weightBadge : styles.pieceBadge) }}>
-                          {isWeight ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
-                        </span>
-                        {product.barcode && <span style={{ ...styles.barcodeText, color: colors.textSecondary }}>#{product.barcode}</span>}
-                      </div>
-                      <h3 style={{ ...styles.cardTitle, fontSize: titleFontSize, color: colors.textPrimary }}>{product.name}</h3>
-                      <div style={styles.cardFooter}>
-                        <span style={styles.cardPrice}>₹{price.toFixed(2)}</span>
-                        <span style={{ ...styles.cardUnit, color: colors.textSecondary }}>per {product.base_unit || 'pcs'}</span>
+                      {/* Dark gradient overlay scrim for text legibility, only if image is present */}
+                      {product.image_url && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.65) 50%, rgba(0,0,0,0.92) 100%)',
+                            zIndex: 1,
+                          }}
+                        />
+                      )}
+
+                      {/* Card Content - Z-Indexed above the scrim */}
+                      <div
+                        style={{
+                          zIndex: 2,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          height: '100%',
+                          width: '100%',
+                          flex: 1,
+                        }}
+                      >
+                        <div style={styles.cardHeader}>
+                          <span style={{ ...styles.badge, ...(isWeight ? styles.weightBadge : styles.pieceBadge) }}>
+                            {isWeight ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
+                          </span>
+                          {product.barcode && (
+                            <span style={{
+                              ...styles.barcodeText,
+                              color: product.image_url ? 'rgba(255,255,255,0.7)' : colors.textSecondary
+                            }}>
+                              #{product.barcode}
+                            </span>
+                          )}
+                        </div>
+                        <h3 style={{
+                          ...styles.cardTitle,
+                          fontSize: titleFontSize,
+                          color: product.image_url ? '#FFFFFF' : colors.textPrimary,
+                          textShadow: product.image_url ? '0 1px 3px rgba(0,0,0,0.9)' : 'none'
+                        }}>
+                          {product.name}
+                        </h3>
+                        <div style={styles.cardFooter}>
+                          <span style={{
+                            ...styles.cardPrice,
+                            color: product.image_url ? '#FB923C' : colors.textPrimary
+                          }}>
+                            ₹{price.toFixed(2)}
+                          </span>
+                          <span style={{
+                            ...styles.cardUnit,
+                            color: product.image_url ? 'rgba(255,255,255,0.8)' : colors.textSecondary
+                          }}>
+                            per {(product.is_weight_based || product.unitType === 'weight' || product.unit === 'kg') ? 'kg' : (product.base_unit || 'pcs')}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1701,6 +1803,22 @@ const styles = {
     flexDirection: 'column',
     justifyContent: 'space-between',
     minHeight: '120px',
+  },
+  imageContainer: {
+    width: '100%',
+    borderRadius: '8px',
+    overflow: 'hidden',
+    marginBottom: '8px',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    border: '1px solid #F1F5F9',
+  },
+  productImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
   },
   cardHeader: {
     display: 'flex',

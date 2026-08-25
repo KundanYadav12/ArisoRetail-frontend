@@ -58,7 +58,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         <div style={styles.header}>
           <div>
             <h2 style={styles.productName}>{product.name}</h2>
-            <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {product.base_unit || product.unit || 'kg'}</p>
+            <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</p>
           </div>
           <button style={styles.closeBtn} onClick={onClose}>✕</button>
         </div>
@@ -116,7 +116,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           </div>
           <div style={styles.summaryRow}>
             <span style={styles.summaryLabel}>Rate:</span>
-            <span style={styles.summaryVal}>₹{pricePerBaseUnit.toFixed(2)} / {product.base_unit || 'kg'}</span>
+            <span style={styles.summaryVal}>₹{pricePerBaseUnit.toFixed(2)} / {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</span>
           </div>
           <div style={styles.divider} />
           <div style={styles.totalRow}>

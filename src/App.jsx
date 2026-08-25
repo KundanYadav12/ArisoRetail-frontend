@@ -13,7 +13,7 @@ import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import { NotificationProvider } from './context/NotificationContext';
-import { apiFetch } from './utils/api';
+import { apiFetch, resolveImageUrl } from './utils/api';
 import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
@@ -224,7 +224,7 @@ export default function App() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.75, sm: 1.5, xl: 2 }, flexShrink: 1, minWidth: 0, maxWidth: { xs: 200, sm: 320, md: 500 } }}>
                   <Box
                     component="img"
-                    src={user?.restaurant_logo_url || '/ariso-pos-logo.png'}
+                    src={resolveImageUrl(user?.restaurant_logo_url) || '/ariso-pos-logo.png'}
                     alt="Ariso POS"
                     sx={{
                       width: { xs: 28, sm: 34, xl: 42 },
@@ -239,6 +239,7 @@ export default function App() {
                   />
                   <Typography
                     variant="h6"
+                    title={user?.restaurant_name || 'Ariso Retail'}
                     sx={{
                       fontWeight: 800,
                       fontSize: { xs: '0.95rem', sm: '1.1rem', xl: '1.6rem' },
@@ -253,77 +254,8 @@ export default function App() {
                 </Box>
 
                 {/* Navigation Menu (Responsive: ☰ Hamburger on Mobile, Inline Tabs on Desktop) */}
-                {isMobile ? (
-                  <>
-                    <IconButton
-                      onClick={(e) => setAnchorElNav(e.currentTarget)}
-                      color="inherit"
-                      sx={{
-                        width: 44,
-                        height: 44,
-                        borderRadius: '10px',
-                        border: '1px solid',
-                        borderColor: 'divider',
-                        bgcolor: 'background.paper'
-                      }}
-                    >
-                      <MenuIcon />
-                    </IconButton>
-                    <Menu
-                      anchorEl={anchorElNav}
-                      open={Boolean(anchorElNav)}
-                      onClose={() => setAnchorElNav(null)}
-                      anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                      transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-                      slotProps={{
-                        paper: {
-                          elevation: 4,
-                          sx: { minWidth: 200, borderRadius: 2, mt: 1 }
-                        }
-                      }}
-                    >
-                      <MenuItem
-                        onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
-                        selected={currentView === 'pos'}
-                        sx={{ fontWeight: currentView === 'pos' ? 800 : 500 }}
-                      >
-                        🛒 &nbsp; POS Screen
-                      </MenuItem>
-                      <MenuItem
-                        onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
-                        selected={currentView === 'cashier'}
-                        sx={{ fontWeight: currentView === 'cashier' ? 800 : 500 }}
-                      >
-                        💼 &nbsp; Cashier Shift
-                      </MenuItem>
-                      {isAdminOrManager && (
-                        <MenuItem
-                          onClick={() => { setCurrentView('admin'); setAnchorElNav(null); }}
-                          selected={currentView === 'admin'}
-                          sx={{ fontWeight: currentView === 'admin' ? 800 : 500 }}
-                        >
-                          ⚙️ &nbsp; Admin Panel
-                        </MenuItem>
-                      )}
-                      {isSuperAdmin && (
-                        <MenuItem
-                          onClick={() => { setCurrentView('superadmin'); setAnchorElNav(null); }}
-                          selected={currentView === 'superadmin'}
-                          sx={{ fontWeight: currentView === 'superadmin' ? 800 : 500 }}
-                        >
-                          👑 &nbsp; Super Admin
-                        </MenuItem>
-                      )}
-                      <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
-                      <MenuItem
-                        onClick={() => { setAnchorElNav(null); handleLogout(); }}
-                        sx={{ color: 'error.main', fontWeight: 700 }}
-                      >
-                        🚪 &nbsp; Logout
-                      </MenuItem>
-                    </Menu>
-                  </>
-                ) : (
+                {/* Desktop inline tabs */}
+                {!isMobile && (
                   <Box sx={{ display: 'flex', gap: { xs: 1, xl: 2.5 } }}>
                     <Button
                       variant={currentView === 'pos' ? 'contained' : 'text'}
@@ -361,6 +293,84 @@ export default function App() {
                   </Box>
                 )}
 
+                {/* Hamburger menu trigger icon (accessible on all viewports) */}
+                <Box>
+                  <IconButton
+                    onClick={(e) => setAnchorElNav(e.currentTarget)}
+                    color="inherit"
+                    sx={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: '10px',
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      bgcolor: 'background.paper'
+                    }}
+                  >
+                    <MenuIcon />
+                  </IconButton>
+                  <Menu
+                    anchorEl={anchorElNav}
+                    open={Boolean(anchorElNav)}
+                    onClose={() => setAnchorElNav(null)}
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                    transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+                    slotProps={{
+                      paper: {
+                        elevation: 4,
+                        sx: { minWidth: 200, borderRadius: 2, mt: 1 }
+                      }
+                    }}
+                  >
+                    <MenuItem
+                      onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
+                      selected={currentView === 'pos'}
+                      sx={{ fontWeight: currentView === 'pos' ? 800 : 500 }}
+                    >
+                      🛒 &nbsp; POS Screen
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
+                      selected={currentView === 'cashier'}
+                      sx={{ fontWeight: currentView === 'cashier' ? 800 : 500 }}
+                    >
+                      💼 &nbsp; Cashier Shift
+                    </MenuItem>
+                    {isAdminOrManager && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('admin'); setAnchorElNav(null); }}
+                        selected={currentView === 'admin'}
+                        sx={{ fontWeight: currentView === 'admin' ? 800 : 500 }}
+                      >
+                        ⚙️ &nbsp; Admin Panel
+                      </MenuItem>
+                    )}
+                    {isSuperAdmin && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('superadmin'); setAnchorElNav(null); }}
+                        selected={currentView === 'superadmin'}
+                        sx={{ fontWeight: currentView === 'superadmin' ? 800 : 500 }}
+                      >
+                        👑 &nbsp; Super Admin
+                      </MenuItem>
+                    )}
+                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
+                    <MenuItem
+                      onClick={() => { toggleTheme(); setAnchorElNav(null); }}
+                      sx={{ fontWeight: 500 }}
+                    >
+                      {themeMode === 'light' ? '🌓 \u00a0 Dark Mode' : '☀️ \u00a0 Light Mode'}
+                    </MenuItem>
+                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
+                    <MenuItem
+                      onClick={() => { setAnchorElNav(null); handleLogout(); }}
+                      sx={{ color: 'error.main', fontWeight: 700 }}
+                    >
+                      🚪 &nbsp; Logout
+                    </MenuItem>
+                  </Menu>
+                </Box>
+
                 {/* User Profile & Actions */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5, xl: 3 }, flexShrink: 0 }}>
                   <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'right' }}>
@@ -370,9 +380,6 @@ export default function App() {
                     </Typography>
                   </Box>
 
-                  <IconButton onClick={toggleTheme} color="inherit" size="small">
-                    {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
-                  </IconButton>
 
                   <IconButton onClick={handleLogout} color="error" title="End Session" size="small">
                     <LogOutIcon fontSize="small" />

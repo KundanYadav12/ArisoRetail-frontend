@@ -28,6 +28,22 @@ export function getApiUrl(endpoint) {
   return `${API_BASE_URL}${cleanEndpoint}`;
 }
 
+export function resolveImageUrl(path) {
+  if (!path) return '';
+  let cleanPath = path;
+  if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
+    const uploadsIndex = cleanPath.indexOf('/uploads/');
+    if (uploadsIndex !== -1) {
+      cleanPath = cleanPath.substring(uploadsIndex);
+    } else {
+      return cleanPath;
+    }
+  }
+  const formattedPath = cleanPath.startsWith('/') ? cleanPath : '/' + cleanPath;
+  const host = API_BASE_URL.replace(/\/api\/?$/, '');
+  return `${host}${formattedPath}`;
+}
+
 let isRefreshing = false;
 let failedQueue = [];
 

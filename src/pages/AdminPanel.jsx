@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Tabs, Tab, useMediaQuery, IconButton, CircularProgress, Checkbox, TablePagination, InputAdornment, TableSortLabel, Tooltip, FormControl, InputLabel, Badge, Switch, FormControlLabel, Divider, Alert } from '@mui/material';
 import { Plus, Edit2, Trash2, Shield, Settings, FileText, Wifi, List, RefreshCw, Download, Layers, GripVertical, Search, X, Filter, ArrowUpDown, CheckSquare, Square, Utensils, CheckCircle, XCircle, Printer, Users, UserPlus, Key, ArrowUp, ArrowDown, Boxes, Package, AlertTriangle, TrendingUp, History, FileSpreadsheet, Save, Upload, Image as ImageIcon, Store } from 'lucide-react';
-import { apiFetch, getApiUrl, downloadFile } from '../utils/api';
+import { apiFetch, getApiUrl, downloadFile, resolveImageUrl } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
 import DateRangePicker from '../components/DateRangePicker';
 import GstSlabReport from '../components/GstSlabReport';
@@ -333,8 +333,17 @@ export default function AdminPanel({ token }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to upload logo image.');
 
-      const formattedUrl = data.logo_url ? getApiUrl(data.logo_url) : data.logo_url;
+      const formattedUrl = data.logo_url;
       setReceiptSettings(prev => ({ ...prev, logo_url: formattedUrl }));
+      
+      try {
+        const currentUser = JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || '{}');
+        currentUser.restaurant_logo_url = formattedUrl;
+        localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(currentUser));
+        window.dispatchEvent(new CustomEvent('auth_token_refreshed', { detail: { user: currentUser } }));
+      } catch (err) {
+        console.error('[Logo Upload Session Sync Error]', err);
+      }
       notify.success('Restaurant logo uploaded successfully!', 'Logo Uploaded');
     } catch (err) {
       console.error('[Logo Upload Error]', err);
@@ -1071,10 +1080,10 @@ export default function AdminPanel({ token }) {
         setPermissionsDraft(buildPermissionsDraft(updated));
 
         // Update local session & header identity
-        const currentUser = JSON.parse(localStorage.getItem('pos_user') || '{}');
+        const currentUser = JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || '{}');
         currentUser.restaurant_name = receiptSettings.restaurant_name;
         currentUser.restaurant_logo_url = receiptSettings.logo_url;
-        localStorage.setItem('pos_user', JSON.stringify(currentUser));
+        localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(currentUser));
         window.dispatchEvent(new CustomEvent('auth_token_refreshed', { detail: { user: currentUser } }));
 
         notify.success('🏪 Restaurant Profile & Receipt settings saved successfully.', 'Settings Saved');
@@ -3118,7 +3127,7 @@ export default function AdminPanel({ token }) {
                             {receiptSettings.logo_url ? (
                               <Box
                                 component="img"
-                                src={receiptSettings.logo_url}
+                                src={resolveImageUrl(receiptSettings.logo_url)}
                                 alt="Restaurant Logo"
                                 sx={{ width: 64, height: 64, borderRadius: 2, objectFit: 'cover', border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}
                                 onError={(e) => { e.target.style.display = 'none'; }}
@@ -3731,7 +3740,7 @@ export default function AdminPanel({ token }) {
                         {/* Logo */}
                         {Boolean(receiptSettings.show_logo) && receiptSettings.logo_url && (
                           <Box sx={{ textAlign: receiptSettings.header_alignment || 'center', mb: 0.5 }}>
-                            <img src={receiptSettings.logo_url} alt="Logo" style={{ maxHeight: 40, objectFit: 'contain' }} />
+                            <img src={resolveImageUrl(receiptSettings.logo_url)} alt="Logo" style={{ maxHeight: 40, objectFit: 'contain' }} />
                           </Box>
                         )}
 
@@ -3952,7 +3961,7 @@ export default function AdminPanel({ token }) {
                             {receiptSettings.logo_url ? (
                               <Box
                                 component="img"
-                                src={receiptSettings.logo_url}
+                                src={resolveImageUrl(receiptSettings.logo_url)}
                                 alt="Restaurant Logo"
                                 sx={{ width: 80, height: 80, borderRadius: 2.5, objectFit: 'cover', border: '1px solid', borderColor: 'divider', bgcolor: '#fff', p: 0.5 }}
                                 onError={(e) => { e.target.style.display = 'none'; }}
@@ -4078,7 +4087,7 @@ export default function AdminPanel({ token }) {
                     {receiptSettings.logo_url ? (
                       <Box
                         component="img"
-                        src={receiptSettings.logo_url}
+                        src={resolveImageUrl(receiptSettings.logo_url)}
                         alt="Logo Preview"
                         sx={{ width: 36, height: 36, borderRadius: 1.5, objectFit: 'cover', border: '1px solid', borderColor: 'divider', flexShrink: 0 }}
                         onError={(e) => { e.target.style.display = 'none'; }}
