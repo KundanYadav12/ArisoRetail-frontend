@@ -82,8 +82,12 @@ export function formatWhatsAppReceipt(orderData, receiptSettings = {}) {
     lines.push(`*Discount${discLabel}:* -₹${discountAmount.toFixed(2)}`);
   }
   if (taxAmount > 0) {
-    lines.push(`*CGST:* ₹${cgstAmount.toFixed(2)}`);
-    lines.push(`*SGST:* ₹${sgstAmount.toFixed(2)}`);
+    if (order.tax_type === 'inter') {
+      lines.push(`*IGST:* ₹${taxAmount.toFixed(2)}`);
+    } else {
+      lines.push(`*CGST:* ₹${cgstAmount.toFixed(2)}`);
+      lines.push(`*SGST:* ₹${sgstAmount.toFixed(2)}`);
+    }
     lines.push(`*Total Tax:* ₹${taxAmount.toFixed(2)}`);
   }
   lines.push(`------------------------------------`);

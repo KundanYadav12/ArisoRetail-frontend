@@ -264,6 +264,8 @@ export default function SuperAdminPanel({ token }) {
             <Tab icon={<History size={18} />} iconPosition="start" label="📜 Version & Profile History" sx={{ fontWeight: 800, textTransform: 'none' }} />
             <Tab icon={<Palette size={18} />} iconPosition="start" label="🎨 Global Theme Customization" sx={{ fontWeight: 800, textTransform: 'none' }} />
             <Tab icon={<Cpu size={18} />} iconPosition="start" label="🤖 Google AI Configuration" sx={{ fontWeight: 800, textTransform: 'none' }} />
+            <Tab icon={<Users size={18} />} iconPosition="start" label="Distributors" sx={{ fontWeight: 800, textTransform: 'none' }} />
+            <Tab icon={<Key size={18} />} iconPosition="start" label="Licenses" sx={{ fontWeight: 800, textTransform: 'none' }} />
           </Tabs>
         </Box>
 
@@ -393,6 +395,10 @@ export default function SuperAdminPanel({ token }) {
           <SuperAdminThemeManager token={token} />
         ) : saTab === 3 ? (
           <SuperAdminAiConfigManager token={token} />
+        ) : saTab === 4 ? (
+          <SuperAdminDistributors token={token} />
+        ) : saTab === 5 ? (
+          <SuperAdminLicenses token={token} />
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
 
@@ -495,11 +501,15 @@ export default function SuperAdminPanel({ token }) {
           <Table>
             <TableHead sx={{ bgcolor: 'action.hover' }}>
               <TableRow>
-                <TableCell sx={{ fontWeight: 'bold' }}>Restaurant / Tenant</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>Owner Details</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Store Name</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Distributor Name</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>License ID</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Owner / User Details</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Start Date</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Expiry Date</TableCell>
-                <TableCell sx={{ fontWeight: 'bold' }}>User Limits</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Current Yr Price</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Next Yr Price</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Total Sales</TableCell>
                 <TableCell sx={{ fontWeight: 'bold', textAlign: 'right' }}>Actions</TableCell>
               </TableRow>
@@ -522,10 +532,17 @@ export default function SuperAdminPanel({ token }) {
                       </Box>
                     </Box>
                   </TableCell>
+                  <TableCell sx={{ fontSize: 13, fontWeight: 700 }}>
+                    {rest.distributor_name || 'N/A'}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 13, fontFamily: 'monospace', fontWeight: 'bold', color: 'primary.main' }}>
+                    {rest.license_code || 'Direct Provision'}
+                  </TableCell>
                   <TableCell>
                     <Box>
                       <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>{rest.owner_name || 'Owner'}</Typography>
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{rest.owner_email || rest.email}</Typography>
+                      {rest.owner_mobile && <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>{rest.owner_mobile}</Typography>}
                     </Box>
                   </TableCell>
                   <TableCell>
@@ -537,10 +554,16 @@ export default function SuperAdminPanel({ token }) {
                     />
                   </TableCell>
                   <TableCell sx={{ fontSize: 13 }}>
-                    {rest.subscription_expires_at ? new Date(rest.subscription_expires_at).toLocaleDateString() : 'N/A'}
+                    {rest.subscription_start_date ? new Date(rest.subscription_start_date).toLocaleDateString() : (rest.created_at ? new Date(rest.created_at).toLocaleDateString() : 'N/A')}
                   </TableCell>
                   <TableCell sx={{ fontSize: 13 }}>
-                    {rest.userCount} / {rest.max_user_limit || 5} Max Users
+                    {rest.subscription_expires_at ? new Date(rest.subscription_expires_at).toLocaleDateString() : 'N/A'}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 13, fontWeight: 'bold' }}>
+                    {rest.current_year_pricing !== undefined && rest.current_year_pricing !== null ? `₹${parseFloat(rest.current_year_pricing).toFixed(2)}` : 'N/A'}
+                  </TableCell>
+                  <TableCell sx={{ fontSize: 13, fontWeight: 'bold' }}>
+                    {rest.next_year_pricing !== undefined && rest.next_year_pricing !== null ? `₹${parseFloat(rest.next_year_pricing).toFixed(2)}` : 'N/A'}
                   </TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Rs. {parseFloat(rest.totalRevenue || 0).toFixed(2)}</TableCell>
                   <TableCell sx={{ textAlign: 'right' }}>
@@ -748,6 +771,673 @@ export default function SuperAdminPanel({ token }) {
       </Dialog>
         </Box>
       </Container>
+    </Box>
+  );
+}
+
+function SuperAdminDistributors({ token }) {
+  const { notify, confirmDialog } = useNotify();
+  const [distributors, setDistributors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [distName, setDistName] = useState('');
+  const [editingDist, setEditingDist] = useState(null);
+
+  // License inventory popup states
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [selectedDist, setSelectedDist] = useState(null);
+  const [licenses, setLicenses] = useState([]);
+  const [loadingLicenses, setLoadingLicenses] = useState(false);
+
+  // Nested dialog states for generating more licenses
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [genQuantity, setGenQuantity] = useState('5');
+  const [genPriceCurrent, setGenPriceCurrent] = useState('1500');
+  const [genPriceNext, setGenPriceNext] = useState('2000');
+
+  // Nested dialog states for editing license pricing
+  const [editPriceOpen, setEditPriceOpen] = useState(false);
+  const [editingLicense, setEditingLicense] = useState(null);
+  const [editPriceCurrent, setEditPriceCurrent] = useState('');
+  const [editPriceNext, setEditPriceNext] = useState('');
+
+  useEffect(() => {
+    fetchDistributors();
+  }, []);
+
+  const fetchDistributors = async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/api/superadmin/distributors');
+      if (res.ok) {
+        setDistributors(await res.json());
+      }
+    } catch (err) {
+      notify.error('Failed to load distributors.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchLicenses = async (distId) => {
+    setLoadingLicenses(true);
+    try {
+      const res = await apiFetch(`/api/superadmin/licenses?distributor_id=${distId}`);
+      if (res.ok) {
+        setLicenses(await res.json());
+      }
+    } catch (err) {
+      notify.error('Failed to load license inventory.');
+    } finally {
+      setLoadingLicenses(false);
+    }
+  };
+
+  const handleOpenInventory = (dist) => {
+    setSelectedDist(dist);
+    setInventoryOpen(true);
+    fetchLicenses(dist.id);
+  };
+
+  const handleExportExcel = () => {
+    if (!selectedDist) return;
+    notify.info('Generating Excel file, please wait...');
+    apiFetch(`/api/superadmin/distributors/${selectedDist.id}/export-licenses`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || 'Failed to export Excel.');
+        }
+        const blob = await res.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        const filename = `${selectedDist.name.replace(/\s+/g, '_')}_Distributor_License_Inventory.xlsx`;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        notify.success('Excel export downloaded successfully.');
+      })
+      .catch((err) => {
+        notify.error(err.message || 'Error exporting Excel file.');
+      });
+  };
+
+  const handleGenerateMoreSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedDist) return;
+    try {
+      const res = await apiFetch('/api/superadmin/licenses/generate', {
+        method: 'POST',
+        body: {
+          distributor_id: selectedDist.id,
+          quantity: parseInt(genQuantity),
+          current_year_pricing: parseFloat(genPriceCurrent),
+          next_year_pricing: parseFloat(genPriceNext)
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate licenses.');
+
+      notify.success(data.message || `Successfully generated ${genQuantity} licenses.`);
+      setGenerateOpen(false);
+      fetchLicenses(selectedDist.id);
+      fetchDistributors();
+    } catch (err) {
+      notify.error(err.message);
+    }
+  };
+
+  const handleUpdatePriceSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingLicense || !selectedDist) return;
+    try {
+      const res = await apiFetch(`/api/superadmin/licenses/${editingLicense.id}`, {
+        method: 'PUT',
+        body: {
+          current_year_pricing: parseFloat(editPriceCurrent),
+          next_year_pricing: parseFloat(editPriceNext)
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update pricing.');
+
+      notify.success('License pricing updated successfully.');
+      setEditPriceOpen(false);
+      setEditingLicense(null);
+      fetchLicenses(selectedDist.id);
+    } catch (err) {
+      notify.error(err.message);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!distName.trim()) return;
+
+    try {
+      let url = '/api/superadmin/distributors';
+      let method = 'POST';
+      if (editingDist) {
+        url = `/api/superadmin/distributors/${editingDist.id}`;
+        method = 'PUT';
+      }
+
+      const res = await apiFetch(url, {
+        method,
+        body: { name: distName.trim() }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Operation failed.');
+
+      notify.success(data.message || 'Saved successfully.');
+      setDialogOpen(false);
+      setDistName('');
+      setEditingDist(null);
+      fetchDistributors();
+    } catch (err) {
+      notify.error(err.message);
+    }
+  };
+
+  const handleDelete = async (dist) => {
+    const isConfirmed = await confirmDialog({
+      title: `Delete Distributor "${dist.name}"`,
+      message: `Are you sure you want to delete this distributor? All associated licenses will be permanently deleted as well.`,
+      confirmText: 'Delete',
+      isDestructive: true
+    });
+    if (!isConfirmed) return;
+
+    try {
+      const res = await apiFetch(`/api/superadmin/distributors/${dist.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete.');
+
+      notify.success('Distributor deleted successfully.');
+      fetchDistributors();
+    } catch (err) {
+      notify.error(err.message);
+    }
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Box>
+          <Typography variant="h6" sx={{ fontWeight: 800 }}>Distributor Management</Typography>
+          <Typography variant="caption" color="text.secondary">Create and manage license distributors</Typography>
+        </Box>
+        <Button variant="contained" onClick={() => { setEditingDist(null); setDistName(''); setDialogOpen(true); }}>
+          + Add Distributor
+        </Button>
+      </Box>
+
+      {loading ? (
+        <CircularProgress />
+      ) : (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5 }}>
+          <Table>
+            <TableHead sx={{ bgcolor: 'action.hover' }}>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 'bold' }}>Distributor Name</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Total Licenses</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Used / Activated</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Available</TableCell>
+                <TableCell sx={{ fontWeight: 'bold', textAlign: 'right' }}>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {distributors.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} align="center" sx={{ py: 4 }}>No distributors found.</TableCell>
+                </TableRow>
+              ) : (
+                distributors.map(d => (
+                  <TableRow key={d.id} hover>
+                    <TableCell sx={{ fontWeight: 800 }}>{d.name}</TableCell>
+                    <TableCell>{d.totalLicenses || 0}</TableCell>
+                    <TableCell sx={{ color: 'success.main', fontWeight: 'bold' }}>{d.usedLicenses || 0}</TableCell>
+                    <TableCell sx={{ color: 'primary.main', fontWeight: 'bold' }}>{d.availableLicenses || 0}</TableCell>
+                    <TableCell align="right" sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
+                      <Tooltip title="View License Inventory">
+                        <IconButton onClick={() => handleOpenInventory(d)} color="secondary">
+                          <Key size={16} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Edit Distributor">
+                        <IconButton onClick={() => { setEditingDist(d); setDistName(d.name); setDialogOpen(true); }} color="primary">
+                          <Edit2 size={16} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Delete Distributor">
+                        <IconButton onClick={() => handleDelete(d)} color="error">
+                          <Trash2 size={16} />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* Edit/Add Distributor Dialog */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>{editingDist ? 'Edit Distributor' : 'Add Distributor'}</DialogTitle>
+        <form onSubmit={handleSubmit}>
+          <DialogContent>
+            <TextField
+              label="Distributor Name"
+              size="small"
+              fullWidth
+              value={distName}
+              onChange={e => setDistName(e.target.value)}
+              required
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="contained">Save</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* License Inventory Dialog */}
+      <Dialog open={inventoryOpen} onClose={() => setInventoryOpen(false)} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Box>
+            🔑 License Inventory - {selectedDist?.name}
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, fontWeight: 'normal' }}>
+              Manage keys, generate additional licenses, edit pricing, or download full inventories.
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button variant="outlined" color="primary" size="small" onClick={handleExportExcel}>
+              📥 Export Excel
+            </Button>
+            <Button variant="contained" color="primary" size="small" onClick={() => { setGenQuantity('5'); setGenPriceCurrent('1500'); setGenPriceNext('2000'); setGenerateOpen(true); }}>
+              + Generate More Licenses
+            </Button>
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {loadingLicenses ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>
+          ) : (
+            <Box sx={{ overflowX: 'auto' }}>
+              <Table size="small" sx={{ minWidth: 1000 }}>
+                <TableHead sx={{ bgcolor: 'action.hover' }}>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 'bold' }}>License ID</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Generated Date</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Activation Date</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Store Name</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>User Name</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Email</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Phone</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Sub Start Date</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Sub Expiry Date</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Current Yr Price</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Next Yr Price</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold', textAlign: 'right' }}>Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {licenses.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={13} align="center" sx={{ py: 4 }}>No licenses generated for this distributor.</TableCell>
+                    </TableRow>
+                  ) : (
+                    licenses.map(lic => (
+                      <TableRow key={lic.id} hover>
+                        <TableCell sx={{ fontFamily: 'monospace', fontWeight: 'bold', fontSize: 13 }}>{lic.license_code}</TableCell>
+                        <TableCell>
+                          <Chip
+                            size="small"
+                            label={(lic.status || 'AVAILABLE').toUpperCase()}
+                            color={lic.status === 'activated' ? 'success' : lic.status === 'expired' ? 'error' : 'default'}
+                            sx={{ fontWeight: 'bold', fontSize: 11 }}
+                          />
+                        </TableCell>
+                        <TableCell>{lic.created_at ? new Date(lic.created_at).toLocaleDateString() : 'N/A'}</TableCell>
+                        <TableCell>{lic.activated_at ? new Date(lic.activated_at).toLocaleDateString() : 'N/A'}</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{lic.store_name || 'N/A'}</TableCell>
+                        <TableCell>{lic.owner_name || 'N/A'}</TableCell>
+                        <TableCell>{lic.owner_email || 'N/A'}</TableCell>
+                        <TableCell>{lic.owner_mobile || 'N/A'}</TableCell>
+                        <TableCell>{lic.subscription_start_date ? new Date(lic.subscription_start_date).toLocaleDateString() : 'N/A'}</TableCell>
+                        <TableCell>{lic.subscription_expires_at ? new Date(lic.subscription_expires_at).toLocaleDateString() : 'N/A'}</TableCell>
+                        <TableCell>₹{parseFloat(lic.current_year_pricing || 0).toFixed(2)}</TableCell>
+                        <TableCell>₹{parseFloat(lic.next_year_pricing || 0).toFixed(2)}</TableCell>
+                        <TableCell align="right">
+                          {(!lic.status || lic.status === 'available') && (
+                            <Tooltip title="Edit License Pricing">
+                              <IconButton
+                                size="small"
+                                onClick={() => {
+                                  setEditingLicense(lic);
+                                  setEditPriceCurrent(lic.current_year_pricing.toString());
+                                  setEditPriceNext(lic.next_year_pricing.toString());
+                                  setEditPriceOpen(true);
+                                }}
+                                color="primary"
+                              >
+                                <Edit2 size={14} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setInventoryOpen(false)} variant="outlined">Close Inventory</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Generate More Licenses Dialog */}
+      <Dialog open={generateOpen} onClose={() => setGenerateOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>➕ Generate More Licenses</DialogTitle>
+        <form onSubmit={handleGenerateMoreSubmit}>
+          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            <Typography variant="body2" color="text.secondary">
+              Generate additional license keys for <strong>{selectedDist?.name}</strong>.
+            </Typography>
+            <TextField
+              label="Quantity to Generate"
+              size="small"
+              type="number"
+              fullWidth
+              value={genQuantity}
+              onChange={e => setGenQuantity(e.target.value)}
+              required
+              inputProps={{ min: 1, max: 100 }}
+            />
+            <TextField
+              label="Current Year Price (₹)"
+              size="small"
+              type="number"
+              fullWidth
+              value={genPriceCurrent}
+              onChange={e => setGenPriceCurrent(e.target.value)}
+              required
+              inputProps={{ min: 0 }}
+            />
+            <TextField
+              label="Next Year Price (₹)"
+              size="small"
+              type="number"
+              fullWidth
+              value={genPriceNext}
+              onChange={e => setGenPriceNext(e.target.value)}
+              required
+              inputProps={{ min: 0 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setGenerateOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="contained">Generate</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      {/* Edit License Pricing Dialog */}
+      <Dialog open={editPriceOpen} onClose={() => setEditPriceOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>✏️ Edit License Pricing</DialogTitle>
+        <form onSubmit={handleUpdatePriceSubmit}>
+          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            <Typography variant="body2" color="text.secondary">
+              Update pricing details for License ID: <strong>{editingLicense?.license_code}</strong>.
+            </Typography>
+            <TextField
+              label="Current Year Price (₹)"
+              size="small"
+              type="number"
+              fullWidth
+              value={editPriceCurrent}
+              onChange={e => setEditPriceCurrent(e.target.value)}
+              required
+              inputProps={{ min: 0 }}
+            />
+            <TextField
+              label="Next Year Price (₹)"
+              size="small"
+              type="number"
+              fullWidth
+              value={editPriceNext}
+              onChange={e => setEditPriceNext(e.target.value)}
+              required
+              inputProps={{ min: 0 }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setEditPriceOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="contained">Save Changes</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+    </Box>
+  );
+}
+
+function SuperAdminLicenses({ token }) {
+  const { notify } = useNotify();
+  const [licenses, setLicenses] = useState([]);
+  const [distributors, setDistributors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  
+  // Generator Fields
+  const [selectedDist, setSelectedDist] = useState('');
+  const [qty, setQty] = useState('10');
+  const [currPrice, setCurrPrice] = useState('1500');
+  const [nextPrice, setNextPrice] = useState('2000');
+
+  // Search & Filter state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  useEffect(() => {
+    fetchLicensesAndDistributors();
+  }, []);
+
+  const fetchLicensesAndDistributors = async () => {
+    setLoading(true);
+    try {
+      const [licRes, distRes] = await Promise.all([
+        apiFetch('/api/superadmin/licenses'),
+        apiFetch('/api/superadmin/distributors')
+      ]);
+
+      if (licRes.ok) setLicenses(await licRes.json());
+      if (distRes.ok) setDistributors(await distRes.json());
+    } catch (err) {
+      notify.error('Failed to load license details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerate = async (e) => {
+    e.preventDefault();
+    if (!selectedDist || !qty) return;
+
+    try {
+      const res = await apiFetch('/api/superadmin/licenses/generate', {
+        method: 'POST',
+        body: {
+          distributor_id: parseInt(selectedDist),
+          quantity: parseInt(qty),
+          current_year_pricing: parseFloat(currPrice),
+          next_year_pricing: parseFloat(nextPrice)
+        }
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate.');
+
+      notify.success(data.message || 'Licenses generated successfully!');
+      setDialogOpen(false);
+      fetchLicensesAndDistributors();
+    } catch (err) {
+      notify.error(err.message);
+    }
+  };
+
+  // Filtered licenses logic
+  const filteredLicenses = licenses.filter(lic => {
+    const codeMatch = lic.license_code.includes(searchQuery);
+    const storeMatch = lic.store_name && lic.store_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesQuery = searchQuery === '' || codeMatch || storeMatch;
+
+    const matchesStatus = statusFilter === 'all' || lic.status === statusFilter;
+    return matchesQuery && matchesStatus;
+  });
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+        <Box>
+          <Typography variant="h6" sx={{ fontWeight: 800 }}>License Key Management</Typography>
+          <Typography variant="caption" color="text.secondary">Generate unique 12-digit store activation keys</Typography>
+        </Box>
+        <Button variant="contained" onClick={() => { if (distributors.length > 0) setSelectedDist(distributors[0].id.toString()); setDialogOpen(true); }}>
+          🔑 Generate Licenses
+        </Button>
+      </Box>
+
+      {/* Filter Row */}
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+        <TextField
+          label="Search by License ID or Store"
+          size="small"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value.replace(/\D/g, ''))}
+          sx={{ width: 280 }}
+        />
+        <Select size="small" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} sx={{ width: 160 }}>
+          <MenuItem value="all">All Statuses</MenuItem>
+          <MenuItem value="available">🟢 Available</MenuItem>
+          <MenuItem value="activated">🔴 Activated</MenuItem>
+          <MenuItem value="expired">🟡 Expired</MenuItem>
+        </Select>
+      </Box>
+
+      {loading ? (
+        <CircularProgress />
+      ) : (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5 }}>
+          <Table>
+            <TableHead sx={{ bgcolor: 'action.hover' }}>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 'bold' }}>License ID</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Distributor</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Activated Store</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Owner Details</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Current Pricing</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Next Yr Pricing</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Activated Date</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filteredLicenses.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} align="center" sx={{ py: 4 }}>No licenses matching the filters.</TableCell>
+                </TableRow>
+              ) : (
+                filteredLicenses.map(lic => (
+                  <TableRow key={lic.id} hover>
+                    <TableCell sx={{ fontWeight: 'bold', fontFamily: 'monospace', fontSize: 13, color: 'primary.main' }}>
+                      {lic.license_code}
+                    </TableCell>
+                    <TableCell>{lic.distributor_name}</TableCell>
+                    <TableCell>
+                      <Chip
+                        label={lic.status.toUpperCase()}
+                        color={lic.status === 'activated' ? 'error' : lic.status === 'available' ? 'success' : 'warning'}
+                        size="small"
+                        sx={{ fontWeight: 800 }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>{lic.store_name || 'N/A'}</TableCell>
+                    <TableCell sx={{ fontSize: 12 }}>{lic.owner_name || 'N/A'}</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>₹{parseFloat(lic.current_year_pricing).toFixed(2)}</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>₹{parseFloat(lic.next_year_pricing).toFixed(2)}</TableCell>
+                    <TableCell sx={{ fontSize: 12 }}>
+                      {lic.activated_at ? new Date(lic.activated_at).toLocaleDateString() : 'N/A'}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* GENERATOR DIALOG */}
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>Generate License Keys</DialogTitle>
+        <form onSubmit={handleGenerate}>
+          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+            <Box>
+              <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.5 }}>SELECT DISTRIBUTOR</Typography>
+              <Select
+                size="small"
+                fullWidth
+                value={selectedDist}
+                onChange={e => setSelectedDist(e.target.value)}
+                required
+              >
+                {distributors.map(d => (
+                  <MenuItem key={d.id} value={d.id.toString()}>{d.name}</MenuItem>
+                ))}
+              </Select>
+            </Box>
+
+            <TextField
+              label="Licenses Quantity to Generate"
+              type="number"
+              size="small"
+              value={qty}
+              onChange={e => setQty(e.target.value)}
+              required
+            />
+
+            <TextField
+              label="Current Year Pricing (₹)"
+              type="number"
+              size="small"
+              value={currPrice}
+              onChange={e => setCurrPrice(e.target.value)}
+              required
+            />
+
+            <TextField
+              label="Next Year Pricing (₹)"
+              type="number"
+              size="small"
+              value={nextPrice}
+              onChange={e => setNextPrice(e.target.value)}
+              required
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button type="submit" variant="contained">Generate Keys</Button>
+          </DialogActions>
+        </form>
+      </Dialog>
     </Box>
   );
 }

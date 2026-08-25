@@ -130,6 +130,10 @@ export default function POS({ user: propUser, token: propToken }) {
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
 
+  // Receipt Settings & Place of Supply (Tax Type)
+  const [receiptSettings, setReceiptSettings] = useState(null);
+  const [taxType, setTaxType] = useState('intra');
+
   // Payment State
   const [paymentMode, setPaymentMode] = useState('cash');
   const [cashReceived, setCashReceived] = useState('');
@@ -153,15 +157,19 @@ export default function POS({ user: propUser, token: propToken }) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [cats, menu] = await Promise.all([
+      const [cats, menu, settingsRes] = await Promise.all([
         fetchMobileCategories(token),
-        fetchMobileMenu(token)
+        fetchMobileMenu(token),
+        apiFetch('/api/settings/receipt')
       ]);
       const catList = Array.isArray(cats) ? cats : (cats?.categories || []);
       const itemList = Array.isArray(menu) ? menu : (menu?.items || []);
       setCategories(catList);
       setMenuItems(itemList);
       setSelectedCategory(null);
+      if (settingsRes.ok) {
+        setReceiptSettings(await settingsRes.json());
+      }
     } catch (err) {
       console.warn('[Desktop POS] Error loading data:', err.message);
     } finally {
@@ -232,6 +240,7 @@ export default function POS({ user: propUser, token: propToken }) {
             unit: product.base_unit || product.unit || 'pcs',
             is_weight_based: false,
             total_price: price.toFixed(2),
+            gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
             notes: ''
           }
         ];
@@ -273,6 +282,7 @@ export default function POS({ user: propUser, token: propToken }) {
           quantity: 1,
           is_weight_based: true,
           total_price: calculatedTotal.toFixed(2),
+          gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
           notes: ''
         }
       ]);
@@ -338,10 +348,41 @@ export default function POS({ user: propUser, token: propToken }) {
     discountAmount = Math.min(numDiscVal, subtotal);
   }
 
+  const isGstEnabled = receiptSettings ? (receiptSettings.gst_enabled === 1 || receiptSettings.gst_enabled === true || receiptSettings.gst_enabled === 'true') : true;
+  const gstMode = receiptSettings?.gst_mode || 'excluded';
+
+  let calculatedTax = 0;
+  const cartWithTax = cart.map(item => {
+    const itemTotalPrice = parseFloat(item.total_price || 0);
+    const itemGstRate = parseFloat(item.gst_rate !== undefined ? item.gst_rate : 5);
+    
+    // Proportional discount distribution
+    const itemDiscountShare = subtotal > 0 ? (itemTotalPrice / subtotal) * discountAmount : 0;
+    const itemTaxableAmount = Math.max(0, itemTotalPrice - itemDiscountShare);
+    
+    let itemTaxAmount = 0;
+    if (isGstEnabled && itemGstRate > 0) {
+      if (gstMode === 'included') {
+        itemTaxAmount = itemTaxableAmount - (itemTaxableAmount / (1 + (itemGstRate / 100)));
+      } else {
+        itemTaxAmount = itemTaxableAmount * (itemGstRate / 100);
+      }
+    }
+    
+    calculatedTax += itemTaxAmount;
+    
+    return {
+      ...item,
+      discount_amount: itemDiscountShare,
+      tax_amount: itemTaxAmount
+    };
+  });
+
+  const taxAmount = parseFloat(calculatedTax.toFixed(2));
   const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const gstRate = 5;
-  const taxAmount = taxableAmount * (gstRate / 100);
-  const grandTotal = Math.max(0, taxableAmount + taxAmount);
+  const grandTotal = gstMode === 'included' 
+    ? taxableAmount 
+    : Math.max(0, taxableAmount + taxAmount);
 
   const numericCashReceived = parseFloat(cashReceived || '0');
   const changeToReturn = Math.max(0, numericCashReceived - grandTotal);
@@ -375,7 +416,7 @@ export default function POS({ user: propUser, token: propToken }) {
     setSubmittingSale(true);
 
     const orderPayload = {
-      items: cart.map((i) => ({
+      items: cartWithTax.map((i) => ({
         menu_item_id: i.product_id,
         name: i.name,
         price: i.price,
@@ -384,6 +425,9 @@ export default function POS({ user: propUser, token: propToken }) {
         weight_unit: i.weight_unit || i.unit || 'pcs',
         is_weight_based: i.is_weight_based ? 1 : 0,
         total_price: i.total_price,
+        gst_rate: i.gst_rate,
+        tax_amount: parseFloat(i.tax_amount || 0).toFixed(2),
+        discount_amount: parseFloat(i.discount_amount || 0).toFixed(2),
         notes: i.notes || ''
       })),
       subtotal: subtotal.toFixed(2),
@@ -394,7 +438,8 @@ export default function POS({ user: propUser, token: propToken }) {
       cashier_name: user.name || 'Desktop Cashier',
       customer_name: customerName || 'Walk-in Customer',
       customer_phone: customerPhone,
-      customer_address: customerAddress
+      customer_address: customerAddress,
+      tax_type: taxType
     };
 
     try {
@@ -912,10 +957,23 @@ export default function POS({ user: propUser, token: propToken }) {
                 <span style={{ color: '#EF4444', fontWeight: '700' }}>-₹{discountAmount.toFixed(2)}</span>
               </div>
             )}
-            <div style={styles.summaryRow}>
-              <span style={{ color: colors.textSecondary }}>{t('gstTax')}</span>
-              <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
-            </div>
+            {taxType === 'inter' ? (
+              <div style={styles.summaryRow}>
+                <span style={{ color: colors.textSecondary }}>IGST</span>
+                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
+              </div>
+            ) : (
+              <>
+                <div style={styles.summaryRow}>
+                  <span style={{ color: colors.textSecondary }}>CGST</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                </div>
+                <div style={styles.summaryRow}>
+                  <span style={{ color: colors.textSecondary }}>SGST</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                </div>
+              </>
+            )}
 
             <div style={{ ...styles.summaryDivider, backgroundColor: colors.borderColor }} />
 
@@ -1040,10 +1098,23 @@ export default function POS({ user: propUser, token: propToken }) {
                   <span style={{ color: '#EF4444', fontWeight: '700' }}>-₹{discountAmount.toFixed(2)}</span>
                 </div>
               )}
-              <div style={styles.summaryRow}>
-                <span style={{ color: colors.textSecondary }}>{t('gstTax')}</span>
-                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
-              </div>
+              {taxType === 'inter' ? (
+                <div style={styles.summaryRow}>
+                  <span style={{ color: colors.textSecondary }}>IGST</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
+                </div>
+              ) : (
+                <>
+                  <div style={styles.summaryRow}>
+                    <span style={{ color: colors.textSecondary }}>CGST</span>
+                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                  </div>
+                  <div style={styles.summaryRow}>
+                    <span style={{ color: colors.textSecondary }}>SGST</span>
+                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                  </div>
+                </>
+              )}
 
               <div style={{ ...styles.summaryDivider, backgroundColor: colors.borderColor }} />
 
@@ -1169,6 +1240,29 @@ export default function POS({ user: propUser, token: propToken }) {
             <div style={{ ...styles.billBox, backgroundColor: colors.bgInput, borderColor: colors.borderColor }}>
               <span style={{ color: colors.textSecondary, fontSize: '12px', fontWeight: '800' }}>{t('payableAmount')}</span>
               <span style={{ color: colors.accentEmerald, fontSize: '32px', fontWeight: '900' }}>₹{grandTotal.toFixed(2)}</span>
+            </div>
+
+            <div style={{ marginBottom: '15px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, display: 'block', marginBottom: '6px', textTransform: 'uppercase' }}>Place of Supply (GST Type):</label>
+              <select
+                value={taxType}
+                onChange={(e) => setTaxType(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  backgroundColor: colors.bgInput,
+                  color: colors.textPrimary,
+                  border: `1px solid ${colors.borderColor}`,
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  outline: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="intra">Intra-State (CGST + SGST split)</option>
+                <option value="inter">Inter-State (IGST)</option>
+              </select>
             </div>
 
             <label style={{ ...styles.label, color: colors.textSecondary }}>{t('selectPayment')}</label>

@@ -1123,6 +1123,7 @@ export default function AdminPanel({ token }) {
     setMenuImageUrl('');
     setMenuImageFile(null);
     setMenuPrinterId('');
+    setMenuGst('5');
     setDialogOpen(true);
   };
 
@@ -1140,6 +1141,7 @@ export default function AdminPanel({ token }) {
     setMenuImageUrl(item.image_url || '');
     setMenuImageFile(null);
     setMenuPrinterId(item.printer_id ? item.printer_id.toString() : '');
+    setMenuGst(item.gst_rate !== undefined && item.gst_rate !== null ? Math.round(parseFloat(item.gst_rate)).toString() : '5');
     setDialogOpen(true);
   };
 
@@ -1834,6 +1836,16 @@ export default function AdminPanel({ token }) {
                           Price (INR)
                         </TableSortLabel>
                       </TableCell>
+                      <TableCell sx={{ bgcolor: '#f8fafc' }}>
+                        <TableSortLabel
+                          active={sortField === 'gst_rate'}
+                          direction={sortField === 'gst_rate' ? sortDirection : 'asc'}
+                          onClick={() => handleSort('gst_rate')}
+                          sx={{ fontWeight: 'bold' }}
+                        >
+                          GST Rate
+                        </TableSortLabel>
+                      </TableCell>
                       <TableCell sx={{ fontWeight: 'bold', bgcolor: '#f8fafc' }}>Diet</TableCell>
                       <TableCell sx={{ bgcolor: '#f8fafc' }}>
                         <TableSortLabel
@@ -1916,6 +1928,9 @@ export default function AdminPanel({ token }) {
                             </TableCell>
                             <TableCell sx={{ fontWeight: 800, color: 'primary.main' }}>
                               Rs. {parseFloat(item.price).toFixed(2)}
+                            </TableCell>
+                            <TableCell sx={{ fontWeight: 700 }}>
+                              {item.gst_rate !== undefined && item.gst_rate !== null ? `${Math.round(parseFloat(item.gst_rate))}%` : '5%'}
                             </TableCell>
                             <TableCell>
                               {item.is_veg === 1 ? (
@@ -4669,6 +4684,20 @@ export default function AdminPanel({ token }) {
 
                 <TextField label="Description" size="small" fullWidth value={menuDesc} onChange={e => setMenuDesc(e.target.value)} multiline rows={2} />
                 <FormControl fullWidth size="small">
+                  <InputLabel>GST Rate (%)</InputLabel>
+                  <Select
+                    value={menuGst}
+                    label="GST Rate (%)"
+                    onChange={e => setMenuGst(e.target.value)}
+                  >
+                    <MenuItem value="0">0% GST (Exempt/Nil)</MenuItem>
+                    <MenuItem value="5">5% GST</MenuItem>
+                    <MenuItem value="12">12% GST</MenuItem>
+                    <MenuItem value="18">18% GST</MenuItem>
+                    <MenuItem value="28">28% GST</MenuItem>
+                  </Select>
+                </FormControl>
+                <FormControl fullWidth size="small">
                   <InputLabel>Associated Kitchen / Bar Printer</InputLabel>
                   <Select
                     value={menuPrinterId}
@@ -4948,7 +4977,7 @@ export default function AdminPanel({ token }) {
                 <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>Items List:</Typography>
                 {selectedHistoryOrder.items.map(it => (
                   <Box key={it.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, fontSize: 13 }}>
-                    <Typography variant="body2">{it.name} x {it.quantity}</Typography>
+                    <Typography variant="body2">{it.name} (GST {parseFloat(it.gst_rate || 0)}%) x {it.quantity}</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 'bold' }}>Rs. {(parseFloat(it.price) * it.quantity).toFixed(2)}</Typography>
                   </Box>
                 ))}
@@ -4958,10 +4987,23 @@ export default function AdminPanel({ token }) {
                   <span>Subtotal</span>
                   <b>Rs. {parseFloat(selectedHistoryOrder.order.subtotal).toFixed(2)}</b>
                 </Box>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                  <span>GST Tax</span>
-                  <b>Rs. {parseFloat(selectedHistoryOrder.order.tax_amount).toFixed(2)}</b>
-                </Box>
+                {selectedHistoryOrder.order.tax_type === 'inter' ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                    <span>IGST</span>
+                    <b>Rs. {parseFloat(selectedHistoryOrder.order.tax_amount).toFixed(2)}</b>
+                  </Box>
+                ) : (
+                  <>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <span>CGST</span>
+                      <b>Rs. {(parseFloat(selectedHistoryOrder.order.tax_amount || 0) / 2).toFixed(2)}</b>
+                    </Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <span>SGST</span>
+                      <b>Rs. {(parseFloat(selectedHistoryOrder.order.tax_amount || 0) / 2).toFixed(2)}</b>
+                    </Box>
+                  </>
+                )}
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5, color: 'warning.main' }}>
                   <span>Discount ({selectedHistoryOrder.order.discount_type === 'percentage' ? `${selectedHistoryOrder.order.discount_value}%` : 'Amt'})</span>
                   <b>-Rs. {parseFloat(selectedHistoryOrder.order.discount_amount).toFixed(2)}</b>

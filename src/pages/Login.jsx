@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Utensils, Eye, EyeOff } from 'lucide-react';
 import OTPVerification from './OTPVerification';
+import Register from './Register';
 import { getApiUrl } from '../utils/api';
 
 export default function Login({ onLoginSuccess }) {
@@ -14,6 +15,7 @@ export default function Login({ onLoginSuccess }) {
 
   // OTP Verification View state
   const [showOTPVerification, setShowOTPVerification] = useState(false);
+  const [showRegister, setShowRegister] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState('');
 
   const handleSubmit = async (e) => {
@@ -74,6 +76,14 @@ export default function Login({ onLoginSuccess }) {
         initialEmail={ownerEmail}
         onVerificationSuccess={onLoginSuccess}
         onBackToLogin={() => setShowOTPVerification(false)}
+      />
+    );
+  }
+
+  if (showRegister) {
+    return (
+      <Register
+        onBackToLogin={() => setShowRegister(false)}
       />
     );
   }
@@ -255,6 +265,22 @@ export default function Login({ onLoginSuccess }) {
             }}
           >
             🔐 Forgot Password / Reset via Email OTP
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRegister(true)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#16a34a',
+              fontSize: '13px',
+              fontWeight: '700',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              marginTop: '4px'
+            }}
+          >
+            🔑 Register Store using License ID
           </button>
         </div>
       </div>

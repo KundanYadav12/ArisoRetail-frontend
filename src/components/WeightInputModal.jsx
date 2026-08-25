@@ -1,22 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
 export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, onConfirm, onClose }) {
-  const [weightValue, setWeightValue] = useState('1');
-  const [weightUnit, setWeightUnit] = useState('kg'); // 'kg' | 'g'
+  const [weightValue, setWeightValue] = useState('1.000');
 
   useEffect(() => {
     if (isOpen && product) {
       if (initialWeightInKg > 0) {
-        if (initialWeightInKg < 1) {
-          setWeightValue((initialWeightInKg * 1000).toString());
-          setWeightUnit('g');
-        } else {
-          setWeightValue(initialWeightInKg.toString());
-          setWeightUnit('kg');
-        }
+        setWeightValue(initialWeightInKg.toFixed(3));
       } else {
-        setWeightValue('1');
-        setWeightUnit('kg');
+        setWeightValue('1.000');
       }
     }
   }, [isOpen, product, initialWeightInKg]);
@@ -24,17 +16,15 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
   if (!isOpen || !product) return null;
 
   const pricePerBaseUnit = parseFloat(product.price || product.selling_price || 0);
-  const numericVal = parseFloat(weightValue || '0');
-  const weightInKg = weightUnit === 'g' ? numericVal / 1000.0 : numericVal;
+  const weightInKg = parseFloat(weightValue || '0');
   const calculatedTotal = (weightInKg * pricePerBaseUnit).toFixed(2);
 
-  const handlePresetSelect = (presetWeight, unit) => {
-    setWeightValue(presetWeight.toString());
-    setWeightUnit(unit);
+  const handlePresetSelect = (presetWeight) => {
+    setWeightValue(presetWeight);
   };
 
-  const isPresetActive = (val, unit) => {
-    return numericVal === val && weightUnit === unit;
+  const isPresetActive = (val) => {
+    return parseFloat(weightValue) === parseFloat(val);
   };
 
   const handleKeyDown = (e) => {
@@ -47,15 +37,15 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
   };
 
   const handleConfirm = () => {
-    if (isNaN(numericVal) || numericVal <= 0) {
+    if (isNaN(weightInKg) || weightInKg <= 0) {
       alert('Please enter a valid weight.');
       return;
     }
     onConfirm({
       product,
       weightInKg,
-      displayWeight: numericVal,
-      unit: weightUnit,
+      displayWeight: weightInKg,
+      unit: 'kg',
       pricePerBaseUnit,
       calculatedTotal: parseFloat(calculatedTotal)
     });
@@ -73,9 +63,9 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           <button style={styles.closeBtn} onClick={onClose}>✕</button>
         </div>
 
-        {/* Input & Unit Switch (Responsive Side-by-Side on Desktop, Responsive Wrap on Mobile) */}
+        {/* Input Section */}
         <div style={styles.inputSection}>
-          <label style={styles.label}>ENTER WEIGHT (F5):</label>
+          <label style={styles.label}>Enter Weight (Kg) (F5):</label>
           <div style={styles.inputRow}>
             <input
               style={styles.input}
@@ -86,24 +76,6 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
               placeholder="0.000"
               autoFocus
             />
-
-            {/* Kg / Gram Unit Toggle with Brand Orange Accent */}
-            <div style={styles.unitToggle}>
-              <button
-                type="button"
-                style={{ ...styles.unitBtn, ...(weightUnit === 'kg' ? styles.unitActive : {}) }}
-                onClick={() => setWeightUnit('kg')}
-              >
-                Kg
-              </button>
-              <button
-                type="button"
-                style={{ ...styles.unitBtn, ...(weightUnit === 'g' ? styles.unitActive : {}) }}
-                onClick={() => setWeightUnit('g')}
-              >
-                Gram
-              </button>
-            </div>
           </div>
         </div>
 
@@ -111,15 +83,15 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         <label style={styles.label}>QUICK WEIGHT PRESETS:</label>
         <div style={styles.presetGrid}>
           {[
-            { val: 250, unit: 'g', label: '250 g' },
-            { val: 500, unit: 'g', label: '500 g' },
-            { val: 750, unit: 'g', label: '750 g' },
-            { val: 1, unit: 'kg', label: '1 kg' },
-            { val: 1.25, unit: 'kg', label: '1.25 kg' },
-            { val: 2.5, unit: 'kg', label: '2.5 kg' },
-            { val: 5, unit: 'kg', label: '5 kg' },
+            { val: '0.250', label: '250 g' },
+            { val: '0.500', label: '500 g' },
+            { val: '0.750', label: '750 g' },
+            { val: '1.000', label: '1 kg' },
+            { val: '1.250', label: '1.25 kg' },
+            { val: '2.500', label: '2.5 kg' },
+            { val: '5.000', label: '5 kg' },
           ].map((p) => {
-            const active = isPresetActive(p.val, p.unit);
+            const active = isPresetActive(p.val);
             return (
               <button
                 key={p.label}
@@ -128,7 +100,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
                   ...styles.presetBtn,
                   ...(active ? styles.presetActive : {})
                 }}
-                onClick={() => handlePresetSelect(p.val, p.unit)}
+                onClick={() => handlePresetSelect(p.val)}
               >
                 {p.label}
               </button>
@@ -140,7 +112,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         <div style={styles.summaryCard}>
           <div style={styles.summaryRow}>
             <span style={styles.summaryLabel}>Total Weight:</span>
-            <span style={styles.summaryVal}>{numericVal} {weightUnit.toUpperCase()} ({weightInKg.toFixed(3)} Kg)</span>
+            <span style={styles.summaryVal}>{weightInKg.toFixed(3)} KG ({weightInKg.toFixed(3)} Kg)</span>
           </div>
           <div style={styles.summaryRow}>
             <span style={styles.summaryLabel}>Rate:</span>
