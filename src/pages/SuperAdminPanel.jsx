@@ -228,6 +228,34 @@ export default function SuperAdminPanel({ token }) {
     }
   };
 
+  const handleToggleSuperBill = async (id, currentVal) => {
+    const nextVal = !currentVal;
+    try {
+      await apiFetch(`/api/superadmin/restaurants/${id}/toggle-superbill`, {
+        method: 'PATCH',
+        body: { enabled: nextVal }
+      });
+      notify.success(`SuperBill feature permission ${nextVal ? 'ENABLED' : 'DISABLED'} for this store.`, 'Store Feature Permission');
+      fetchSaaSData();
+    } catch (err) {
+      notify.error('Failed to toggle SuperBill feature permission.', 'Toggle Failed');
+    }
+  };
+
+  const handleToggleBarcodeScanner = async (id, currentVal) => {
+    const nextVal = !currentVal;
+    try {
+      await apiFetch(`/api/superadmin/restaurants/${id}/toggle-barcode-scanner`, {
+        method: 'PATCH',
+        body: { enabled: nextVal }
+      });
+      notify.success(`Barcode Scanner permission ${nextVal ? 'ENABLED' : 'DISABLED'} for this store.`, 'Barcode Scanner Permission');
+      fetchSaaSData();
+    } catch (err) {
+      notify.error('Failed to toggle Barcode Scanner permission.', 'Toggle Failed');
+    }
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', gap: 2 }}>
@@ -506,6 +534,8 @@ export default function SuperAdminPanel({ token }) {
                 <TableCell sx={{ fontWeight: 'bold' }}>License ID</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Owner / User Details</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>SuperBill Mode</TableCell>
+                <TableCell sx={{ fontWeight: 'bold' }}>Barcode Scanner</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Start Date</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Expiry Date</TableCell>
                 <TableCell sx={{ fontWeight: 'bold' }}>Current Yr Price</TableCell>
@@ -551,6 +581,25 @@ export default function SuperAdminPanel({ token }) {
                       color={rest.subscription_status === 'active' ? 'success' : rest.subscription_status === 'suspended' ? 'error' : 'warning'}
                       size="small"
                       sx={{ fontWeight: 800 }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={rest.feature_superbill ? 'ENABLED' : 'DISABLED'}
+                      color={rest.feature_superbill ? 'secondary' : 'default'}
+                      size="small"
+                      onClick={() => handleToggleSuperBill(rest.id, rest.feature_superbill)}
+                      sx={{ fontWeight: 800, cursor: 'pointer' }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={rest.barcode_scanner_enabled ? 'ON' : 'OFF'}
+                      color={rest.barcode_scanner_enabled ? 'success' : 'default'}
+                      size="small"
+                      onClick={() => handleToggleBarcodeScanner(rest.id, rest.barcode_scanner_enabled)}
+                      sx={{ fontWeight: 800, cursor: 'pointer' }}
+                      title="Toggle Barcode Scanner Permission (Super Admin Only)"
                     />
                   </TableCell>
                   <TableCell sx={{ fontSize: 13 }}>

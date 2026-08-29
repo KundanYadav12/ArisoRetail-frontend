@@ -3,6 +3,7 @@ import { useKeyboardShortcuts } from '../utils/useKeyboardShortcuts';
 import WeightInputModal from '../components/WeightInputModal';
 import KeyboardHelpModal from '../components/KeyboardHelpModal';
 import LanguageSelectorModal from '../components/LanguageSelectorModal';
+import WebBarcodeScannerModal from '../components/WebBarcodeScannerModal';
 import { useLanguage } from '../locales/LanguageContext';
 import {
   apiFetch,
@@ -136,6 +137,7 @@ export default function POS({ user: propUser, token: propToken }) {
   const [checkoutVisible, setCheckoutVisible] = useState(false);
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
+  const [barcodeScannerOpen, setBarcodeScannerOpen] = useState(false);
 
   // Receipt Settings & Place of Supply (Tax Type)
   const [receiptSettings, setReceiptSettings] = useState(null);
@@ -343,6 +345,20 @@ export default function POS({ user: propUser, token: propToken }) {
     } else if (filteredProducts.length > 0) {
       handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0]);
     }
+  };
+
+  // Live Camera Barcode Scanner Continuous Handler
+  const handleCameraBarcodeScan = (scannedCode) => {
+    if (!scannedCode) return { success: false, message: 'No barcode detected' };
+    const clean = scannedCode.trim().toLowerCase();
+    const matched = menuItems.find(
+      (p) => (p.barcode || '').toLowerCase() === clean || (p.sku || '').toLowerCase() === clean
+    );
+    if (matched) {
+      handleSelectProduct(matched);
+      return { success: true, message: `Added ${matched.name}` };
+    }
+    return { success: false, message: `No item found for barcode "${scannedCode}"` };
   };
 
   // Calculations
@@ -713,6 +729,24 @@ export default function POS({ user: propUser, token: propToken }) {
 
           {/* CONTROL BAR: Focus | Sidebar Toggle | Density (Icon | Compact | Standard | Spacious) */}
           <div style={{ ...styles.controlBar, backgroundColor: colors.bgCard, borderColor: colors.borderColor }} className="pos-control-bar">
+            {/* Live Camera Barcode Scanner Button */}
+            <button
+              type="button"
+              className="pos-control-pill"
+              style={{
+                ...styles.controlPill,
+                backgroundColor: '#0284C7',
+                color: '#FFFFFF',
+                borderColor: '#0284C7',
+                fontWeight: '700',
+                boxShadow: '0 2px 4px rgba(2, 132, 199, 0.3)'
+              }}
+              onClick={() => setBarcodeScannerOpen(true)}
+              title="Open Live Camera Barcode Scanner"
+            >
+              <span>📷</span> Barcode Camera
+            </button>
+
             {/* Focus Mode Button */}
             <button
               type="button"
@@ -1329,6 +1363,15 @@ export default function POS({ user: propUser, token: propToken }) {
       <LanguageSelectorModal
         isOpen={languageModalVisible}
         onClose={() => setLanguageModalVisible(false)}
+      />
+
+      <WebBarcodeScannerModal
+        open={barcodeScannerOpen}
+        onClose={() => setBarcodeScannerOpen(false)}
+        onScan={handleCameraBarcodeScan}
+        continuous={true}
+        title="📷 POS Camera Barcode Scanner"
+        subtitle="Point camera at item barcode to continuously add items to cart"
       />
 
       {checkoutVisible && (

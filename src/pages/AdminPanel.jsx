@@ -8,6 +8,48 @@ import GstSlabReport from '../components/GstSlabReport';
 import MenuBulkImportModal from '../components/MenuBulkImportModal';
 import { openWhatsAppShare } from '../utils/whatsappHelper';
 
+const getLocalDateString = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const resolveDateRange = (preset, stateFrom, stateTo) => {
+  if (preset === 'custom') {
+    return { from: stateFrom, to: stateTo };
+  }
+  const todayStr = getLocalDateString(new Date());
+  let from = '';
+  let to = `${todayStr} 23:59:59`;
+
+  if (preset === 'today') {
+    from = `${todayStr} 00:00:00`;
+  } else if (preset === 'yesterday') {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const yesterdayStr = getLocalDateString(d);
+    from = `${yesterdayStr} 00:00:00`;
+    to = `${yesterdayStr} 23:59:59`;
+  } else if (preset === '7days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    from = `${getLocalDateString(d)} 00:00:00`;
+  } else if (preset === '15days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 15);
+    from = `${getLocalDateString(d)} 00:00:00`;
+  } else if (preset === '30days') {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    from = `${getLocalDateString(d)} 00:00:00`;
+  } else if (preset === 'all') {
+    from = '';
+    to = '';
+  }
+  return { from, to };
+};
+
 export default function AdminPanel({ token }) {
   const { notify, confirmDialog } = useNotify();
   const [activeTab, setActiveTab] = useState(0); // 0 = menu, 1 = categories, 2 = printers, 3 = reports, 4 = receipt settings, 5 = staff
@@ -98,6 +140,19 @@ export default function AdminPanel({ token }) {
   const [menuImageUrl, setMenuImageUrl] = useState('');
   const [menuImageFile, setMenuImageFile] = useState(null);
   const [menuPrinterId, setMenuPrinterId] = useState('');
+  const [menuIsWeightBased, setMenuIsWeightBased] = useState(false);
+  const [menuUnit, setMenuUnit] = useState('pcs');
+  const [menuBarcodeImageUrl, setMenuBarcodeImageUrl] = useState('');
+
+  // --- Barcode Scanner Modal States ---
+  const [barcodeScanModalOpen, setBarcodeScanModalOpen] = useState(false);
+  const [barcodeScanStream, setBarcodeScanStream] = useState(null);
+  const [barcodeScanError, setBarcodeScanError] = useState('');
+  const [barcodeSkuDuplicate, setBarcodeSkuDuplicate] = useState(null); // { name, id } if duplicate
+  const [barcodeCheckTimer, setBarcodeCheckTimer] = useState(null);
+  const barcodeScanVideoRef = React.useRef(null);
+  const barcodeScanCanvasRef = React.useRef(null);
+  const barcodeReaderRef = React.useRef(null);
 
   const [printerName, setPrinterName] = useState('');
   const [printerType, setPrinterType] = useState('lan');
@@ -636,30 +691,7 @@ export default function AdminPanel({ token }) {
       } else if (activeTab === 3) {
         let url = '/api/reports/admin';
         const params = [];
-        let from = reportDateFrom;
-        let to = reportDateTo;
-        
-        if (reportPreset === 'today') {
-          const d = new Date().toISOString().slice(0, 10);
-          from = `${d} 00:00:00`;
-          to = `${d} 23:59:59`;
-        } else if (reportPreset === 'yesterday') {
-          const d = new Date();
-          d.setDate(d.getDate() - 1);
-          const dStr = d.toISOString().slice(0, 10);
-          from = `${dStr} 00:00:00`;
-          to = `${dStr} 23:59:59`;
-        } else if (reportPreset === '7days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 7);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        } else if (reportPreset === '30days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 30);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        }
+        const { from, to } = resolveDateRange(reportPreset, reportDateFrom, reportDateTo);
         
         if (from) params.push(`date_from=${encodeURIComponent(from)}`);
         if (to) params.push(`date_to=${encodeURIComponent(to)}`);
@@ -676,30 +708,7 @@ export default function AdminPanel({ token }) {
         // Item Sales Report
         let url = '/api/reports/item-wise';
         const params = [];
-        let from = itemReportDateFrom;
-        let to = itemReportDateTo;
-
-        if (itemReportPreset === 'today') {
-          const d = new Date().toISOString().slice(0, 10);
-          from = `${d} 00:00:00`;
-          to = `${d} 23:59:59`;
-        } else if (itemReportPreset === 'yesterday') {
-          const d = new Date();
-          d.setDate(d.getDate() - 1);
-          const dStr = d.toISOString().slice(0, 10);
-          from = `${dStr} 00:00:00`;
-          to = `${dStr} 23:59:59`;
-        } else if (itemReportPreset === '7days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 7);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        } else if (itemReportPreset === '30days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 30);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        }
+        const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
 
         if (from) params.push(`date_from=${encodeURIComponent(from)}`);
         if (to) params.push(`date_to=${encodeURIComponent(to)}`);
@@ -741,7 +750,7 @@ export default function AdminPanel({ token }) {
           const catRes = await apiFetch('/api/categories');
           if (catRes.ok) setCategories(await catRes.json());
         }
-      } else if (activeTab === 6) {
+      } else if (activeTab === 7) {
         const settingsRes = await apiFetch('/api/settings/receipt');
         if (settingsRes.ok) {
           const settingsData = await settingsRes.json();
@@ -749,7 +758,7 @@ export default function AdminPanel({ token }) {
           setWorkflowDraft(buildWorkflowDraft(settingsData));
           setPermissionsDraft(buildPermissionsDraft(settingsData));
         }
-      } else if (activeTab === 7) {
+      } else if (activeTab === 9) {
         const usersRes = await apiFetch('/api/auth/users');
         if (usersRes.ok) {
           const usersData = await usersRes.json();
@@ -757,36 +766,8 @@ export default function AdminPanel({ token }) {
         } else {
           setStaffUsers([]);
         }
-      } else if (activeTab === 8) {
-        let from = historyDateFrom;
-        let to = historyDateTo;
-
-        if (historyPreset === 'today') {
-          const d = new Date().toISOString().slice(0, 10);
-          from = `${d} 00:00:00`;
-          to = `${d} 23:59:59`;
-        } else if (historyPreset === 'yesterday') {
-          const d = new Date();
-          d.setDate(d.getDate() - 1);
-          const dStr = d.toISOString().slice(0, 10);
-          from = `${dStr} 00:00:00`;
-          to = `${dStr} 23:59:59`;
-        } else if (historyPreset === '7days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 7);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        } else if (historyPreset === '15days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 15);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        } else if (historyPreset === '30days') {
-          const d = new Date();
-          d.setDate(d.getDate() - 30);
-          from = d.toISOString().slice(0, 19).replace('T', ' ');
-          to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        }
+      } else if (activeTab === 10) {
+        const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
 
         let url = `/api/orders/history/list?page=${historyPage + 1}&limit=${historyLimit}&offset=${historyPage * historyLimit}`;
         if (historySearch) url += `&search=${encodeURIComponent(historySearch)}`;
@@ -837,24 +818,7 @@ export default function AdminPanel({ token }) {
     setItemHistoryModalOpen(true);
     setLoadingItemHistory(true);
     try {
-      let from = itemReportDateFrom;
-      let to = itemReportDateTo;
-      if (itemReportPreset === 'today') {
-        const d = new Date().toISOString().slice(0, 10);
-        from = `${d} 00:00:00`;
-        to = `${d} 23:59:59`;
-      } else if (itemReportPreset === 'yesterday') {
-        const d = new Date();
-        d.setDate(d.getDate() - 1);
-        const dStr = d.toISOString().slice(0, 10);
-        from = `${dStr} 00:00:00`;
-        to = `${dStr} 23:59:59`;
-      } else if (itemReportPreset === '30days') {
-        const d = new Date();
-        d.setDate(d.getDate() - 30);
-        from = d.toISOString().slice(0, 19).replace('T', ' ');
-        to = new Date().toISOString().slice(0, 19).replace('T', ' ');
-      }
+      const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
 
       const res = await apiFetch(`/api/reports/item-wise/${item.item_id}/history?date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}`);
       if (res.ok) {
@@ -1086,7 +1050,7 @@ export default function AdminPanel({ token }) {
         localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(currentUser));
         window.dispatchEvent(new CustomEvent('auth_token_refreshed', { detail: { user: currentUser } }));
 
-        notify.success('🏪 Restaurant Profile & Receipt settings saved successfully.', 'Settings Saved');
+        notify.success('🏪 Retail Profile & Receipt settings saved successfully.', 'Settings Saved');
       } else {
         const errData = await res.json();
         notify.error(errData.error || 'Failed to save settings.', 'Error');
@@ -1133,6 +1097,10 @@ export default function AdminPanel({ token }) {
     setMenuImageFile(null);
     setMenuPrinterId('');
     setMenuGst('5');
+    setMenuIsWeightBased(false);
+    setMenuUnit('pcs');
+    setMenuBarcodeImageUrl('');
+    setBarcodeSkuDuplicate(null);
     setDialogOpen(true);
   };
 
@@ -1151,6 +1119,11 @@ export default function AdminPanel({ token }) {
     setMenuImageFile(null);
     setMenuPrinterId(item.printer_id ? item.printer_id.toString() : '');
     setMenuGst(item.gst_rate !== undefined && item.gst_rate !== null ? Math.round(parseFloat(item.gst_rate)).toString() : '5');
+    const isWeight = !!(item.is_weight_based || ['kg', 'gram', 'litre', 'ml'].includes((item.unit || '').toLowerCase()));
+    setMenuIsWeightBased(isWeight);
+    setMenuUnit(item.unit || (isWeight ? 'kg' : 'pcs'));
+    setMenuBarcodeImageUrl(item.barcode_image_url || '');
+    setBarcodeSkuDuplicate(null);
     setDialogOpen(true);
   };
 
@@ -1167,7 +1140,11 @@ export default function AdminPanel({ token }) {
     formData.append('is_available', menuAvailable);
     formData.append('sku', menuSku);
     formData.append('description', menuDesc);
+    formData.append('is_weight_based', menuIsWeightBased ? '1' : '0');
+    formData.append('unit', menuUnit || (menuIsWeightBased ? 'kg' : 'pcs'));
+    formData.append('base_unit', menuUnit || (menuIsWeightBased ? 'kg' : 'pcs'));
     if (menuPrinterId) formData.append('printer_id', menuPrinterId);
+    if (menuBarcodeImageUrl) formData.append('barcode_image_url', menuBarcodeImageUrl);
 
     if (menuImageFile) {
       formData.append('image', menuImageFile);
@@ -1543,8 +1520,8 @@ export default function AdminPanel({ token }) {
             <Tab icon={<Utensils size={18} />} iconPosition="start" label="Item Sales Report" />
             <Tab icon={<Boxes size={18} />} iconPosition="start" label="Stock Report" />
             <Tab icon={<FileSpreadsheet size={18} />} iconPosition="start" label="GST Slab Report (CA)" />
-            <Tab icon={<Settings size={18} />} iconPosition="start" label="Receipt & KOT Settings" />
-            <Tab icon={<Store size={18} />} iconPosition="start" label="Restaurant Profile" />
+            <Tab icon={<Settings size={18} />} iconPosition="start" label="Receipt & GST Settings" />
+            <Tab icon={<Store size={18} />} iconPosition="start" label="Retail Profile" />
             <Tab icon={<Users size={18} />} iconPosition="start" label="Staff & Cashiers" />
             <Tab icon={<History size={18} />} iconPosition="start" label="Order History" />
           </Tabs>
@@ -1905,7 +1882,7 @@ export default function AdminPanel({ token }) {
                             <TableCell>
                               {item.image_url ? (
                                 <img
-                                  src={item.image_url}
+                                  src={resolveImageUrl(item.image_url)}
                                   alt={item.name}
                                   style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover' }}
                                 />
@@ -2007,7 +1984,7 @@ export default function AdminPanel({ token }) {
                           />
                           {item.image_url ? (
                             <img
-                              src={item.image_url}
+                              src={resolveImageUrl(item.image_url)}
                               alt={item.name}
                               style={{ width: 52, height: 52, borderRadius: 10, objectFit: 'cover' }}
                             />
@@ -2448,7 +2425,8 @@ export default function AdminPanel({ token }) {
                   startIcon={<FileSpreadsheet size={15} />}
                   onClick={async () => {
                     try {
-                      await downloadFile(`/api/reports/item-wise/export-excel?preset=${itemReportPreset}&date_from=${itemReportDateFrom}&date_to=${itemReportDateTo}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                      const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
+                      await downloadFile(`/api/reports/item-wise/export-excel?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${new Date().toISOString().slice(0, 10)}.xlsx`);
                       notify.success('Item Sales Excel report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Excel report.', 'Export Error');
@@ -2471,7 +2449,8 @@ export default function AdminPanel({ token }) {
                   startIcon={<Download size={14} />}
                   onClick={async () => {
                     try {
-                      await downloadFile(`/api/reports/item-wise/export-csv?preset=${itemReportPreset}&date_from=${itemReportDateFrom}&date_to=${itemReportDateTo}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${new Date().toISOString().slice(0, 10)}.csv`);
+                      const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
+                      await downloadFile(`/api/reports/item-wise/export-csv?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${new Date().toISOString().slice(0, 10)}.csv`);
                       notify.success('Item Sales CSV report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download CSV report.', 'Export Error');
@@ -2917,7 +2896,20 @@ export default function AdminPanel({ token }) {
                           <TableCell>
                             <Chip label={row.category_name} size="small" variant="outlined" sx={{ fontWeight: 600 }} />
                           </TableCell>
-                          <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{row.sku || '-'}</TableCell>
+                          <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                            {row.sku || '-'}
+                            {row.barcode_image_url && (
+                              <Box sx={{ mt: 0.5 }}>
+                                <img
+                                  src={row.barcode_image_url}
+                                  alt="Barcode"
+                                  style={{ height: 24, maxWidth: 80, objectFit: 'contain', cursor: 'pointer', borderRadius: 2, border: '1px solid #e2e8f0' }}
+                                  title="Barcode Image"
+                                  onClick={() => window.open(row.barcode_image_url, '_blank')}
+                                />
+                              </Box>
+                            )}
+                          </TableCell>
                           <TableCell align="right" sx={{ fontWeight: 800, fontSize: '1rem', color: isOutOfStock ? 'error.main' : isLowStock ? 'warning.main' : 'success.main' }}>
                             {curStock}
                           </TableCell>
@@ -2971,7 +2963,7 @@ export default function AdminPanel({ token }) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap', gap: 1, width: '100%' }}>
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: 'clamp(1.05rem, 4vw, 1.25rem)', sm: '1.5rem' }, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  Receipt & KOT Settings
+                  Receipt & GST Settings
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
                   Fully dynamic, database-driven templates. Changes immediately apply to thermal prints and POS previews.
@@ -3898,10 +3890,10 @@ export default function AdminPanel({ token }) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 800 }}>
-                  🏪 Restaurant Profile & Branding Management
+                  🏪 Retail Profile & Branding Management
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Update your Restaurant Display Name, Logo Image, Address, Contact Info, and License Details.
+                  Update your Retail Display Name, Logo Image, Address, Contact Info, and License Details.
                 </Typography>
               </Box>
 
@@ -3913,7 +3905,7 @@ export default function AdminPanel({ token }) {
                 disabled={savingReceiptSettings}
                 sx={{ fontWeight: 800, textTransform: 'none', px: 3, py: 1 }}
               >
-                {savingReceiptSettings ? <CircularProgress size={18} color="inherit" /> : 'Save Restaurant Profile'}
+                {savingReceiptSettings ? <CircularProgress size={18} color="inherit" /> : 'Save Retail Profile'}
               </Button>
             </Box>
 
@@ -3924,7 +3916,7 @@ export default function AdminPanel({ token }) {
                   {/* Card 1: Restaurant Identity & Logo */}
                   <Paper variant="outlined" sx={{ p: 3, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 800, borderBottom: 1, borderColor: 'divider', pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <ImageIcon size={20} /> Restaurant Identity & Logo
+                      <ImageIcon size={20} /> Retail Identity & Logo
                     </Typography>
 
                     <Grid container spacing={2}>
@@ -4272,7 +4264,8 @@ export default function AdminPanel({ token }) {
                   startIcon={<FileSpreadsheet size={15} />}
                   onClick={async () => {
                     try {
-                      await downloadFile(`/api/orders/history/export-excel?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${historyDateFrom}&date_to=${historyDateTo}&search=${encodeURIComponent(historySearch)}`, `order_history_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                      const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
+                      await downloadFile(`/api/orders/history/export-excel?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${new Date().toISOString().slice(0, 10)}.xlsx`);
                       notify.success('Order History Excel report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Order History Excel report.', 'Export Error');
@@ -4295,7 +4288,8 @@ export default function AdminPanel({ token }) {
                   startIcon={<Download size={14} />}
                   onClick={async () => {
                     try {
-                      await downloadFile(`/api/orders/history/export-csv?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${historyDateFrom}&date_to=${historyDateTo}&search=${encodeURIComponent(historySearch)}`, `order_history_${new Date().toISOString().slice(0, 10)}.csv`);
+                      const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
+                      await downloadFile(`/api/orders/history/export-csv?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${new Date().toISOString().slice(0, 10)}.csv`);
                       notify.success('Order History CSV report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Order History CSV report.', 'Export Error');
@@ -4423,7 +4417,7 @@ export default function AdminPanel({ token }) {
               <Table size="small" sx={{ minWidth: 750 }}>
                 <TableHead sx={{ bgcolor: 'action.hover' }}>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Order #</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Invoice #</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Cashier</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Date / Time</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Customer Info</TableCell>
@@ -4687,9 +4681,112 @@ export default function AdminPanel({ token }) {
                     </Select>
                   </Grid>
                   <Grid size={6}>
-                    <TextField label="SKU / Barcode" size="small" fullWidth value={menuSku} onChange={e => setMenuSku(e.target.value)} />
+                    <Box sx={{ position: 'relative' }}>
+                      <TextField
+                        label="SKU / Barcode"
+                        size="small"
+                        fullWidth
+                        value={menuSku}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setMenuSku(val);
+                          setBarcodeSkuDuplicate(null);
+                          if (barcodeCheckTimer) clearTimeout(barcodeCheckTimer);
+                          if (val.trim()) {
+                            const t = setTimeout(async () => {
+                              try {
+                                const excludeId = dialogType === 'edit_menu' && selectedEntity?.id ? selectedEntity.id : undefined;
+                                const qp = excludeId ? `?sku=${encodeURIComponent(val)}&exclude_id=${excludeId}` : `?sku=${encodeURIComponent(val)}`;
+                                const r = await apiFetch(`/api/menu/check-barcode${qp}`);
+                                const d = await r.json();
+                                if (d.duplicate) setBarcodeSkuDuplicate(d.existing_item);
+                              } catch (_) {}
+                            }, 600);
+                            setBarcodeCheckTimer(t);
+                          }
+                        }}
+                        error={!!barcodeSkuDuplicate}
+                        helperText={barcodeSkuDuplicate ? `⚠️ Already used by: ${barcodeSkuDuplicate.name}` : ''}
+                        InputProps={{
+                          endAdornment: (
+                            <InputAdornment position="end">
+                              <Tooltip title="Scan Barcode with Camera">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => setBarcodeScanModalOpen(true)}
+                                  sx={{ color: 'primary.main' }}
+                                  id="scan-barcode-btn"
+                                >
+                                  📷
+                                </IconButton>
+                              </Tooltip>
+                            </InputAdornment>
+                          )
+                        }}
+                      />
+                    </Box>
+                    {menuBarcodeImageUrl && (
+                      <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <img src={menuBarcodeImageUrl} alt="Barcode" style={{ height: 28, maxWidth: 90, objectFit: 'contain', borderRadius: 4, border: '1px solid #e2e8f0' }} />
+                        <IconButton size="small" onClick={() => setMenuBarcodeImageUrl('')} sx={{ color: 'error.main', p: 0.25 }}>
+                          <X size={12} />
+                        </IconButton>
+                      </Box>
+                    )}
                   </Grid>
                 </Grid>
+
+                {/* ─── Item Type selector ─── */}
+                <Box>
+                  <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.5 }}>
+                    Item Type
+                  </Typography>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="small"
+                      variant={menuIsWeightBased ? 'outlined' : 'contained'}
+                      color={menuIsWeightBased ? 'inherit' : 'primary'}
+                      onClick={() => { setMenuIsWeightBased(false); setMenuUnit('pcs'); }}
+                      sx={{ flex: 1, fontWeight: 700 }}
+                    >
+                      📦 Pcs (Count)
+                    </Button>
+                    <Button
+                      size="small"
+                      variant={menuIsWeightBased ? 'contained' : 'outlined'}
+                      color={menuIsWeightBased ? 'success' : 'inherit'}
+                      onClick={() => { setMenuIsWeightBased(true); setMenuUnit('kg'); }}
+                      sx={{ flex: 1, fontWeight: 700 }}
+                    >
+                      ⚖️ Weight (Kg)
+                    </Button>
+                  </Box>
+                </Box>
+
+                {/* ─── Serving Unit selector ─── */}
+                <FormControl fullWidth size="small">
+                  <InputLabel>Serving Unit</InputLabel>
+                  <Select
+                    value={menuUnit}
+                    label="Serving Unit"
+                    onChange={e => setMenuUnit(e.target.value)}
+                  >
+                    {menuIsWeightBased
+                      ? [
+                          <MenuItem key="kg" value="kg">Kg</MenuItem>,
+                          <MenuItem key="gram" value="gram">Gram</MenuItem>,
+                          <MenuItem key="litre" value="litre">Litre</MenuItem>,
+                          <MenuItem key="ml" value="ml">Ml</MenuItem>,
+                        ]
+                      : [
+                          <MenuItem key="pcs" value="pcs">Pcs</MenuItem>,
+                          <MenuItem key="box" value="box">Box</MenuItem>,
+                          <MenuItem key="pack" value="pack">Pack</MenuItem>,
+                          <MenuItem key="bottle" value="bottle">Bottle</MenuItem>,
+                        ]
+                    }
+                  </Select>
+                </FormControl>
 
                 <TextField label="Description" size="small" fullWidth value={menuDesc} onChange={e => setMenuDesc(e.target.value)} multiline rows={2} />
                 <FormControl fullWidth size="small">
@@ -4746,7 +4843,7 @@ export default function AdminPanel({ token }) {
 
                   {menuImageUrl && (
                     <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
-                      <img src={menuImageUrl} alt="Preview" style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 8, border: '1px solid #cbd5e1' }} />
+                      <img src={resolveImageUrl(menuImageUrl)} alt="Preview" style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 8, border: '1px solid #cbd5e1' }} />
                       <Button size="small" color="error" onClick={() => { setMenuImageFile(null); setMenuImageUrl(''); }}>
                         Remove
                       </Button>
@@ -5103,6 +5200,20 @@ export default function AdminPanel({ token }) {
           Adjust Stock: {selectedStockItem?.name}
         </DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2.5 }}>
+          {/* Barcode image thumbnail in Adjust Stock modal */}
+          {selectedStockItem?.barcode_image_url && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1, bgcolor: '#f8fafc', borderRadius: 2, border: '1px solid #e2e8f0' }}>
+              <img
+                src={selectedStockItem.barcode_image_url}
+                alt="Barcode"
+                style={{ height: 40, maxWidth: 100, objectFit: 'contain', borderRadius: 4 }}
+              />
+              <Box>
+                <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', color: 'text.secondary' }}>Barcode</Typography>
+                <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>{selectedStockItem.sku || selectedStockItem.barcode || ''}</Typography>
+              </Box>
+            </Box>
+          )}
           <FormControl fullWidth size="small">
             <InputLabel>Adjustment Action</InputLabel>
             <Select
@@ -5240,6 +5351,166 @@ export default function AdminPanel({ token }) {
         }}
         token={token}
       />
+
+      {/* --- BARCODE SCANNER MODAL --- */}
+      <Dialog
+        open={barcodeScanModalOpen}
+        onClose={() => {
+          setBarcodeScanModalOpen(false);
+          if (barcodeScanStream) {
+            barcodeScanStream.getTracks().forEach(t => t.stop());
+            setBarcodeScanStream(null);
+          }
+          if (barcodeReaderRef.current) {
+            clearInterval(barcodeReaderRef.current);
+            barcodeReaderRef.current = null;
+          }
+          setBarcodeScanError('');
+        }}
+        maxWidth="xs"
+        fullWidth
+        disableRestoreFocus
+      >
+        <DialogTitle sx={{ fontWeight: 800, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          📷 Scan Barcode / QR Code
+          <IconButton onClick={() => {
+            setBarcodeScanModalOpen(false);
+            if (barcodeScanStream) { barcodeScanStream.getTracks().forEach(t => t.stop()); setBarcodeScanStream(null); }
+            if (barcodeReaderRef.current) { clearInterval(barcodeReaderRef.current); barcodeReaderRef.current = null; }
+            setBarcodeScanError('');
+          }}><X size={18} /></IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1.5 }}>
+          {barcodeScanError && (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>{barcodeScanError}</Alert>
+          )}
+          <Alert severity="info" sx={{ borderRadius: 2, fontSize: '0.8rem' }}>
+            Point the camera at the product barcode. Once detected, the code is auto-filled in the SKU field.
+          </Alert>
+
+          {/* Camera viewport */}
+          <Box sx={{ position: 'relative', bgcolor: '#0f172a', borderRadius: 2, overflow: 'hidden', minHeight: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <video
+              ref={barcodeScanVideoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{ width: '100%', borderRadius: 8, display: 'block', maxHeight: 280 }}
+            />
+            {/* scanning crosshair overlay */}
+            <Box sx={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+              width: 180, height: 80, border: '2px solid #22d3ee', borderRadius: 2,
+              pointerEvents: 'none',
+              '&::before, &::after': {
+                content: '""', position: 'absolute', width: 20, height: 20
+              }
+            }} />
+            <canvas ref={barcodeScanCanvasRef} style={{ display: 'none' }} />
+          </Box>
+
+          <Button
+            variant="contained"
+            fullWidth
+            id="start-camera-scan-btn"
+            sx={{ fontWeight: 800, borderRadius: 2 }}
+            onClick={async () => {
+              setBarcodeScanError('');
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                setBarcodeScanStream(stream);
+                if (barcodeScanVideoRef.current) {
+                  barcodeScanVideoRef.current.srcObject = stream;
+                  barcodeScanVideoRef.current.play();
+                }
+
+                // Use BarcodeDetector if available
+                if ('BarcodeDetector' in window) {
+                  const detector = new window.BarcodeDetector();
+                  const intervalId = setInterval(async () => {
+                    if (!barcodeScanVideoRef.current || barcodeScanVideoRef.current.readyState < 2) return;
+                    try {
+                      const barcodes = await detector.detect(barcodeScanVideoRef.current);
+                      if (barcodes.length > 0) {
+                        const code = barcodes[0].rawValue;
+                        clearInterval(intervalId);
+                        barcodeReaderRef.current = null;
+                        stream.getTracks().forEach(t => t.stop());
+                        setBarcodeScanStream(null);
+
+                        // Capture snapshot from video
+                        const canvas = barcodeScanCanvasRef.current;
+                        const video = barcodeScanVideoRef.current;
+                        if (canvas && video) {
+                          canvas.width = video.videoWidth;
+                          canvas.height = video.videoHeight;
+                          canvas.getContext('2d').drawImage(video, 0, 0);
+                          const imgDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                          setMenuBarcodeImageUrl(imgDataUrl);
+                        }
+
+                        setMenuSku(code);
+                        setBarcodeScanModalOpen(false);
+
+                        // Duplicate check after scan
+                        try {
+                          const excludeId = dialogType === 'edit_menu' && selectedEntity?.id ? selectedEntity.id : undefined;
+                          const qp = excludeId ? `?sku=${encodeURIComponent(code)}&exclude_id=${excludeId}` : `?sku=${encodeURIComponent(code)}`;
+                          const r = await apiFetch(`/api/menu/check-barcode${qp}`);
+                          const d = await r.json();
+                          if (d.duplicate) setBarcodeSkuDuplicate(d.existing_item);
+                        } catch (_) {}
+                      }
+                    } catch (_) {}
+                  }, 300);
+                  barcodeReaderRef.current = intervalId;
+                } else {
+                  setBarcodeScanError('Live barcode detection is not supported in this browser. Please type the code manually below.');
+                }
+              } catch (err) {
+                setBarcodeScanError('Camera access denied or unavailable. Please allow camera permission and try again.');
+              }
+            }}
+          >
+            Start Camera
+          </Button>
+
+          <Divider><Typography variant="caption" color="text.secondary">OR ENTER MANUALLY</Typography></Divider>
+
+          {/* Manual barcode entry */}
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <TextField
+              size="small"
+              fullWidth
+              placeholder="Type or paste barcode / SKU code"
+              id="manual-barcode-input"
+              onKeyDown={e => {
+                if (e.key === 'Enter' && e.target.value.trim()) {
+                  const code = e.target.value.trim();
+                  setMenuSku(code);
+                  setBarcodeScanModalOpen(false);
+                  if (barcodeScanStream) { barcodeScanStream.getTracks().forEach(t => t.stop()); setBarcodeScanStream(null); }
+                }
+              }}
+            />
+            <Button
+              variant="outlined"
+              sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}
+              onClick={() => {
+                const input = document.getElementById('manual-barcode-input');
+                if (input && input.value.trim()) {
+                  setMenuSku(input.value.trim());
+                  setBarcodeScanModalOpen(false);
+                  if (barcodeScanStream) { barcodeScanStream.getTracks().forEach(t => t.stop()); setBarcodeScanStream(null); }
+                }
+              }}
+            >
+              Use Code
+            </Button>
+          </Box>
+        </DialogContent>
+      </Dialog>
+
     </Container>
   </Box>
 );

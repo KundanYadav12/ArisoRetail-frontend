@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar, Typography, Button, IconButton, useMediaQuery, Menu, MenuItem } from '@mui/material';
+import { ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar, Typography, Button, IconButton, useMediaQuery, Menu, MenuItem, Chip } from '@mui/material';
+// Clean Vite HMR trigger
 import MenuIcon from '@mui/icons-material/Menu';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
@@ -11,6 +12,8 @@ import POSScreen from './pages/POS';
 import CashierDashboard from './pages/CashierDashboard';
 import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
+import SuperBillItems from './pages/SuperBillItems';
+import SuperBillBilling from './pages/SuperBillBilling';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import { NotificationProvider } from './context/NotificationContext';
 import { apiFetch, resolveImageUrl } from './utils/api';
@@ -264,6 +267,26 @@ export default function App() {
                     >
                       POS Screen
                     </Button>
+                    {(user?.feature_superbill || isSuperAdmin) && (
+                      <>
+                        <Button
+                          variant={currentView === 'superbill_billing' ? 'contained' : 'text'}
+                          onClick={() => setCurrentView('superbill_billing')}
+                          color="secondary"
+                          sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                        >
+                          ⚡ SuperBill Billing
+                        </Button>
+                        <Button
+                          variant={currentView === 'superbill_items' ? 'contained' : 'text'}
+                          onClick={() => setCurrentView('superbill_items')}
+                          color="secondary"
+                          sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                        >
+                          📦 SuperBill Items
+                        </Button>
+                      </>
+                    )}
                     <Button
                       variant={currentView === 'cashier' ? 'contained' : 'text'}
                       onClick={() => setCurrentView('cashier')}
@@ -329,6 +352,24 @@ export default function App() {
                     >
                       🛒 &nbsp; POS Screen
                     </MenuItem>
+                    {(user?.feature_superbill || isSuperAdmin) && (
+                      <>
+                        <MenuItem
+                          onClick={() => { setCurrentView('superbill_billing'); setAnchorElNav(null); }}
+                          selected={currentView === 'superbill_billing'}
+                          sx={{ fontWeight: currentView === 'superbill_billing' ? 800 : 500 }}
+                        >
+                          ⚡ &nbsp; SuperBill Billing
+                        </MenuItem>
+                        <MenuItem
+                          onClick={() => { setCurrentView('superbill_items'); setAnchorElNav(null); }}
+                          selected={currentView === 'superbill_items'}
+                          sx={{ fontWeight: currentView === 'superbill_items' ? 800 : 500 }}
+                        >
+                          📦 &nbsp; SuperBill Items
+                        </MenuItem>
+                      </>
+                    )}
                     <MenuItem
                       onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
                       selected={currentView === 'cashier'}
@@ -400,6 +441,16 @@ export default function App() {
                 isFocusMode={posFocusMode}
                 onFocusModeChange={handleFocusModeChange}
               />
+            )}
+            {currentView === 'superbill_billing' && user?.feature_superbill && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <SuperBillBilling user={user} />
+              </Box>
+            )}
+            {currentView === 'superbill_items' && user?.feature_superbill && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <SuperBillItems user={user} />
+              </Box>
             )}
             {currentView === 'cashier' && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>

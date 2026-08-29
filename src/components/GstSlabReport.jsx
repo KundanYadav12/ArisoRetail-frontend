@@ -70,8 +70,14 @@ export default function GstSlabReport() {
     }
 
     if (preset !== 'custom') {
-      const fromStr = fromDate.toISOString().slice(0, 10) + ' 00:00:00';
-      const toStr = toDate.toISOString().slice(0, 10) + ' 23:59:59';
+      const getLocalDateString = (d) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      };
+      const fromStr = getLocalDateString(fromDate) + ' 00:00:00';
+      const toStr = getLocalDateString(toDate) + ' 23:59:59';
       setDateFrom(fromStr);
       setDateTo(toStr);
     }

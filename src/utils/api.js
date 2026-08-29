@@ -31,6 +31,9 @@ export function getApiUrl(endpoint) {
 export function resolveImageUrl(path) {
   if (!path) return '';
   let cleanPath = path;
+  if (cleanPath.startsWith('file://') || cleanPath.startsWith('content://') || cleanPath.startsWith('ph://') || cleanPath.startsWith('data:') || cleanPath.startsWith('blob:')) {
+    return cleanPath;
+  }
   if (cleanPath.startsWith('http://') || cleanPath.startsWith('https://')) {
     const uploadsIndex = cleanPath.indexOf('/uploads/');
     if (uploadsIndex !== -1) {
