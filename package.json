@@ -1,17 +1,21 @@
 {
   "name": "restaurant-pos-frontend",
   "version": "1.0.0",
+  "main": "main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron": "electron .",
+    "dist:win": "vite build && electron-builder --win"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.2.0",
     "@mui/material": "^9.2.0",
+    "dexie": "^4.4.5",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.368.0",
     "react": "^18.2.0",
@@ -22,6 +26,24 @@
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "vite": "^5.1.6"
+  },
+  "build": {
+    "appId": "com.arisoretail.pos",
+    "productName": "Ariso Retail POS",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Ariso Retail POS"
+    }
   }
 }

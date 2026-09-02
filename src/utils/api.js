@@ -3,10 +3,28 @@
  * Uses import.meta.env.VITE_API_URL for production and development environment compatibility.
  */
 
-const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-const defaultBaseUrl = isLocalhost ? 'http://localhost:5005/api' : '/api';
+import { db } from './offlineDb';
+import { SyncService } from './syncService';
 
-export const API_BASE_URL = (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api' ? import.meta.env.VITE_API_URL : defaultBaseUrl).replace(/\/+$/, '');
+export const PRODUCTION_API_URL = (import.meta.env.VITE_PRODUCTION_API_URL || 'https://arisoretail.duckdns.org/api').replace(/\/+$/, '');
+export const LOCAL_DEV_API_URL = (import.meta.env.VITE_DEV_API_URL || 'http://localhost:5005/api').replace(/\/+$/, '');
+
+const isElectron = typeof window !== 'undefined' && (window.electron || window.location.protocol === 'file:');
+const storedApiUrl = typeof window !== 'undefined' ? window.localStorage.getItem('ARISO_RETAIL_API_URL') : null;
+const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+// In Electron / Windows application:
+// - If user configured a custom URL in localStorage, use it.
+// - If running in local Vite development (import.meta.env.DEV), default to local backend.
+// - In production builds, default to the live production backend (https://arisoretail.duckdns.org/api).
+// In Web browser:
+// - If on localhost, use local dev backend.
+// - In production web, use relative '/api' or production URL.
+const defaultBaseUrl = isElectron 
+  ? (storedApiUrl || (import.meta.env.DEV ? LOCAL_DEV_API_URL : PRODUCTION_API_URL)) 
+  : (isLocalhost ? (import.meta.env.VITE_API_URL || LOCAL_DEV_API_URL) : (import.meta.env.VITE_API_URL || '/api'));
+
+export const API_BASE_URL = (storedApiUrl || (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api' ? import.meta.env.VITE_API_URL : defaultBaseUrl)).replace(/\/+$/, '');
 
 export function getApiUrl(endpoint) {
   if (!endpoint) return API_BASE_URL;
@@ -90,15 +108,7 @@ export async function apiFetch(url, options = {}) {
     headers
   };
 
-  let response;
-  try {
-    response = await fetch(fullUrl, fetchOptions);
-  } catch (netErr) {
-    // Automatic Network Failover to Local Gateway when internet fails
-    const localFallbackUrl = fullUrl.replace(/^https?:\/\/[^\/]+/, 'http://localhost:5005');
-    console.warn(`[API Network Failover] Internet connection lost. Route fallback -> ${localFallbackUrl}`);
-    response = await fetch(localFallbackUrl, fetchOptions);
-  }
+  const response = await fetch(fullUrl, fetchOptions);
 
   // Exclude auth-specific endpoints to prevent infinite refresh loops
   const isAuthEndpoint = fullUrl.includes('/api/auth/login') ||
@@ -119,7 +129,7 @@ export async function apiFetch(url, options = {}) {
       // Ignore clone/JSON parsing errors
     }
 
-    const refreshToken = localStorage.getItem('pos_refresh_token');
+    const refreshToken = localStorage.getItem('ARISO_RETAIL_REFRESH_TOKEN') || localStorage.getItem('pos_refresh_token');
 
     // If no refresh token is present, clear session and return 401 response
     if (!refreshToken) {
@@ -250,35 +260,107 @@ export async function downloadFile(endpoint, defaultFilename = 'export.xlsx') {
 }
 
 export async function fetchMobileMenu(token) {
-  const res = await apiFetch('/api/menu');
-  if (!res.ok) throw new Error('Failed to fetch menu items');
-  return await res.json();
+  try {
+    const res = await apiFetch('/api/menu');
+    if (res.ok) {
+      const items = await res.json();
+      const menuList = Array.isArray(items) ? items : (items?.items || []);
+      // Cache locally in background
+      db.menu_items.clear().then(() => {
+        db.menu_items.bulkPut(menuList);
+      }).catch(err => console.warn('[IndexedDB] Failed to cache menu:', err.message));
+      return menuList;
+    }
+  } catch (err) {
+    console.warn('[API Fetch Menu Fallback] Offline, reading local DB:', err.message);
+  }
+  // Fallback to local Dexie cache
+  return await db.menu_items.toArray();
 }
 
 export async function fetchMobileCategories(token) {
-  const res = await apiFetch('/api/categories');
-  if (!res.ok) throw new Error('Failed to fetch categories');
-  return await res.json();
+  try {
+    const res = await apiFetch('/api/categories');
+    if (res.ok) {
+      const categories = await res.json();
+      // Cache locally in background
+      db.categories.clear().then(() => {
+        db.categories.bulkPut(categories);
+      }).catch(err => console.warn('[IndexedDB] Failed to cache categories:', err.message));
+      return categories;
+    }
+  } catch (err) {
+    console.warn('[API Fetch Categories Fallback] Offline, reading local DB:', err.message);
+  }
+  // Fallback to local Dexie cache
+  return await db.categories.toArray();
 }
 
 export async function fetchRestaurantProfile(token) {
-  const res = await apiFetch('/api/settings/profile');
-  if (!res.ok) return null;
-  return await res.json();
+  try {
+    const res = await apiFetch('/api/settings/profile');
+    if (res.ok) {
+      const profile = await res.json();
+      db.settings.put({ key: 'restaurant_profile', value: profile }).catch(() => {});
+      return profile;
+    }
+  } catch (e) {
+    console.warn('[API Fetch Profile Fallback] Offline, reading local profile settings');
+  }
+  const local = await db.settings.get('restaurant_profile');
+  return local ? local.value : null;
 }
 
 export async function fetchReceiptSettings(token) {
-  const res = await apiFetch('/api/settings/receipt');
-  if (!res.ok) return null;
-  return await res.json();
+  try {
+    const res = await apiFetch('/api/settings/receipt');
+    if (res.ok) {
+      const settings = await res.json();
+      db.settings.put({ key: 'receipt_settings', value: settings }).catch(() => {});
+      return settings;
+    }
+  } catch (e) {
+    console.warn('[API Fetch Settings Fallback] Offline, reading local receipt settings');
+  }
+  const local = await db.settings.get('receipt_settings');
+  return local ? local.value : null;
 }
 
 export async function createOrder(token, orderData) {
-  const res = await apiFetch('/api/orders', {
-    method: 'POST',
-    body: orderData
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to create order');
-  return data;
+  try {
+    const res = await apiFetch('/api/orders', {
+      method: 'POST',
+      body: orderData
+    });
+    
+    if (res.ok) {
+      return await res.json();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to create order on server.');
+    }
+  } catch (err) {
+    // If it's a network/fetch error, fall back to offline order persistence
+    const isNetworkError = !err.status && (
+      err.message.includes('Failed to fetch') || 
+      err.message.includes('NetworkError') || 
+      err.message.includes('network') ||
+      err.message.includes('TypeError') ||
+      err.message.includes('type error')
+    );
+                           
+    if (isNetworkError) {
+      console.log('[API CreateOrder Failover] Server unreachable. Enqueuing order locally...', orderData);
+      const savedOrder = await SyncService.saveOfflineOrder(orderData);
+      return {
+        message: 'Order saved locally in offline queue.',
+        unique_order_number: savedOrder.offline_id,
+        orderNumber: savedOrder.offline_id,
+        id: savedOrder.offline_id,
+        isOffline: true
+      };
+    }
+    
+    throw err;
+  }
 }

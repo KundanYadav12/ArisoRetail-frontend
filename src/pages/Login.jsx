@@ -18,6 +18,23 @@ export default function Login({ onLoginSuccess }) {
   const [showRegister, setShowRegister] = useState(false);
   const [ownerEmail, setOwnerEmail] = useState('');
 
+  // Desktop Server Configuration state
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('ARISO_RETAIL_API_URL') || (import.meta.env.DEV ? 'http://localhost:5005/api' : 'https://arisoretail.duckdns.org/api'));
+  const isDesktop = typeof window !== 'undefined' && (window.electron || window.location.protocol === 'file:');
+
+  const handleSaveServerUrl = () => {
+    if (!serverUrl.trim()) {
+      localStorage.removeItem('ARISO_RETAIL_API_URL');
+    } else {
+      localStorage.setItem('ARISO_RETAIL_API_URL', serverUrl.trim());
+    }
+    alert('Server URL config saved! Reloading POS app to apply settings...');
+    window.location.reload();
+  };
+
+  const [diagnosticStatus, setDiagnosticStatus] = useState('');
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email || !password) {
@@ -27,46 +44,156 @@ export default function Login({ onLoginSuccess }) {
 
     setLoading(true);
     setError('');
+    setDiagnosticStatus('Connecting to authentication server...');
 
-    try {
-      const response = await fetch(getApiUrl('/api/auth/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          username: email.trim().toLowerCase(),
-          password,
-          restaurant_id: restaurantId || null,
-          starting_cash: parseFloat(startingCash || 0),
-          device: `Web Browser (${navigator.userAgent.slice(0, 40)})`
-        })
-      });
+    const loginPayload = {
+      email: email.trim().toLowerCase(),
+      username: email.trim().toLowerCase(),
+      password,
+      restaurant_id: restaurantId || null,
+      starting_cash: parseFloat(startingCash || 0),
+      device: typeof window !== 'undefined' && window.electron ? 'Windows Desktop POS' : `Web Browser (${navigator.userAgent.slice(0, 40)})`
+    };
 
-      const data = await response.json();
-      if (!response.ok) {
-        if (data.error && data.error.includes('pending activation')) {
-          setOwnerEmail(email.trim().toLowerCase());
-          setShowOTPVerification(true);
+    const targetUrl = getApiUrl('/api/auth/login');
+    let data = null;
+    let lastNetworkError = null;
+    const maxRetries = 3;
+
+    // Retry loop with exponential backoff and timeout for weak/slow network resilience
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 1) {
+          setDiagnosticStatus(`Network slow or high latency. Retrying connection (Attempt ${attempt}/${maxRetries})...`);
+          await new Promise(r => setTimeout(r, (attempt - 1) * 1200));
         }
-        throw new Error(data.error || 'Login failed.');
-      }
 
-      localStorage.setItem('ARISO_RETAIL_TOKEN', data.accessToken);
-      localStorage.setItem('ARISO_RETAIL_REFRESH_TOKEN', data.refreshToken);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8-second request timeout
+
+        const response = await fetch(targetUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(loginPayload),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        const resJson = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          // Authentication errors (400, 401, 403) should not be retried indefinitely
+          if (response.status === 401 || response.status === 400 || response.status === 403) {
+            const authErr = new Error(resJson.error || resJson.message || 'Invalid email or password.');
+            authErr.isAuthError = true;
+            throw authErr;
+          }
+
+          if (resJson.error && resJson.error.includes('pending activation')) {
+            setOwnerEmail(email.trim().toLowerCase());
+            setShowOTPVerification(true);
+          }
+          throw new Error(resJson.error || resJson.message || `Server returned error (${response.status})`);
+        }
+
+        data = resJson;
+        break; // Success! Exit retry loop.
+      } catch (err) {
+        if (err.isAuthError) {
+          setError(err.message);
+          setLoading(false);
+          setDiagnosticStatus('');
+          return;
+        }
+
+        lastNetworkError = err;
+        const isAbort = err.name === 'AbortError';
+        console.warn(`[Login] Attempt ${attempt}/${maxRetries} failed:`, isAbort ? 'Request timed out after 8s' : err.message);
+      }
+    }
+
+    // --- Online Authentication Success ---
+    if (data && (data.accessToken || data.token)) {
+      const accessToken = data.accessToken || data.token;
+      localStorage.setItem('ARISO_RETAIL_TOKEN', accessToken);
+      if (data.refreshToken) localStorage.setItem('ARISO_RETAIL_REFRESH_TOKEN', data.refreshToken);
       localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
 
-      // Remove any legacy POS keys from browser
+      // Cache credentials locally for future offline login fallback
+      try {
+        const { cacheUserCredentials } = await import('../utils/offlineAuthService');
+        await cacheUserCredentials(data.user, password);
+      } catch (cacheErr) {
+        console.warn('[OfflineAuth] Failed to cache credentials locally:', cacheErr.message);
+      }
+
+      // Automatically initialize Inbuild Print Gateway in Electron
+      if (typeof window !== 'undefined' && window.electron?.startGateway) {
+        try {
+          await window.electron.startGateway({
+            serverUrl: getApiUrl(''),
+            token: accessToken,
+            restaurantId: data.user.restaurant_id
+          });
+          console.log('[Inbuild Gateway] Auto-started successfully after login.');
+        } catch (gwErr) {
+          console.warn('[Inbuild Gateway] Startup warning:', gwErr.message);
+        }
+      }
+
+      // Cleanup legacy keys
       localStorage.removeItem('pos_token');
       localStorage.removeItem('pos_refresh_token');
       localStorage.removeItem('pos_user');
       localStorage.removeItem('token');
       localStorage.removeItem('user');
 
-      onLoginSuccess(data.user, data.accessToken);
-    } catch (err) {
-      setError(err.message);
+      setDiagnosticStatus('');
+      setLoading(false);
+      onLoginSuccess(data.user, accessToken);
+      return;
+    }
+
+    // --- Fallback to Local Offline Authentication ---
+    setDiagnosticStatus('Server unreachable. Evaluating local offline credentials cache...');
+    try {
+      const { verifyOfflineLogin } = await import('../utils/offlineAuthService');
+      const { db } = await import('../utils/offlineDb');
+
+      const cleanUsername = email.trim().toLowerCase();
+      const localUser = await db.users.where('username').equals(cleanUsername).first();
+
+      if (!localUser) {
+        setError(`Server unreachable at "${targetUrl}". No offline account is cached for "${cleanUsername}" on this device. Initial setup requires a server connection.`);
+        setLoading(false);
+        setDiagnosticStatus('');
+        return;
+      }
+
+      const offlineUser = await verifyOfflineLogin(email, password);
+      if (offlineUser) {
+        console.log('[OfflineAuth] ✅ Verified offline login for user:', email);
+        const dummyToken = `OFFLINE-SESSION-TOKEN-${Date.now()}`;
+        localStorage.setItem('ARISO_RETAIL_TOKEN', dummyToken);
+        localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(offlineUser));
+
+        setDiagnosticStatus('');
+        setLoading(false);
+        onLoginSuccess(offlineUser, dummyToken);
+        return;
+      } else {
+        setError('Server unreachable. Incorrect password for cached offline account.');
+        setLoading(false);
+        setDiagnosticStatus('');
+        return;
+      }
+    } catch (offlineErr) {
+      console.error('[OfflineAuth] Exception during offline verification:', offlineErr);
+      setError(`Login failed: ${lastNetworkError?.message || 'Server unreachable'}`);
     } finally {
       setLoading(false);
+      setDiagnosticStatus('');
     }
   };
 
@@ -124,6 +251,21 @@ export default function Login({ onLoginSuccess }) {
             Sign in to access your Terminal
           </p>
         </div>
+
+        {diagnosticStatus && (
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            backgroundColor: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            color: '#1e40af',
+            fontSize: '13px',
+            marginBottom: '16px',
+            fontWeight: '600'
+          }}>
+            🔄 {diagnosticStatus}
+          </div>
+        )}
 
         {error && (
           <div style={{
@@ -283,6 +425,75 @@ export default function Login({ onLoginSuccess }) {
             🔑 Register Store using License ID
           </button>
         </div>
+
+        {/* Server Settings for Desktop App */}
+        {isDesktop && (
+          <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px dashed #cbd5e1' }}>
+            <button
+              type="button"
+              onClick={() => setShowServerSettings(!showServerSettings)}
+              style={{
+                width: '100%',
+                background: 'none',
+                border: 'none',
+                color: '#64748b',
+                fontSize: '12px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                textAlign: 'left',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <span>⚙️ SERVER CONNECTION SETTINGS</span>
+              <span>{showServerSettings ? '▲ Hide' : '▼ Show'}</span>
+            </button>
+
+            {showServerSettings && (
+              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '11px', fontWeight: '700', color: '#64748b' }}>
+                  BACKEND API ENDPOINT URL
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                    placeholder="e.g. https://arisoretail.duckdns.org/api or http://192.168.1.100:5005/api"
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      fontSize: '13px',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveServerUrl}
+                    style={{
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      fontWeight: '700',
+                      color: '#ffffff',
+                      backgroundColor: '#2563eb',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Save & Apply
+                  </button>
+                </div>
+                <p style={{ fontSize: '10px', color: '#64748b', margin: '2px 0 0 0' }}>
+                  Note: Changes require application reload. Default is: https://arisoretail.duckdns.org/api
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

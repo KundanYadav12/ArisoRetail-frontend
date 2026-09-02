@@ -50,7 +50,7 @@ const resolveDateRange = (preset, stateFrom, stateTo) => {
   return { from, to };
 };
 
-export default function AdminPanel({ token }) {
+export default function AdminPanel({ token, user }) {
   const { notify, confirmDialog } = useNotify();
   const [activeTab, setActiveTab] = useState(0); // 0 = menu, 1 = categories, 2 = printers, 3 = reports, 4 = receipt settings, 5 = staff
   const [categories, setCategories] = useState([]);
@@ -173,6 +173,14 @@ export default function AdminPanel({ token }) {
   const [categoryDesc, setCategoryDesc] = useState('');
   const [draggedCategoryIdx, setDraggedCategoryIdx] = useState(null);
 
+  const [profileLogoUrl, setProfileLogoUrl] = useState(user?.restaurant_logo_url || '');
+
+  useEffect(() => {
+    if (user?.restaurant_logo_url) {
+      setProfileLogoUrl(user.restaurant_logo_url);
+    }
+  }, [user]);
+
   // Receipt & KOT Customization state
   const [receiptSettings, setReceiptSettings] = useState({
     restaurant_name: '',
@@ -185,7 +193,7 @@ export default function AdminPanel({ token }) {
     gst_number: '',
     fssai_number: '',
     logo_url: '',
-    header_message: 'Welcome to Our Restaurant!',
+    header_message: 'Welcome to Our Store!',
     footer_message: 'Visit us again soon.',
     thank_you_message: 'Thank You! Visit Again.',
     terms_conditions: 'Goods once sold cannot be returned.',
@@ -376,6 +384,18 @@ export default function AdminPanel({ token }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Client-side validation: file type and max size (2MB)
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      notify.error('Invalid file type. Please upload a JPG, PNG, or WEBP image.', 'Validation Error');
+      return;
+    }
+    const maxSizeBytes = 2 * 1024 * 1024; // 2MB
+    if (file.size > maxSizeBytes) {
+      notify.error('File size exceeds the 2MB limit.', 'Validation Error');
+      return;
+    }
+
     const formData = new FormData();
     formData.append('logo', file);
 
@@ -390,6 +410,49 @@ export default function AdminPanel({ token }) {
 
       const formattedUrl = data.logo_url;
       setReceiptSettings(prev => ({ ...prev, logo_url: formattedUrl }));
+      notify.success('Receipt logo uploaded successfully!', 'Logo Uploaded');
+    } catch (err) {
+      console.error('[Logo Upload Error]', err);
+      notify.error(err.message || 'Failed to upload logo image.', 'Upload Error');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleRemoveLogo = async () => {
+    setReceiptSettings(prev => ({ ...prev, logo_url: '' }));
+    notify.success('Receipt logo removed.', 'Logo Removed');
+  };
+
+  const handleProfileLogoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      notify.error('Invalid file type. Please upload a JPG, PNG, or WEBP image.', 'Validation Error');
+      return;
+    }
+    const maxSizeBytes = 2 * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      notify.error('File size exceeds the 2MB limit.', 'Validation Error');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('logo', file);
+
+    setUploadingLogo(true);
+    try {
+      const res = await apiFetch('/api/settings/profile/logo', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to upload logo image.');
+
+      const formattedUrl = data.logo_url;
+      setProfileLogoUrl(formattedUrl);
       
       try {
         const currentUser = JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || '{}');
@@ -399,13 +462,26 @@ export default function AdminPanel({ token }) {
       } catch (err) {
         console.error('[Logo Upload Session Sync Error]', err);
       }
-      notify.success('Restaurant logo uploaded successfully!', 'Logo Uploaded');
+      notify.success('Profile logo uploaded successfully!', 'Logo Uploaded');
     } catch (err) {
       console.error('[Logo Upload Error]', err);
       notify.error(err.message || 'Failed to upload logo image.', 'Upload Error');
     } finally {
       setUploadingLogo(false);
     }
+  };
+
+  const handleRemoveProfileLogo = async () => {
+    setProfileLogoUrl('');
+    try {
+      const currentUser = JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || '{}');
+      currentUser.restaurant_logo_url = '';
+      localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(currentUser));
+      window.dispatchEvent(new CustomEvent('auth_token_refreshed', { detail: { user: currentUser } }));
+    } catch (err) {
+      console.error('[Logo Remove Session Sync Error]', err);
+    }
+    notify.success('Profile logo removed.', 'Logo Removed');
   };
 
   // Sales Reports presets & customs
@@ -1025,7 +1101,7 @@ export default function AdminPanel({ token }) {
           method: 'PUT',
           body: {
             name: receiptSettings.restaurant_name,
-            logo_url: receiptSettings.logo_url,
+            logo_url: profileLogoUrl,
             address: receiptSettings.address,
             phone: receiptSettings.phone,
             email: receiptSettings.email,
@@ -1046,7 +1122,7 @@ export default function AdminPanel({ token }) {
         // Update local session & header identity
         const currentUser = JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || '{}');
         currentUser.restaurant_name = receiptSettings.restaurant_name;
-        currentUser.restaurant_logo_url = receiptSettings.logo_url;
+        currentUser.restaurant_logo_url = profileLogoUrl;
         localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(currentUser));
         window.dispatchEvent(new CustomEvent('auth_token_refreshed', { detail: { user: currentUser } }));
 
@@ -1107,21 +1183,44 @@ export default function AdminPanel({ token }) {
   const handleOpenEditMenu = (item) => {
     setDialogType('edit_menu');
     setSelectedEntity(item);
-    setMenuName(item.name);
-    setMenuPrice(item.price);
-    setMenuCategoryId(item.category_id.toString());
-    setMenuVeg(item.is_veg.toString());
-    setMenuSpicy(item.spicy_level.toString());
-    setMenuAvailable(item.is_available.toString());
+    setMenuName(item.name || '');
+    setMenuPrice(item.price !== undefined ? item.price.toString() : '');
+    setMenuCategoryId(item.category_id ? item.category_id.toString() : '');
+    setMenuVeg(item.is_veg !== undefined ? item.is_veg.toString() : '1');
+    setMenuSpicy(item.spicy_level !== undefined ? item.spicy_level.toString() : '0');
+    setMenuAvailable(item.is_available !== undefined ? item.is_available.toString() : '1');
     setMenuSku(item.sku || '');
     setMenuDesc(item.description || '');
     setMenuImageUrl(item.image_url || '');
     setMenuImageFile(null);
     setMenuPrinterId(item.printer_id ? item.printer_id.toString() : '');
     setMenuGst(item.gst_rate !== undefined && item.gst_rate !== null ? Math.round(parseFloat(item.gst_rate)).toString() : '5');
-    const isWeight = !!(item.is_weight_based || ['kg', 'gram', 'litre', 'ml'].includes((item.unit || '').toLowerCase()));
+
+    // Strict Item Type resolution
+    let isWeight = false;
+    const it = item.item_type || item.itemType;
+    if (it) {
+      const s = String(it).toUpperCase().trim();
+      if (s === 'PCS' || s === 'COUNT' || s === 'PIECE') isWeight = false;
+      else if (s === 'WEIGHT' || s === 'KG' || s === 'GRAM') isWeight = true;
+    } else if (item.is_weight_based !== undefined && item.is_weight_based !== null) {
+      const rawIwb = item.is_weight_based;
+      if (rawIwb === 0 || rawIwb === false || rawIwb === '0' || rawIwb === 'false') isWeight = false;
+      else if (rawIwb === 1 || rawIwb === true || rawIwb === '1' || rawIwb === 'true') isWeight = true;
+    } else {
+      const storedUnit = (item.unit || item.base_unit || '').toLowerCase();
+      isWeight = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(storedUnit);
+    }
     setMenuIsWeightBased(isWeight);
-    setMenuUnit(item.unit || (isWeight ? 'kg' : 'pcs'));
+
+    const WEIGHT_UNITS = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'];
+    const PCS_UNITS = ['pcs', 'box', 'pack', 'bottle'];
+    const storedUnit = (item.unit || item.base_unit || '').toLowerCase();
+    let resolvedUnit = isWeight
+      ? (WEIGHT_UNITS.includes(storedUnit) ? storedUnit : 'kg')
+      : (PCS_UNITS.includes(storedUnit) ? storedUnit : 'pcs');
+    setMenuUnit(resolvedUnit);
+
     setMenuBarcodeImageUrl(item.barcode_image_url || '');
     setBarcodeSkuDuplicate(null);
     setDialogOpen(true);
@@ -1129,7 +1228,19 @@ export default function AdminPanel({ token }) {
 
   const handleSaveMenu = async (e) => {
     e.preventDefault();
-    
+
+    // Enforce unit/is_weight_based consistency before sending:
+    // menuIsWeightBased is the authoritative source of truth.
+    const isWeightFinal = Boolean(menuIsWeightBased);
+    const WEIGHT_UNITS = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'];
+    const PCS_UNITS = ['pcs', 'box', 'pack', 'bottle'];
+    let unitFinal = menuUnit;
+    if (isWeightFinal && !WEIGHT_UNITS.includes((unitFinal || '').toLowerCase())) {
+      unitFinal = 'kg'; // Correct unit if it doesn't match item type
+    } else if (!isWeightFinal && !PCS_UNITS.includes((unitFinal || '').toLowerCase())) {
+      unitFinal = 'pcs'; // Correct unit if it doesn't match item type
+    }
+
     const formData = new FormData();
     formData.append('name', menuName);
     formData.append('price', menuPrice);
@@ -1140,9 +1251,11 @@ export default function AdminPanel({ token }) {
     formData.append('is_available', menuAvailable);
     formData.append('sku', menuSku);
     formData.append('description', menuDesc);
-    formData.append('is_weight_based', menuIsWeightBased ? '1' : '0');
-    formData.append('unit', menuUnit || (menuIsWeightBased ? 'kg' : 'pcs'));
-    formData.append('base_unit', menuUnit || (menuIsWeightBased ? 'kg' : 'pcs'));
+    formData.append('is_weight_based', isWeightFinal ? '1' : '0');
+    formData.append('item_type', isWeightFinal ? 'WEIGHT' : 'PCS');
+    formData.append('itemType', isWeightFinal ? 'WEIGHT' : 'PCS');
+    formData.append('unit', unitFinal);
+    formData.append('base_unit', unitFinal);
     if (menuPrinterId) formData.append('printer_id', menuPrinterId);
     if (menuBarcodeImageUrl) formData.append('barcode_image_url', menuBarcodeImageUrl);
 
@@ -3014,13 +3127,13 @@ export default function AdminPanel({ token }) {
                   {/* Card 1: Business Branding & Contact Details */}
                   <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 800, borderBottom: 1, borderColor: 'divider', pb: 1 }}>
-                      🏪 Restaurant Branding & Licensing
+                      🏪 Retail Branding & Licensing
                     </Typography>
 
                     <Grid container spacing={2}>
                       <Grid size={{ xs: 12, sm: 6 }}>
                         <TextField
-                          label="Restaurant Display Name"
+                          label="Retail Display Name"
                           size="small"
                           fullWidth
                           value={receiptSettings.restaurant_name || ''}
@@ -3113,14 +3226,14 @@ export default function AdminPanel({ token }) {
                       <Grid size={{ xs: 12 }}>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: 2, bgcolor: 'action.hover', borderRadius: 2, border: '1px dashed', borderColor: 'divider' }}>
                           <Typography variant="subtitle2" sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <ImageIcon size={18} /> Restaurant Logo (Upload or Link)
+                            <ImageIcon size={18} /> Retail Logo (Upload)
                           </Typography>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
                             {receiptSettings.logo_url ? (
                               <Box
                                 component="img"
                                 src={resolveImageUrl(receiptSettings.logo_url)}
-                                alt="Restaurant Logo"
+                                alt="Retail Logo"
                                 sx={{ width: 64, height: 64, borderRadius: 2, objectFit: 'cover', border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}
                                 onError={(e) => { e.target.style.display = 'none'; }}
                               />
@@ -3130,33 +3243,35 @@ export default function AdminPanel({ token }) {
                               </Box>
                             )}
 
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flex: 1, minWidth: 220 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                               <Button
                                 variant="contained"
                                 component="label"
                                 size="small"
                                 disabled={uploadingLogo}
                                 startIcon={uploadingLogo ? <CircularProgress size={16} color="inherit" /> : <Upload size={16} />}
-                                sx={{ fontWeight: 800, width: 'fit-content', textTransform: 'none' }}
+                                sx={{ fontWeight: 800, textTransform: 'none' }}
                               >
-                                {uploadingLogo ? 'Uploading Logo...' : 'Upload Logo File (JPG, PNG, WEBP, SVG)'}
+                                {uploadingLogo ? 'Uploading Logo...' : 'Upload Logo (JPG, PNG, WEBP)'}
                                 <input
                                   type="file"
                                   hidden
-                                  accept="image/jpeg,image/jpg,image/png,image/webp,image/svg+xml,image/gif"
+                                  accept="image/jpeg,image/png,image/webp"
                                   onChange={handleLogoFileUpload}
                                 />
                               </Button>
 
-                              <TextField
-                                label="Logo Image URL (Or Paste Public Image Link)"
-                                size="small"
-                                fullWidth
-                                value={receiptSettings.logo_url || ''}
-                                onChange={e => setReceiptSettings({ ...receiptSettings, logo_url: e.target.value })}
-                                placeholder="https://example.com/logo.png or /uploads/logos/logo_1.png"
-                                sx={{ width: '100%' }}
-                              />
+                              {receiptSettings.logo_url && (
+                                <Button
+                                  variant="outlined"
+                                  color="error"
+                                  size="small"
+                                  onClick={handleRemoveLogo}
+                                  sx={{ fontWeight: 800, textTransform: 'none' }}
+                                >
+                                  Remove Logo
+                                </Button>
+                              )}
                             </Box>
                           </Box>
                         </Box>
@@ -3277,7 +3392,7 @@ export default function AdminPanel({ token }) {
 
                     <Grid container spacing={1}>
                       {[
-                        { key: 'show_logo', label: 'Show Restaurant Logo' },
+                        { key: 'show_logo', label: 'Show Retail Logo' },
                         { key: 'show_qr_code', label: 'Show QR Code' },
                         { key: 'show_customer_details', label: 'Show Customer Details' },
                         { key: 'show_cashier_name', label: 'Show Cashier Name' },
@@ -3459,7 +3574,7 @@ export default function AdminPanel({ token }) {
                       </Grid>
                     ) : (
                       <Alert severity="info" sx={{ borderRadius: 2 }}>
-                        ℹ️ <strong>GST Billing System is Disabled</strong>. Taxes will not be calculated or displayed on bills, receipts, or reports. Billing will operate as a normal non-GST restaurant.
+                        ℹ️ <strong>GST Billing System is Disabled</strong>. Taxes will not be calculated or displayed on bills, receipts, or reports. Billing will operate as a normal non-GST retail outlet.
                       </Alert>
                     )}
                   </Paper>
@@ -3739,7 +3854,7 @@ export default function AdminPanel({ token }) {
                         {/* Header */}
                         <Box sx={{ textAlign: receiptSettings.header_alignment || 'center' }}>
                           <Typography variant="subtitle1" sx={{ fontFamily: 'inherit', fontWeight: 800, textTransform: 'uppercase' }}>
-                            {receiptSettings.restaurant_name || 'RESTAURANT POS'}
+                            {receiptSettings.restaurant_name || 'RETAIL POS'}
                           </Typography>
                           {receiptSettings.branch_name && <div>{receiptSettings.branch_name}</div>}
                           {receiptSettings.address && <div>{receiptSettings.address}</div>}
@@ -3913,7 +4028,7 @@ export default function AdminPanel({ token }) {
               <Grid size={{ xs: 12, md: 7, lg: 8 }}>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                   
-                  {/* Card 1: Restaurant Identity & Logo */}
+                  {/* Card 1: Retail Identity & Logo */}
                   <Paper variant="outlined" sx={{ p: 3, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                     <Typography variant="subtitle1" sx={{ fontWeight: 800, borderBottom: 1, borderColor: 'divider', pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
                       <ImageIcon size={20} /> Retail Identity & Logo
@@ -3922,7 +4037,7 @@ export default function AdminPanel({ token }) {
                     <Grid container spacing={2}>
                       <Grid size={{ xs: 12, sm: 6 }}>
                         <TextField
-                          label="Restaurant Display Name"
+                          label="Retail Display Name"
                           size="small"
                           fullWidth
                           value={receiptSettings.restaurant_name || ''}
@@ -3946,15 +4061,15 @@ export default function AdminPanel({ token }) {
                       <Grid size={{ xs: 12 }}>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, p: 2, bgcolor: 'action.hover', borderRadius: 2, border: '1px dashed', borderColor: 'divider' }}>
                           <Typography variant="subtitle2" sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: 1 }}>
-                            🖼️ Restaurant Logo Image
+                            🖼️ Retail Logo Image
                           </Typography>
                           
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2.5, flexWrap: 'wrap' }}>
-                            {receiptSettings.logo_url ? (
+                            {profileLogoUrl ? (
                               <Box
                                 component="img"
-                                src={resolveImageUrl(receiptSettings.logo_url)}
-                                alt="Restaurant Logo"
+                                src={resolveImageUrl(profileLogoUrl)}
+                                alt="Retail Logo"
                                 sx={{ width: 80, height: 80, borderRadius: 2.5, objectFit: 'cover', border: '1px solid', borderColor: 'divider', bgcolor: '#fff', p: 0.5 }}
                                 onError={(e) => { e.target.style.display = 'none'; }}
                               />
@@ -3964,32 +4079,35 @@ export default function AdminPanel({ token }) {
                               </Box>
                             )}
 
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, flex: 1, minWidth: 240 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                               <Button
                                 variant="contained"
                                 component="label"
                                 size="small"
                                 disabled={uploadingLogo}
                                 startIcon={uploadingLogo ? <CircularProgress size={16} color="inherit" /> : <Upload size={16} />}
-                                sx={{ fontWeight: 800, width: 'fit-content', textTransform: 'none' }}
+                                sx={{ fontWeight: 800, textTransform: 'none' }}
                               >
-                                {uploadingLogo ? 'Uploading Image...' : 'Upload Logo File (JPG, PNG, WEBP, SVG)'}
+                                {uploadingLogo ? 'Uploading Logo...' : 'Upload Logo (JPG, PNG, WEBP)'}
                                 <input
                                   type="file"
                                   hidden
-                                  accept="image/jpeg,image/jpg,image/png,image/webp,image/svg+xml,image/gif"
-                                  onChange={handleLogoFileUpload}
+                                  accept="image/jpeg,image/png,image/webp"
+                                  onChange={handleProfileLogoUpload}
                                 />
                               </Button>
 
-                              <TextField
-                                label="Logo Image URL (Or Direct Image Link)"
-                                size="small"
-                                fullWidth
-                                value={receiptSettings.logo_url || ''}
-                                onChange={e => setReceiptSettings({ ...receiptSettings, logo_url: e.target.value })}
-                                placeholder="https://example.com/logo.png"
-                              />
+                              {profileLogoUrl && (
+                                <Button
+                                  variant="outlined"
+                                  color="error"
+                                  size="small"
+                                  onClick={handleRemoveProfileLogo}
+                                  sx={{ fontWeight: 800, textTransform: 'none' }}
+                                >
+                                  Remove Logo
+                                </Button>
+                              )}
                             </Box>
                           </Box>
                         </Box>
@@ -4072,7 +4190,7 @@ export default function AdminPanel({ token }) {
                     👀 Live Brand Identity Preview
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    This is how your Restaurant Identity will appear across the POS Navbar Header, Mobile Application, and Digital Receipts.
+                    This is how your Retail Identity will appear across the POS Navbar Header, Mobile Application, and Digital Receipts.
                   </Typography>
 
                   <Box sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 2, border: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
@@ -4092,7 +4210,7 @@ export default function AdminPanel({ token }) {
 
                     <Box sx={{ minWidth: 0, flex: 1 }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'primary.main', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {receiptSettings.restaurant_name || 'Restaurant POS'}
+                        {receiptSettings.restaurant_name || 'Retail POS'}
                       </Typography>
                       {receiptSettings.branch_name && (
                         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -4507,6 +4625,17 @@ export default function AdminPanel({ token }) {
                                 <Printer size={16} />
                               </IconButton>
                             </Tooltip>
+                            <Tooltip title="Download PDF Receipt">
+                              <IconButton
+                                size="small"
+                                color="primary"
+                                onClick={() => {
+                                  window.open(`/api/orders/${order.id}/pdf?token=${localStorage.getItem('ARISO_RETAIL_TOKEN') || token}`, '_blank');
+                                }}
+                              >
+                                <FileText size={16} />
+                              </IconButton>
+                            </Tooltip>
                           </Box>
                         </TableCell>
                       </TableRow>
@@ -4617,6 +4746,16 @@ export default function AdminPanel({ token }) {
                             }}
                           >
                             <Printer size={15} />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            title="Download PDF"
+                            onClick={() => {
+                              window.open(`/api/orders/${order.id}/pdf?token=${localStorage.getItem('ARISO_RETAIL_TOKEN') || token}`, '_blank');
+                            }}
+                          >
+                            <FileText size={15} />
                           </IconButton>
                         </Box>
                       </Box>
@@ -4743,20 +4882,32 @@ export default function AdminPanel({ token }) {
                   </Typography>
                   <Box sx={{ display: 'flex', gap: 1 }}>
                     <Button
+                      type="button"
                       size="small"
-                      variant={menuIsWeightBased ? 'outlined' : 'contained'}
-                      color={menuIsWeightBased ? 'inherit' : 'primary'}
-                      onClick={() => { setMenuIsWeightBased(false); setMenuUnit('pcs'); }}
-                      sx={{ flex: 1, fontWeight: 700 }}
+                      variant={!menuIsWeightBased ? 'contained' : 'outlined'}
+                      color={!menuIsWeightBased ? 'primary' : 'inherit'}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuIsWeightBased(false);
+                        setMenuUnit('pcs');
+                      }}
+                      sx={{ flex: 1, fontWeight: 800 }}
                     >
                       📦 Pcs (Count)
                     </Button>
                     <Button
+                      type="button"
                       size="small"
                       variant={menuIsWeightBased ? 'contained' : 'outlined'}
                       color={menuIsWeightBased ? 'success' : 'inherit'}
-                      onClick={() => { setMenuIsWeightBased(true); setMenuUnit('kg'); }}
-                      sx={{ flex: 1, fontWeight: 700 }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setMenuIsWeightBased(true);
+                        setMenuUnit('kg');
+                      }}
+                      sx={{ flex: 1, fontWeight: 800 }}
                     >
                       ⚖️ Weight (Kg)
                     </Button>
@@ -4769,7 +4920,13 @@ export default function AdminPanel({ token }) {
                   <Select
                     value={menuUnit}
                     label="Serving Unit"
-                    onChange={e => setMenuUnit(e.target.value)}
+                    onChange={e => {
+                      const newUnit = e.target.value;
+                      setMenuUnit(newUnit);
+                      // Bidirectionally sync is_weight_based from unit selection
+                      const isWeightUnit = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(newUnit.toLowerCase());
+                      setMenuIsWeightBased(isWeightUnit);
+                    }}
                   >
                     {menuIsWeightBased
                       ? [

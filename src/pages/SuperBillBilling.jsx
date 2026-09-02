@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import SuperBillCartSummary from './SuperBillCartSummary';
 import WebBarcodeScannerModal from '../components/WebBarcodeScannerModal';
+import { apiFetch } from '../utils/api';
 
 // Success beep — Web Audio API
 function playSuccessBeep() {
@@ -41,12 +42,43 @@ function playNotFoundBeep() {
   } catch (_) {}
 }
 
-export default function SuperBillBilling({ user }) {
+// Immediate scan tone — short sharp blip
+function playScanTone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.frequency.setValueAtTime(1000, ctx.currentTime);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + 0.08);
+  } catch (_) {}
+}
+
+export default function SuperBillBilling({
+  user,
+  token,
+  cart,
+  setCart,
+  discountType,
+  setDiscountType,
+  discountValue,
+  setDiscountValue,
+  paymentMode,
+  setPaymentMode,
+  taxType,
+  setTaxType,
+  receiptSettings,
+  setReceiptSettings,
+  onNavigate
+}) {
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
   const [selectedCat, setSelectedCat] = useState('all');
   const [search, setSearch] = useState('');
-  const [cart, setCart] = useState([]);
   const [openCartSummary, setOpenCartSummary] = useState(false);
 
   // Barcode scanner states
@@ -57,10 +89,7 @@ export default function SuperBillBilling({ user }) {
 
   const fetchData = async () => {
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
-      const res = await fetch(`/api/superbill/items?search=${encodeURIComponent(search)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await apiFetch(`/api/superbill/items?search=${encodeURIComponent(search)}`);
       const data = await res.json();
       if (res.ok) {
         setItems(data.items || []);
@@ -86,6 +115,9 @@ export default function SuperBillBilling({ user }) {
   const handleBarcodeScan = (code) => {
     if (!code) return;
 
+    // Play immediate scan beep on detection
+    playScanTone();
+
     const clean = code.trim().toLowerCase();
     const matched = items.find(
       (p) => (p.barcode || '').toLowerCase() === clean ||
@@ -93,7 +125,7 @@ export default function SuperBillBilling({ user }) {
     );
 
     if (matched) {
-      playSuccessBeep();
+      playSuccessBeep(); // Separate success confirmation tone
       handleAddToCart(matched);
       setLastScanned({ code, status: 'found', item: matched, ts: Date.now() });
       if (lastScannedTimer) clearTimeout(lastScannedTimer);
@@ -109,35 +141,70 @@ export default function SuperBillBilling({ user }) {
   };
 
   const handleAddToCart = (item) => {
-    setCart((prev) => {
-      const existingIdx = prev.findIndex((i) => i.id === item.id);
-      if (existingIdx !== -1) {
-        const updated = [...prev];
-        updated[existingIdx].quantity = (updated[existingIdx].quantity || 1) + 1;
+    const price = parseFloat(item.price || item.selling_price || 0);
+    setCart((prevCart) => {
+      const existingIdx = prevCart.findIndex(
+        (i) => i.product_id === item.id && !i.is_weight_based
+      );
+
+      if (existingIdx > -1) {
+        const updated = [...prevCart];
+        const cartItem = updated[existingIdx];
+        const newQty = (cartItem.quantity || 1) + 1;
+        updated[existingIdx] = {
+          ...cartItem,
+          quantity: newQty,
+          total_price: (newQty * price).toFixed(2)
+        };
         return updated;
+      } else {
+        return [
+          ...prevCart,
+          {
+            product_id: item.id,
+            name: item.name,
+            price: price,
+            unit_price: price,
+            quantity: 1,
+            unit: item.base_unit || item.unit || 'pcs',
+            is_weight_based: false,
+            total_price: price.toFixed(2),
+            gst_rate: parseFloat(item.gst_rate !== undefined && item.gst_rate !== null ? item.gst_rate : 5),
+            notes: ''
+          }
+        ];
       }
-      return [...prev, { ...item, quantity: 1 }];
     });
   };
 
   const handleRemoveOneFromCart = (item) => {
-    setCart((prev) => {
-      const existingIdx = prev.findIndex((i) => i.id === item.id);
-      if (existingIdx !== -1) {
-        const updated = [...prev];
-        if (updated[existingIdx].quantity > 1) {
-          updated[existingIdx].quantity -= 1;
+    const price = parseFloat(item.price || item.selling_price || 0);
+    setCart((prevCart) => {
+      const existingIdx = prevCart.findIndex(
+        (i) => i.product_id === item.id && !i.is_weight_based
+      );
+
+      if (existingIdx > -1) {
+        const updated = [...prevCart];
+        const cartItem = updated[existingIdx];
+        if (cartItem.quantity > 1) {
+          const newQty = cartItem.quantity - 1;
+          updated[existingIdx] = {
+            ...cartItem,
+            quantity: newQty,
+            total_price: (newQty * price).toFixed(2)
+          };
           return updated;
         } else {
-          return updated.filter((i) => i.id !== item.id);
+          return updated.filter((_, i) => i !== existingIdx);
         }
       }
-      return prev;
+      return prevCart;
     });
   };
 
   const getItemCartQty = (itemId) => {
-    const found = cart.find((i) => i.id === itemId);
+    const found = cart.find((i) => i.product_id === itemId);
     return found ? found.quantity : 0;
   };
 
@@ -153,6 +220,75 @@ export default function SuperBillBilling({ user }) {
   return (
     <Box sx={{ pb: 12, pt: 2, px: 2, minHeight: '100vh', bgcolor: '#f8fafc' }}>
       <Container maxWidth="lg">
+
+        {/* Top Action Bar */}
+        <Paper
+          elevation={0}
+          sx={{
+            p: 2,
+            mb: 2.5,
+            borderRadius: 3,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            bgcolor: '#ffffff',
+            border: '1px solid #e2e8f0',
+            flexWrap: 'wrap',
+            gap: 2
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="h5" sx={{ fontWeight: 900, color: 'primary.main', display: 'flex', alignItems: 'center', gap: 1 }}>
+              ⚡ SuperBill POS
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={() => setOpenCartSummary(true)}
+              sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2, px: 2.5 }}
+            >
+              🛒 Billing ({totalCartCount})
+            </Button>
+            <Button
+              variant="outlined"
+              color="primary"
+              onClick={() => onNavigate('superbill_items')}
+              sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+            >
+              📦 Inventory Items
+            </Button>
+            <Button
+              variant="outlined"
+              color="error"
+              onClick={() => setCart([])}
+              sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+              disabled={cart.length === 0}
+            >
+              🧹 Clear
+            </Button>
+            <Button
+              variant="outlined"
+              color="inherit"
+              onClick={() => onNavigate('pos')}
+              sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+            >
+              ✕ Close
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              onClick={() => {
+                setCart([]);
+                onNavigate('pos');
+              }}
+              sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+            >
+              🚪 Exit
+            </Button>
+          </Box>
+        </Paper>
 
         {/* Last Scan Status Banner */}
         {lastScanned && (
@@ -250,15 +386,21 @@ export default function SuperBillBilling({ user }) {
           {filteredItems.map((item) => {
             const qty = getItemCartQty(item.id);
             return (
-              <Grid item xs={12} sm={6} md={4} key={item.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={item.id}>
                 <Card sx={{ borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
                   <Box sx={{ display: 'flex', p: 1.5, gap: 1.5 }}>
-                    <CardMedia
-                      component="img"
-                      sx={{ width: 70, height: 70, borderRadius: 2, objectFit: 'cover', bgcolor: '#f1f5f9' }}
-                      image={item.image_url || 'https://via.placeholder.com/70?text=Item'}
-                      alt={item.name}
-                    />
+                    {item.image_url ? (
+                      <CardMedia
+                        component="img"
+                        sx={{ width: 70, height: 70, borderRadius: 2, objectFit: 'cover', bgcolor: '#f1f5f9' }}
+                        image={item.image_url}
+                        alt={item.name}
+                      />
+                    ) : (
+                      <Box sx={{ width: 70, height: 70, borderRadius: 2, bgcolor: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <Typography sx={{ fontSize: 28 }}>📦</Typography>
+                      </Box>
+                    )}
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                       <Typography variant="subtitle1" sx={{ fontWeight: 800, truncate: true }}>
                         {item.name}
@@ -356,6 +498,18 @@ export default function SuperBillBilling({ user }) {
           cart={cart}
           onUpdateCart={setCart}
           onClose={() => setOpenCartSummary(false)}
+          user={user}
+          token={token}
+          discountType={discountType}
+          setDiscountType={setDiscountType}
+          discountValue={discountValue}
+          setDiscountValue={setDiscountValue}
+          paymentMode={paymentMode}
+          setPaymentMode={setPaymentMode}
+          taxType={taxType}
+          setTaxType={setTaxType}
+          receiptSettings={receiptSettings}
+          setReceiptSettings={setReceiptSettings}
         />
       </Container>
     </Box>

@@ -12,8 +12,31 @@ import {
   createOrder,
   resolveImageUrl
 } from '../utils/api';
+import {
+  generateLocalHtmlReceipt,
+  generateLocalEscPosReceipt,
+  generateLocalHtmlKot,
+  generateLocalEscPosKot,
+  safeUtf8ToBase64
+} from '../utils/localReceiptGenerator';
 
-export default function POS({ user: propUser, token: propToken }) {
+export default function POS({
+  user: propUser,
+  token: propToken,
+  cart: sharedCart,
+  setCart: sharedSetCart,
+  discountType: sharedDiscountType,
+  setDiscountType: sharedSetDiscountType,
+  discountValue: sharedDiscountValue,
+  setDiscountValue: sharedSetDiscountValue,
+  paymentMode: sharedPaymentMode,
+  setPaymentMode: sharedSetPaymentMode,
+  taxType: sharedTaxType,
+  setTaxType: sharedSetTaxType,
+  receiptSettings: sharedReceiptSettings,
+  setReceiptSettings: sharedSetReceiptSettings,
+  onNavigate
+}) {
   const { t, language, supportedLanguages } = useLanguage();
 
   // Load User & Token from Props or Isolated ARISO_RETAIL Local Storage
@@ -106,10 +129,19 @@ export default function POS({ user: propUser, token: propToken }) {
   const [selectedProductIndex, setSelectedProductIndex] = useState(0);
 
   // Cart & Order Options
-  const [cart, setCart] = useState([]);
+  const [localCart, localSetCart] = useState([]);
+  const cart = sharedCart !== undefined ? sharedCart : localCart;
+  const setCart = sharedSetCart !== undefined ? sharedSetCart : localSetCart;
+
   const [selectedCartIndex, setSelectedCartIndex] = useState(0);
-  const [discountType, setDiscountType] = useState('percentage');
-  const [discountValue, setDiscountValue] = useState('0');
+
+  const [localDiscountType, localSetDiscountType] = useState('percentage');
+  const discountType = sharedDiscountType !== undefined ? sharedDiscountType : localDiscountType;
+  const setDiscountType = sharedSetDiscountType !== undefined ? sharedSetDiscountType : localSetDiscountType;
+
+  const [localDiscountValue, localSetDiscountValue] = useState('0');
+  const discountValue = sharedDiscountValue !== undefined ? sharedDiscountValue : localDiscountValue;
+  const setDiscountValue = sharedSetDiscountValue !== undefined ? sharedSetDiscountValue : localSetDiscountValue;
 
   // Customer Details
   const [customerName, setCustomerName] = useState('');
@@ -139,13 +171,60 @@ export default function POS({ user: propUser, token: propToken }) {
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState(false);
 
+  // AudioContext sound helpers for barcode feedback
+  const audioCtxRef = useRef(null);
+  const getAudioCtx = () => {
+    if (!audioCtxRef.current) {
+      try { audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+    return audioCtxRef.current;
+  };
+  const playBeep = (freq = 880, duration = 80, type = 'sine', gain = 0.4, delay = 0) => {
+    try {
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      osc.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+      gainNode.gain.setValueAtTime(0, ctx.currentTime + delay);
+      gainNode.gain.linearRampToValueAtTime(gain, ctx.currentTime + delay + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration / 1000);
+      osc.start(ctx.currentTime + delay);
+      osc.stop(ctx.currentTime + delay + duration / 1000 + 0.05);
+    } catch (e) {}
+  };
+  const playBarcodeSuccess = () => { playBeep(1200, 60, 'square', 0.3, 0); playBeep(1600, 100, 'sine', 0.3, 0.07); };
+  const playBarcodeError = () => { playBeep(300, 120, 'sawtooth', 0.3, 0); playBeep(220, 120, 'sawtooth', 0.3, 0.14); };
+  const [checkoutSuccessOpen, setCheckoutSuccessOpen] = useState(false);
+  const [checkoutSuccessInfo, setCheckoutSuccessInfo] = useState({ invoiceNo: '', orderId: '', total: 0 });
+
+  // POS Quick Edit States
+  const [quickEditProduct, setQuickEditProduct] = useState(null);
+  const [quickEditPrice, setQuickEditPrice] = useState('');
+  const [quickEditStock, setQuickEditStock] = useState('');
+  const [quickEditError, setQuickEditError] = useState('');
+  const [savingQuickEdit, setSavingQuickEdit] = useState(false);
+
   // Receipt Settings & Place of Supply (Tax Type)
-  const [receiptSettings, setReceiptSettings] = useState(null);
-  const [taxType, setTaxType] = useState('intra');
+  const [localReceiptSettings, localSetReceiptSettings] = useState(null);
+  const receiptSettings = sharedReceiptSettings !== undefined ? sharedReceiptSettings : localReceiptSettings;
+  const setReceiptSettings = sharedSetReceiptSettings !== undefined ? sharedSetReceiptSettings : localSetReceiptSettings;
+
+  const [localTaxType, localSetTaxType] = useState('intra');
+  const taxType = sharedTaxType !== undefined ? sharedTaxType : localTaxType;
+  const setTaxType = sharedSetTaxType !== undefined ? sharedSetTaxType : localSetTaxType;
 
   // Payment State
-  const [paymentMode, setPaymentMode] = useState('cash');
+  const [localPaymentMode, localSetPaymentMode] = useState('cash');
+  const paymentMode = sharedPaymentMode !== undefined ? sharedPaymentMode : localPaymentMode;
+  const setPaymentMode = sharedSetPaymentMode !== undefined ? sharedSetPaymentMode : localSetPaymentMode;
+
   const [cashReceived, setCashReceived] = useState('');
+  const [printersList, setPrintersList] = useState([]);
+  const [printStatusToast, setPrintStatusToast] = useState(null);
 
   // Search input DOM ref for automatic focus management
   const searchInputRef = useRef(null);
@@ -153,6 +232,17 @@ export default function POS({ user: propUser, token: propToken }) {
   useEffect(() => {
     loadData();
     autoFocusSearch();
+
+    if (typeof window !== 'undefined' && window.electron?.onGatewayJobStatus) {
+      window.electron.onGatewayJobStatus((data) => {
+        if (data.status === 'SUCCESS') {
+          setPrintStatusToast({ type: 'success', message: `🖨️ Gateway: ${data.title} printed successfully!` });
+          setTimeout(() => setPrintStatusToast(null), 4000);
+        } else if (data.status === 'FAILED') {
+          setPrintStatusToast({ type: 'error', message: `⚠️ Gateway Print Failed: ${data.title} (${data.error || 'Timeout'})` });
+        }
+      });
+    }
   }, [token]);
 
   const autoFocusSearch = () => {
@@ -178,6 +268,27 @@ export default function POS({ user: propUser, token: propToken }) {
       setSelectedCategory(null);
       if (settingsRes.ok) {
         setReceiptSettings(await settingsRes.json());
+      }
+
+      // Load printers list for routing
+      try {
+        const prnRes = await apiFetch('/api/printers');
+        if (prnRes.ok) {
+          const prnData = await prnRes.json();
+          setPrintersList(Array.isArray(prnData) ? prnData : []);
+        } else {
+          const { db } = await import('../utils/offlineDb');
+          if (db.printers) {
+            const cachedPrn = await db.printers.toArray();
+            setPrintersList(cachedPrn);
+          }
+        }
+      } catch (pe) {
+        const { db } = await import('../utils/offlineDb');
+        if (db.printers) {
+          const cachedPrn = await db.printers.toArray();
+          setPrintersList(cachedPrn);
+        }
       }
     } catch (err) {
       console.warn('[Desktop POS] Error loading data:', err.message);
@@ -206,10 +317,18 @@ export default function POS({ user: propUser, token: propToken }) {
     return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [menuItems, selectedCategory, queryLower]);
 
+  const isProductWeightBased = (p) => {
+    if (!p) return false;
+    if (p.is_weight_based === 1 || p.is_weight_based === true || p.is_weight_based === '1') return true;
+    if (p.is_weight_based === 0 || p.is_weight_based === false || p.is_weight_based === '0') return false;
+    const u = (p.base_unit || p.unit || '').toLowerCase();
+    return ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(u);
+  };
+
   // Product Selection & Cart Actions
   const handleSelectProduct = (product) => {
     if (!product) return;
-    if (product.is_weight_based) {
+    if (isProductWeightBased(product)) {
       setSelectedWeightProduct(product);
       setEditingCartIndex(null);
       setWeightModalVisible(true);
@@ -331,6 +450,67 @@ export default function POS({ user: propUser, token: propToken }) {
     }
   };
 
+  // Global USB Barcode Scanner Keyboard Emulation Interceptor
+  useEffect(() => {
+    let buffer = '';
+    let lastKeyTime = Date.now();
+    let keyTimes = [];
+
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      
+      const currentTime = Date.now();
+      const diff = currentTime - lastKeyTime;
+      lastKeyTime = currentTime;
+
+      keyTimes.push(diff);
+      if (keyTimes.length > 4) {
+        keyTimes.shift();
+      }
+
+      const avgSpeed = keyTimes.reduce((a, b) => a + b, 0) / keyTimes.length;
+      const isFast = avgSpeed < 35;
+
+      if (e.key === 'Enter') {
+        if (buffer.length >= 3 && isFast) {
+          e.preventDefault();
+          e.stopPropagation();
+
+          const scannedCode = buffer.trim().toLowerCase();
+          console.log('[Global Scanner] Scanned barcode:', scannedCode);
+
+          const exactMatch = menuItems.find(
+            (p) => (p.barcode || '').toLowerCase() === scannedCode || 
+                   (p.sku || '').toLowerCase() === scannedCode
+          );
+
+          if (exactMatch) {
+            handleSelectProduct(exactMatch);
+            playBarcodeSuccess();
+          } else {
+            playBarcodeError();
+            alert(`Product not found for barcode: "${buffer}"`);
+          }
+        }
+        buffer = '';
+        keyTimes = [];
+      } else if (e.key.length === 1) {
+        if (isFast || (buffer.length > 0 && diff < 35)) {
+          e.preventDefault();
+          e.stopPropagation();
+          buffer += e.key;
+        } else {
+          buffer = '';
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [menuItems, handleSelectProduct]);
+
   // USB Barcode Scanner Enter Submission
   const handleSearchSubmit = (e) => {
     e.preventDefault();
@@ -356,9 +536,96 @@ export default function POS({ user: propUser, token: propToken }) {
     );
     if (matched) {
       handleSelectProduct(matched);
+      playBarcodeSuccess();
       return { success: true, message: `Added ${matched.name}` };
     }
+    playBarcodeError();
     return { success: false, message: `No item found for barcode "${scannedCode}"` };
+  };
+
+  // POS Quick Edit Handlers
+  const longPressTimer = useRef(null);
+  const isLongPressedRef = useRef(false);
+
+  const openQuickEdit = (product) => {
+    setQuickEditProduct(product);
+    setQuickEditPrice(product.price !== undefined ? product.price.toString() : '');
+    setQuickEditStock(product.current_stock !== undefined ? product.current_stock.toString() : '0');
+    setQuickEditError('');
+  };
+
+  const handleTouchStart = (product) => {
+    isLongPressedRef.current = false;
+    if (longPressTimer.current) clearTimeout(longPressTimer.current);
+    longPressTimer.current = setTimeout(() => {
+      isLongPressedRef.current = true;
+      openQuickEdit(product);
+    }, 600);
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handleProductClick = (product, e) => {
+    if (isLongPressedRef.current) {
+      isLongPressedRef.current = false;
+      return;
+    }
+    handleSelectProduct(product);
+  };
+
+  const handleProductContextMenu = (product, e) => {
+    e.preventDefault();
+    openQuickEdit(product);
+  };
+
+  const handleSaveQuickEdit = async () => {
+    const priceVal = parseFloat(quickEditPrice);
+    const stockVal = parseFloat(quickEditStock);
+
+    if (isNaN(priceVal) || priceVal < 0) {
+      setQuickEditError('Price must be greater than or equal to 0.');
+      return;
+    }
+    if (isNaN(stockVal) || stockVal < 0) {
+      setQuickEditError('Stock quantity must be greater than or equal to 0.');
+      return;
+    }
+
+    setSavingQuickEdit(true);
+    setQuickEditError('');
+    try {
+      const res = await apiFetch(`/api/menu/${quickEditProduct.id}`, {
+        method: 'PUT',
+        body: {
+          price: priceVal,
+          current_stock: stockVal
+        }
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update item.');
+
+      // Update locally immediately
+      setMenuItems((prev) =>
+        prev.map((item) =>
+          item.id === quickEditProduct.id
+            ? { ...item, price: priceVal, current_stock: stockVal }
+            : item
+        )
+      );
+
+      alert(`🎉 Product "${quickEditProduct.name}" updated successfully.`);
+      setQuickEditProduct(null);
+    } catch (err) {
+      setQuickEditError(err.message);
+    } finally {
+      setSavingQuickEdit(false);
+    }
   };
 
   // Calculations
@@ -411,8 +678,8 @@ export default function POS({ user: propUser, token: propToken }) {
   const changeToReturn = Math.max(0, numericCashReceived - grandTotal);
   const totalCartCount = cart.reduce((acc, item) => acc + (item.is_weight_based ? 1 : item.quantity), 0);
 
-  // Complete Sale & Print LAN Thermal Receipt
-  const handleCompleteSale = async (overridePaymentMode = null) => {
+  // Complete Sale & Execute Configured Print Stage Workflow
+  const handleCompleteSale = async (overridePaymentMode = null, overrideWorkflow = null) => {
     if (submittingSale) return; // Prevent duplicate clicks/re-entrancy
     if (cart.length === 0) {
       alert('Cart is empty. Add products before completing sale.');
@@ -458,7 +725,7 @@ export default function POS({ user: propUser, token: propToken }) {
       tax_amount: taxAmount.toFixed(2),
       total_amount: grandTotal.toFixed(2),
       payment_mode: effectivePaymentMode,
-      cashier_name: user.name || 'Desktop Cashier',
+      cashier_name: user?.name || 'Desktop Cashier',
       customer_name: customerName || 'Walk-in Customer',
       customer_phone: customerPhone,
       customer_address: customerAddress,
@@ -466,14 +733,23 @@ export default function POS({ user: propUser, token: propToken }) {
     };
 
     try {
-      // Step 1: Save Sale Order to Database & Enqueue Receipt Print Job
+      // Step 1: Save Sale Order to Database
       const orderRes = await createOrder(token, orderPayload);
       const invoiceNo = orderRes?.unique_order_number || orderRes?.orderNumber || orderRes?.id || `RET-${Date.now().toString().slice(-6)}`;
 
-      // Step 2: Inform Cashier with Success Toast/Alert & Clear Cart for Next Sale
-      alert(`🎉 Payment completed successfully!\nBill #${invoiceNo} | Total: ₹${grandTotal.toFixed(2)}`);
+      // Step 2: Determine and Execute Print Stage Workflow
+      const workflowAction = overrideWorkflow || receiptSettings?.print_stage2_mode || 'print_receipt_only';
+      await executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartWithTax, workflowAction);
 
-      // Step 3: Clear Cart & Reset UI for next sale
+      // Step 3: Show success modal
+      setCheckoutSuccessInfo({
+        invoiceNo,
+        orderId: orderRes?.id || orderRes?.orderId || '',
+        total: grandTotal
+      });
+      setCheckoutSuccessOpen(true);
+
+      // Step 4: Clear Cart & Reset UI for next sale
       setCart([]);
       setDiscountValue('0');
       setCustomerName('');
@@ -482,11 +758,126 @@ export default function POS({ user: propUser, token: propToken }) {
       setCheckoutVisible(false);
       setCashReceived('');
       setActiveMobileTab('catalog');
-      autoFocusSearch();
     } catch (err) {
       alert('Error completing sale: ' + err.message);
     } finally {
       setSubmittingSale(false);
+    }
+  };
+
+  const executePrintWorkflow = async (invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction) => {
+    if (workflowAction === 'save_only') {
+      return;
+    }
+
+    const orderData = {
+      unique_order_number: invoiceNo,
+      subtotal: parseFloat(orderPayload.subtotal || 0).toFixed(2),
+      discount_amount: parseFloat(orderPayload.discount_amount || 0).toFixed(2),
+      tax_amount: parseFloat(orderPayload.tax_amount || 0).toFixed(2),
+      total_amount: parseFloat(orderPayload.total_amount || 0).toFixed(2),
+      payment_mode: effectivePaymentMode,
+      cashier_name: orderPayload.cashier_name,
+      customer_name: orderPayload.customer_name,
+      created_at: new Date().toISOString(),
+      tax_type: taxType
+    };
+
+    // Find default receipt & KOT printers
+    const defaultReceiptPrn = printersList.find(p => p.is_default_receipt === 1 || p.is_default_receipt === true) ||
+                              printersList.find(p => p.role === 'receipt' || p.role === 'both') ||
+                              printersList[0] || null;
+
+    const defaultKotPrn = printersList.find(p => p.is_default_kot === 1 || p.is_default_kot === true) ||
+                          printersList.find(p => p.role === 'kitchen' || p.role === 'both') ||
+                          defaultReceiptPrn || null;
+
+    const shouldPrintReceipt = workflowAction === 'print_receipt_only' || workflowAction === 'print_kot_receipt';
+    const shouldPrintKot = workflowAction === 'print_kot_only' || workflowAction === 'print_kot_receipt';
+
+    setPrintStatusToast({ type: 'printing', message: '🖨️ Printing thermal receipt...' });
+
+    let printErrors = [];
+
+    // 1. Dispatch Receipt
+    if (shouldPrintReceipt) {
+      try {
+        if (window.electron) {
+          const isLan = (defaultReceiptPrn?.type === 'lan' || defaultReceiptPrn?.type === 'network') && !!defaultReceiptPrn?.ip_address;
+          if (isLan) {
+            try {
+              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+              await window.electron.printLanRaw(defaultReceiptPrn.ip_address, defaultReceiptPrn.port || 9100, base64Payload);
+            } catch (lanErr) {
+              console.warn('[POS Receipt LAN Failover] LAN socket failed, attempting system spooler silent fallback...', lanErr.message);
+              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+              const targetPrinterName = defaultReceiptPrn?.name || receiptSettings?.default_printer_name || '';
+              await window.electron.printSystemSilent(htmlReceipt, targetPrinterName);
+            }
+          } else {
+            const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+            const targetPrinterName = defaultReceiptPrn?.name || receiptSettings?.default_printer_name || '';
+            await window.electron.printSystemSilent(htmlReceipt, targetPrinterName);
+          }
+        } else {
+          // Browser Web Fallback
+          const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+          const printWin = window.open('', '_blank');
+          if (printWin) {
+            printWin.document.write(htmlReceipt);
+            printWin.document.close();
+            printWin.focus();
+            printWin.print();
+            printWin.close();
+          }
+        }
+      } catch (receiptErr) {
+        console.error('[Receipt Print Error]', receiptErr);
+        printErrors.push(`Receipt Printer (${defaultReceiptPrn?.name || defaultReceiptPrn?.ip_address || 'Default'}): ${receiptErr.message}`);
+      }
+    }
+
+    // 2. Dispatch KOT
+    if (shouldPrintKot) {
+      try {
+        if (window.electron) {
+          const isLan = (defaultKotPrn?.type === 'lan' || defaultKotPrn?.type === 'network') && !!defaultKotPrn?.ip_address;
+          if (isLan) {
+            try {
+              const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+              await window.electron.printLanRaw(defaultKotPrn.ip_address, defaultKotPrn.port || 9100, base64Payload);
+            } catch (lanKotErr) {
+              console.warn('[POS KOT LAN Failover] LAN socket failed, attempting system spooler silent fallback...', lanKotErr.message);
+              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
+              const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
+              await window.electron.printSystemSilent(htmlKot, targetPrinterName);
+            }
+          } else {
+            const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
+            const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
+            await window.electron.printSystemSilent(htmlKot, targetPrinterName);
+          }
+        }
+      } catch (kotErr) {
+        console.error('[KOT Print Error]', kotErr);
+        printErrors.push(`KOT Printer (${defaultKotPrn?.name || defaultKotPrn?.ip_address || 'Default'}): ${kotErr.message}`);
+      }
+    }
+
+    if (printErrors.length > 0) {
+      setPrintStatusToast({
+        type: 'error',
+        message: `⚠️ Printing Issue: ${printErrors.join(' | ')}`,
+        retryFn: () => executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction)
+      });
+    } else {
+      setPrintStatusToast({
+        type: 'success',
+        message: `✅ Printed successfully (${shouldPrintReceipt && shouldPrintKot ? 'Receipt + KOT' : shouldPrintReceipt ? 'Receipt' : 'KOT'})`
+      });
+      setTimeout(() => setPrintStatusToast(null), 4000);
     }
   };
 
@@ -499,6 +890,13 @@ export default function POS({ user: propUser, token: propToken }) {
     'Ctrl+F': (e) => {
       e?.preventDefault();
       autoFocusSearch();
+    },
+    'Ctrl+E': (e) => {
+      e?.preventDefault();
+      const selected = filteredProducts[selectedProductIndex];
+      if (selected) {
+        openQuickEdit(selected);
+      }
     },
     'F3': (e) => {
       e?.preventDefault();
@@ -696,6 +1094,59 @@ export default function POS({ user: propUser, token: propToken }) {
           </button>
         </div>
       </header>
+
+      {/* Floating Thermal Print Status Toast / Banner */}
+      {printStatusToast && (
+        <div style={{
+          position: 'fixed',
+          top: '70px',
+          right: '20px',
+          zIndex: 999999,
+          padding: '12px 18px',
+          borderRadius: '10px',
+          backgroundColor: printStatusToast.type === 'error' ? '#FEF2F2' : (printStatusToast.type === 'printing' ? '#EFF6FF' : '#ECFDF5'),
+          border: `1px solid ${printStatusToast.type === 'error' ? '#F87171' : (printStatusToast.type === 'printing' ? '#93C5FD' : '#6EE7B7')}`,
+          color: printStatusToast.type === 'error' ? '#991B1B' : (printStatusToast.type === 'printing' ? '#1E40AF' : '#065F46'),
+          boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          fontWeight: '700',
+          fontSize: '13px'
+        }}>
+          <span>{printStatusToast.message}</span>
+          {printStatusToast.retryFn && (
+            <button
+              onClick={printStatusToast.retryFn}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: '800',
+                cursor: 'pointer',
+                fontSize: '12px'
+              }}
+            >
+              🔄 Retry Print
+            </button>
+          )}
+          <button
+            onClick={() => setPrintStatusToast(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'inherit',
+              cursor: 'pointer',
+              fontWeight: '900',
+              padding: '0 4px'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* MAIN RESPONSIVE CONTENT AREA */}
       <div style={styles.mainLayout}>
@@ -907,7 +1358,7 @@ export default function POS({ user: propUser, token: propToken }) {
                 }}
               >
                 {filteredProducts.map((product, idx) => {
-                  const isWeight = !!product.is_weight_based;
+                  const isWeight = isProductWeightBased(product);
                   const price = parseFloat(product.price || product.selling_price || 0);
                   const isMobile = windowWidth < 600;
                   const cardPadding = isMobile
@@ -927,6 +1378,7 @@ export default function POS({ user: propUser, token: propToken }) {
                         boxShadow: isDark ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.05)',
                         position: 'relative',
                         overflow: 'hidden',
+                        cursor: 'pointer',
                         ...(product.image_url
                           ? {
                               backgroundImage: `url(${resolveImageUrl(product.image_url)})`,
@@ -937,7 +1389,10 @@ export default function POS({ user: propUser, token: propToken }) {
                               backgroundColor: colors.bgCard,
                             })
                       }}
-                      onClick={() => handleSelectProduct(product)}
+                      onTouchStart={() => handleTouchStart(product)}
+                      onTouchEnd={handleTouchEnd}
+                      onContextMenu={(e) => handleProductContextMenu(product, e)}
+                      onClick={(e) => handleProductClick(product, e)}
                     >
                       {/* Dark gradient overlay scrim for text legibility, only if image is present */}
                       {product.image_url && (
@@ -998,7 +1453,7 @@ export default function POS({ user: propUser, token: propToken }) {
                             ...styles.cardUnit,
                             color: product.image_url ? 'rgba(255,255,255,0.8)' : colors.textSecondary
                           }}>
-                            per {(product.is_weight_based || product.unitType === 'weight' || product.unit === 'kg') ? 'kg' : (product.base_unit || 'pcs')}
+                            per {isWeight ? (product.base_unit || product.unit || 'kg') : (product.base_unit || product.unit || 'pcs')}
                           </span>
                         </div>
                       </div>
@@ -1373,6 +1828,193 @@ export default function POS({ user: propUser, token: propToken }) {
         title="📷 POS Camera Barcode Scanner"
         subtitle="Point camera at item barcode to continuously add items to cart"
       />
+
+      {/* CHECKOUT SUCCESS MODAL */}
+      {checkoutSuccessOpen && (
+        <div style={styles.modalOverlay}>
+          <div
+            style={{
+              ...styles.checkoutModal,
+              backgroundColor: colors.bgCard,
+              borderColor: colors.borderColor,
+              maxWidth: '450px',
+              padding: '24px',
+              textAlign: 'center'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎉</div>
+            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '900', color: colors.textPrimary }}>
+              Sale Completed Successfully!
+            </h2>
+            <p style={{ color: colors.textSecondary, marginTop: '8px', marginBottom: '24px' }}>
+              Bill <strong>#{checkoutSuccessInfo.invoiceNo}</strong> | Total: <strong>₹{parseFloat(checkoutSuccessInfo.total).toFixed(2)}</strong>
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {checkoutSuccessInfo.orderId && (
+                <button
+                  style={{
+                    padding: '12px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    backgroundColor: colors.accentOrange,
+                    color: '#ffffff',
+                    fontWeight: '800',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                  onClick={() => {
+                    window.open(`/api/orders/${checkoutSuccessInfo.orderId}/pdf?token=${token}`, '_blank');
+                  }}
+                >
+                  📄 Download PDF Receipt
+                </button>
+              )}
+
+              <button
+                style={{
+                  padding: '12px',
+                  borderRadius: '8px',
+                  border: '1px solid',
+                  borderColor: colors.borderColor,
+                  backgroundColor: 'transparent',
+                  color: colors.textPrimary,
+                  fontWeight: '800',
+                  cursor: 'pointer',
+                  fontSize: '14px'
+                }}
+                onClick={() => {
+                  setCheckoutSuccessOpen(false);
+                  autoFocusSearch();
+                }}
+              >
+                Close & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK EDIT MODAL */}
+      {quickEditProduct && (
+        <div style={styles.modalOverlay} onClick={() => setQuickEditProduct(null)}>
+          <div
+            style={{
+              ...styles.checkoutModal,
+              backgroundColor: colors.bgCard,
+              borderColor: colors.borderColor,
+              maxWidth: '450px',
+              padding: '24px'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={styles.modalHeader}>
+              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: colors.textPrimary }}>
+                📝 Quick Edit Product
+              </h2>
+              <button style={styles.closeBtn} onClick={() => setQuickEditProduct(null)}>✕</button>
+            </div>
+
+            <div style={{ margin: '16px 0 20px 0' }}>
+              <span style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase' }}>
+                Item Name
+              </span>
+              <div style={{ fontSize: '18px', fontWeight: '900', color: colors.textPrimary, marginTop: '4px' }}>
+                {quickEditProduct.name}
+              </div>
+            </div>
+
+            {quickEditError && (
+              <div style={{ color: '#EF4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', padding: '10px', borderRadius: '8px', marginBottom: '15px', fontWeight: '700', fontSize: '13px' }}>
+                ⚠️ {quickEditError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginBottom: '25px' }}>
+              <div>
+                <label style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, display: 'block', marginBottom: '6px', textTransform: 'uppercase' }}>
+                  Price (₹)
+                </label>
+                <input
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    backgroundColor: colors.bgInput,
+                    color: colors.textPrimary,
+                    border: `1px solid ${colors.borderColor}`,
+                    fontSize: '16px',
+                    fontWeight: '700',
+                    outline: 'none'
+                  }}
+                  type="number"
+                  step="0.01"
+                  value={quickEditPrice}
+                  onChange={(e) => setQuickEditPrice(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, display: 'block', marginBottom: '6px', textTransform: 'uppercase' }}>
+                  Current Stock Quantity ({quickEditProduct.unit || quickEditProduct.base_unit || 'pcs'})
+                </label>
+                <input
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    borderRadius: '8px',
+                    backgroundColor: colors.bgInput,
+                    color: colors.textPrimary,
+                    border: `1px solid ${colors.borderColor}`,
+                    fontSize: '16px',
+                    fontWeight: '700',
+                    outline: 'none'
+                  }}
+                  type="number"
+                  value={quickEditStock}
+                  onChange={(e) => setQuickEditStock(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: '8px',
+                  backgroundColor: colors.bgInput,
+                  color: colors.textPrimary,
+                  border: `1px solid ${colors.borderColor}`,
+                  fontWeight: '800',
+                  cursor: 'pointer'
+                }}
+                onClick={() => setQuickEditProduct(null)}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  flex: 2,
+                  padding: '12px',
+                  borderRadius: '8px',
+                  backgroundColor: colors.accentOrange,
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontWeight: '900',
+                  cursor: 'pointer',
+                  opacity: savingQuickEdit ? 0.7 : 1
+                }}
+                disabled={savingQuickEdit}
+                onClick={handleSaveQuickEdit}
+              >
+                {savingQuickEdit ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {checkoutVisible && (
         <div style={styles.modalOverlay} onClick={() => setCheckoutVisible(false)}>

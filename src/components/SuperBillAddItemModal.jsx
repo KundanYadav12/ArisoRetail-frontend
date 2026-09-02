@@ -4,6 +4,7 @@ import {
   Button, TextField, Typography, Box, ToggleButtonGroup, ToggleButton,
   MenuItem, Select, InputLabel, FormControl, InputAdornment, IconButton
 } from '@mui/material';
+import { apiFetch } from '../utils/api';
 
 import WebBarcodeScannerModal from './WebBarcodeScannerModal';
 
@@ -35,10 +36,8 @@ export default function SuperBillAddItemModal({ open, categories = [], onClose, 
 
   const handleGenerateBarcode = async () => {
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
-      const res = await fetch('/api/superbill/generate-barcode', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+      const res = await apiFetch('/api/superbill/generate-barcode', {
+        method: 'POST'
       });
       const data = await res.json();
       if (data.barcode) {
@@ -66,7 +65,6 @@ export default function SuperBillAddItemModal({ open, categories = [], onClose, 
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
       const formData = new FormData();
       formData.append('name', name.trim());
       formData.append('item_type', itemType);
@@ -80,9 +78,8 @@ export default function SuperBillAddItemModal({ open, categories = [], onClose, 
         formData.append('image', imageFile);
       }
 
-      const res = await fetch('/api/superbill/items', {
+      const res = await apiFetch('/api/superbill/items', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
         body: formData
       });
 

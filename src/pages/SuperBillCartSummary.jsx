@@ -1,27 +1,118 @@
 import React, { useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
-  Button, TextField, Typography, Box, Chip, Paper, IconButton, FormControlLabel, Checkbox
+  Button, TextField, Typography, Box, Chip, Paper, IconButton, FormControlLabel, Checkbox,
+  Grid, Select, MenuItem, InputLabel, FormControl
 } from '@mui/material';
+import { apiFetch, createOrder } from '../utils/api';
 
-export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, onClose }) {
-  const [discountPct, setDiscountPct] = useState(0);
-  const [customDiscount, setCustomDiscount] = useState('');
-  const [paymentMode, setPaymentMode] = useState('cash'); // cash | upi
-  const [markFullyPaid, setMarkFullyPaid] = useState(true);
-  const [notes, setNotes] = useState('');
+export default function SuperBillCartSummary({
+  open,
+  cart = [],
+  onUpdateCart,
+  onClose,
+  user,
+  token,
+  discountType,
+  setDiscountType,
+  discountValue,
+  setDiscountValue,
+  paymentMode,
+  setPaymentMode,
+  taxType,
+  setTaxType,
+  receiptSettings,
+  setReceiptSettings
+}) {
   const [loading, setLoading] = useState(false);
   const [successBill, setSuccessBill] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [selectedIdx, setSelectedIdx] = useState(null);
 
-  const subtotal = cart.reduce((sum, item) => sum + (parseFloat(item.price || 0) * (item.quantity || 1)), 0);
-  const discountAmount = (subtotal * discountPct) / 100;
-  const totalAmount = Math.max(0, subtotal - discountAmount);
+  // 1. Math matching POS.jsx exactly
+  const subtotal = cart.reduce((acc, item) => acc + parseFloat(item.total_price || 0), 0);
+  const numDiscVal = parseFloat(discountValue || 0);
 
-  const handleApplyCustomDiscount = () => {
-    const val = parseFloat(customDiscount);
-    if (!isNaN(val) && val >= 0 && val <= 100) {
-      setDiscountPct(val);
+  let discountAmount = 0;
+  if (discountType === 'percentage') {
+    discountAmount = subtotal * (Math.min(numDiscVal, 100) / 100);
+  } else {
+    discountAmount = Math.min(numDiscVal, subtotal);
+  }
+
+  const isGstEnabled = receiptSettings ? (receiptSettings.gst_enabled === 1 || receiptSettings.gst_enabled === true || receiptSettings.gst_enabled === 'true') : true;
+  const gstMode = receiptSettings?.gst_mode || 'excluded';
+
+  let calculatedTax = 0;
+  const cartWithTax = cart.map(item => {
+    const itemTotalPrice = parseFloat(item.total_price || 0);
+    const itemGstRate = parseFloat(item.gst_rate !== undefined ? item.gst_rate : 5);
+
+    // Proportional discount distribution
+    const itemDiscountShare = subtotal > 0 ? (itemTotalPrice / subtotal) * discountAmount : 0;
+    const itemTaxableAmount = Math.max(0, itemTotalPrice - itemDiscountShare);
+
+    let itemTaxAmount = 0;
+    if (isGstEnabled && itemGstRate > 0) {
+      if (gstMode === 'included') {
+        itemTaxAmount = itemTaxableAmount - (itemTaxableAmount / (1 + (itemGstRate / 100)));
+      } else {
+        itemTaxAmount = itemTaxableAmount * (itemGstRate / 100);
+      }
     }
+
+    calculatedTax += itemTaxAmount;
+
+    return {
+      ...item,
+      discount_amount: itemDiscountShare,
+      tax_amount: itemTaxAmount
+    };
+  });
+
+  const taxAmount = parseFloat(calculatedTax.toFixed(2));
+  const taxableAmount = Math.max(0, subtotal - discountAmount);
+  const grandTotal = gstMode === 'included'
+    ? taxableAmount
+    : Math.max(0, taxableAmount + taxAmount);
+
+  // Qty Increment/Decrement
+  const handleIncrement = (idx) => {
+    onUpdateCart((prev) => {
+      const updated = [...prev];
+      const newQty = (updated[idx].quantity || 1) + 1;
+      updated[idx] = {
+        ...updated[idx],
+        quantity: newQty,
+        total_price: (newQty * parseFloat(updated[idx].price)).toFixed(2)
+      };
+      return updated;
+    });
+  };
+
+  const handleDecrement = (idx) => {
+    onUpdateCart((prev) => {
+      const updated = [...prev];
+      const newQty = (updated[idx].quantity || 1) - 1;
+      if (newQty <= 0) {
+        return updated.filter((_, i) => i !== idx);
+      }
+      updated[idx] = {
+        ...updated[idx],
+        quantity: newQty,
+        total_price: (newQty * parseFloat(updated[idx].price)).toFixed(2)
+      };
+      return updated;
+    });
+  };
+
+  const handlePresetDiscountClick = (pct) => {
+    setDiscountType('percentage');
+    setDiscountValue(pct.toString());
+  };
+
+  const handleCustomDiscountChange = (val) => {
+    setDiscountValue(val);
   };
 
   const handleCheckout = async () => {
@@ -29,33 +120,62 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
-      const res = await fetch('/api/superbill/bill', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          items: cart,
-          discount_percentage: discountPct,
-          payment_mode: paymentMode,
-          mark_fully_paid: markFullyPaid,
-          notes
-        })
+      const activeToken = token || localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('ariso_retail_token');
+
+      // Construct identical orderPayload for POS checkout compatibility
+      const orderPayload = {
+        items: cartWithTax.map((i) => ({
+          menu_item_id: i.product_id,
+          name: i.name,
+          price: i.price,
+          quantity: i.quantity || 1,
+          item_weight: null,
+          weight_unit: i.unit || 'pcs',
+          is_weight_based: 0,
+          total_price: i.total_price,
+          gst_rate: i.gst_rate,
+          tax_amount: parseFloat(i.tax_amount || 0).toFixed(2),
+          discount_amount: parseFloat(i.discount_amount || 0).toFixed(2),
+          notes: i.notes || ''
+        })),
+        subtotal: subtotal.toFixed(2),
+        discount_amount: discountAmount.toFixed(2),
+        tax_amount: taxAmount.toFixed(2),
+        total_amount: grandTotal.toFixed(2),
+        payment_mode: paymentMode,
+        cashier_name: user?.name || 'SuperBill Cashier',
+        customer_name: 'Walk-in Customer',
+        customer_phone: '',
+        customer_address: '',
+        tax_type: taxType,
+        notes: notes
+      };
+
+      const data = await createOrder(activeToken, orderPayload);
+
+      setSuccessBill({
+        ...orderPayload,
+        orderNumber: data.orderNumber || data.orderId,
+        id: data.orderId,
+        store_header: {
+          name: receiptSettings?.restaurant_name || user?.restaurant_name || 'Ariso Retail Store',
+          phone: receiptSettings?.phone || '',
+          address: receiptSettings?.address || '',
+          gst: receiptSettings?.gst_number || ''
+        }
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to complete bill.');
-
-      setSuccessBill(data);
       if (onUpdateCart) onUpdateCart([]);
+      setDiscountValue('0');
+      setNotes('');
     } catch (err) {
       alert(err.message);
     } finally {
       setLoading(false);
     }
   };
+
+  const presets = [0, 2, 5, 10, 15, 25];
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
@@ -75,48 +195,67 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
               Payment Successfully Completed
             </Typography>
             <Typography variant="h4" sx={{ fontWeight: 900, my: 1 }}>
-              ₹{successBill.total_amount}
+              ₹{parseFloat(successBill.total_amount).toFixed(2)}
             </Typography>
             <Typography variant="subtitle2" color="text.secondary">
-              Receipt No. #{successBill.receipt_no} • Mode: {successBill.payment_mode.toUpperCase()}
+              Receipt No. #{successBill.orderNumber} • Mode: {successBill.payment_mode.toUpperCase()}
             </Typography>
 
             {/* Simulated ESC/POS Thermal Receipt Paper */}
             <Paper elevation={0} sx={{ p: 2, my: 3, bgcolor: '#fffbeb', border: '1px dashed #d97706', fontFamily: 'monospace', textAlign: 'left' }}>
-              <Typography variant="subtitle2" align="center" sx={{ fontWeight: 800 }}>{successBill.store_header?.name || 'Store'}</Typography>
-              <Typography variant="caption" align="center" display="block">{successBill.store_header?.address}</Typography>
-              <Typography variant="caption" align="center" display="block">Ph: {successBill.store_header?.phone}</Typography>
-              <Typography variant="caption" align="center" display="block">GSTIN: {successBill.store_header?.gst}</Typography>
+              <Typography variant="subtitle2" align="center" sx={{ fontWeight: 800 }}>{successBill.store_header?.name}</Typography>
+              {successBill.store_header?.address && <Typography variant="caption" align="center" display="block">{successBill.store_header?.address}</Typography>}
+              {successBill.store_header?.phone && <Typography variant="caption" align="center" display="block">Ph: {successBill.store_header?.phone}</Typography>}
+              {successBill.store_header?.gst && <Typography variant="caption" align="center" display="block">GSTIN: {successBill.store_header?.gst}</Typography>}
               <Typography variant="caption" display="block" sx={{ my: 1 }}>--------------------------------</Typography>
 
               {successBill.items?.map((item, idx) => (
                 <Box key={idx} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                   <Typography variant="caption">{item.name} x{item.quantity}</Typography>
-                  <Typography variant="caption">₹{parseFloat(item.total).toFixed(2)}</Typography>
+                  <Typography variant="caption">₹{parseFloat(item.total_price).toFixed(2)}</Typography>
                 </Box>
               ))}
 
               <Typography variant="caption" display="block" sx={{ my: 1 }}>--------------------------------</Typography>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="caption" sx={{ fontWeight: 800 }}>Subtotal:</Typography>
-                <Typography variant="caption">₹{successBill.subtotal}</Typography>
+                <Typography variant="caption">₹{parseFloat(successBill.subtotal).toFixed(2)}</Typography>
               </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="caption" sx={{ fontWeight: 800 }}>Discount ({successBill.discount_percentage}%):</Typography>
-                <Typography variant="caption">-₹{successBill.discount_amount}</Typography>
-              </Box>
+              {parseFloat(successBill.discount_amount) > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" sx={{ fontWeight: 800 }}>Discount:</Typography>
+                  <Typography variant="caption">-₹{parseFloat(successBill.discount_amount).toFixed(2)}</Typography>
+                </Box>
+              )}
+              {isGstEnabled && parseFloat(successBill.tax_amount) > 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <Typography variant="caption" sx={{ fontWeight: 800 }}>GST Tax ({gstMode}):</Typography>
+                  <Typography variant="caption">₹{parseFloat(successBill.tax_amount).toFixed(2)}</Typography>
+                </Box>
+              )}
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>TOTAL:</Typography>
-                <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>₹{successBill.total_amount}</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 900 }}>₹{parseFloat(successBill.total_amount).toFixed(2)}</Typography>
               </Box>
               <Typography variant="caption" display="block" sx={{ my: 1 }}>--------------------------------</Typography>
               <Typography variant="caption" align="center" display="block">Thanks for visiting, Powered by SuperBill</Typography>
             </Paper>
 
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <Button fullWidth variant="outlined" onClick={() => window.print()}>
-                🖨️ Print Receipt
-              </Button>
+            <Box sx={{ display: 'flex', gap: 2, flexDirection: 'column', mt: 1 }}>
+              <Box sx={{ display: 'flex', gap: 2 }}>
+                <Button fullWidth variant="outlined" onClick={() => {
+                  if (successBill.id) {
+                    window.open(`/api/orders/${successBill.id}/pdf?token=${activeToken}`, '_blank');
+                  } else {
+                    alert('PDF not available (Missing Order ID)');
+                  }
+                }}>
+                  📄 Download PDF
+                </Button>
+                <Button fullWidth variant="outlined" onClick={() => window.print()}>
+                  🖨️ Print Receipt
+                </Button>
+              </Box>
               <Button fullWidth variant="contained" onClick={() => { setSuccessBill(null); onClose(); }}>
                 Done
               </Button>
@@ -125,19 +264,53 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
         ) : (
           /* CART BREAKDOWN FORM */
           <>
-            {/* Line Items List */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxHeight: 200, overflowY: 'auto' }}>
+            {/* Line Items List with - Qty + Stepper Controls */}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxHeight: 220, overflowY: 'auto', pr: 0.5 }}>
               {cart.map((item, idx) => (
-                <Paper key={idx} variant="outlined" sx={{ p: 1.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Box>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{item.name}</Typography>
+                <Paper
+                  key={idx}
+                  variant="outlined"
+                  onClick={() => setSelectedIdx(idx === selectedIdx ? null : idx)}
+                  sx={{
+                    p: 1.5,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    borderColor: selectedIdx === idx ? '#6366f1' : undefined,
+                    bgcolor: selectedIdx === idx ? 'rgba(99,102,241,0.07)' : undefined,
+                    boxShadow: selectedIdx === idx ? '0 0 0 2px rgba(99,102,241,0.18)' : undefined,
+                    '&:hover': {
+                      bgcolor: selectedIdx === idx ? 'rgba(99,102,241,0.09)' : 'rgba(0,0,0,0.03)',
+                      borderColor: selectedIdx === idx ? '#6366f1' : '#94a3b8'
+                    }
+                  }}
+                >
+                  <Box sx={{ minWidth: 0, flex: 1, mr: 1 }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: selectedIdx === idx ? '#6366f1' : undefined }}>
+                      {item.name}
+                    </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      ₹{parseFloat(item.price).toFixed(2)} x {item.quantity} {item.base_unit || item.unit || 'PCS'}
+                      ₹{parseFloat(item.price).toFixed(2)} / per {item.unit || 'pcs'}
                     </Typography>
                   </Box>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 900, color: 'primary.main' }}>
-                    ₹{(parseFloat(item.price) * item.quantity).toFixed(2)}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', border: '1px solid #cbd5e1', borderRadius: 2, overflow: 'hidden' }}>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleDecrement(idx); }} sx={{ borderRadius: 0, p: 0.5, px: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 900 }}>−</Typography>
+                      </IconButton>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, px: 1 }}>
+                        {item.quantity}
+                      </Typography>
+                      <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleIncrement(idx); }} sx={{ borderRadius: 0, p: 0.5, px: 1 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 900 }}>+</Typography>
+                      </IconButton>
+                    </Box>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 900, color: selectedIdx === idx ? '#6366f1' : 'primary.main', minWidth: 70, textAlign: 'right' }}>
+                      ₹{parseFloat(item.total_price || (item.price * item.quantity)).toFixed(2)}
+                    </Typography>
+                  </Box>
                 </Paper>
               ))}
             </Box>
@@ -149,77 +322,123 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
                 <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>₹{subtotal.toFixed(2)}</Typography>
               </Box>
 
+              {/* Place of Supply (GST Type) */}
+              <Box sx={{ mb: 1.5 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Place of Supply (GST Type)</InputLabel>
+                  <Select
+                    value={taxType}
+                    label="Place of Supply (GST Type)"
+                    onChange={(e) => setTaxType(e.target.value)}
+                  >
+                    <MenuItem value="intra">Intra-State (CGST + SGST split)</MenuItem>
+                    <MenuItem value="inter">Inter-State (IGST)</MenuItem>
+                  </Select>
+                </FormControl>
+              </Box>
+
               <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', display: 'block', mb: 1 }}>
                 QUICK DISCOUNT (%)
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
-                {[0, 2, 5, 10, 15, 25].map((pct) => (
+                {presets.map((pct) => (
                   <Chip
                     key={pct}
                     label={`${pct}%`}
-                    color={discountPct === pct ? 'primary' : 'default'}
-                    onClick={() => setDiscountPct(pct)}
+                    color={discountType === 'percentage' && parseFloat(discountValue) === pct ? 'primary' : 'default'}
+                    onClick={() => handlePresetDiscountClick(pct)}
                     sx={{ fontWeight: 800 }}
                   />
                 ))}
               </Box>
 
-              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+              {/* Numeric Manual Discount Input */}
+              <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
                 <TextField
                   size="small"
-                  placeholder="Custom %"
-                  value={customDiscount}
-                  onChange={(e) => setCustomDiscount(e.target.value)}
+                  label={`Discount (${discountType === 'percentage' ? '%' : '₹'})`}
+                  value={discountValue === '0' ? '' : discountValue}
+                  onChange={(e) => handleCustomDiscountChange(e.target.value)}
                   type="number"
+                  placeholder="Enter manual discount"
+                  fullWidth
                 />
-                <Button size="small" variant="outlined" onClick={handleApplyCustomDiscount}>
-                  Apply
-                </Button>
+                <Box sx={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 1 }}>
+                  <Button
+                    size="small"
+                    variant={discountType === 'percentage' ? 'contained' : 'text'}
+                    onClick={() => setDiscountType('percentage')}
+                    sx={{ minWidth: 40, p: 0.5 }}
+                  >
+                    %
+                  </Button>
+                  <Button
+                    size="small"
+                    variant={discountType === 'flat' ? 'contained' : 'text'}
+                    onClick={() => setDiscountType('flat')}
+                    sx={{ minWidth: 40, p: 0.5 }}
+                  >
+                    ₹
+                  </Button>
+                </Box>
               </Box>
+
+              {/* Proportional GST calculations breakdown */}
+              {isGstEnabled && taxAmount > 0 && (
+                <Box sx={{ py: 1, borderTop: '1px dashed #cbd5e1', mb: 1 }}>
+                  {taxType === 'inter' ? (
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary">IGST Tax</Typography>
+                      <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{taxAmount.toFixed(2)}</Typography>
+                    </Box>
+                  ) : (
+                    <>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="caption" color="text.secondary">CGST Tax</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{(taxAmount / 2).toFixed(2)}</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="caption" color="text.secondary">SGST Tax</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{(taxAmount / 2).toFixed(2)}</Typography>
+                      </Box>
+                    </>
+                  )}
+                </Box>
+              )}
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 1, borderTop: '1px dashed #cbd5e1' }}>
                 <Typography variant="h6" sx={{ fontWeight: 900 }}>Total Amount</Typography>
                 <Typography variant="h5" color="success.main" sx={{ fontWeight: 900 }}>
-                  ₹{totalAmount.toFixed(2)}
+                  ₹{grandTotal.toFixed(2)}
                 </Typography>
               </Box>
             </Paper>
 
-            {/* Payment Mode Selection */}
+            {/* Payment Mode Selection — dynamically matched POS.jsx */}
             <Box>
               <Typography variant="caption" sx={{ fontWeight: 800, color: 'text.secondary', display: 'block', mb: 1 }}>
                 PAYMENT MODE
               </Typography>
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <Button
-                  fullWidth
-                  variant={paymentMode === 'cash' ? 'contained' : 'outlined'}
-                  onClick={() => setPaymentMode('cash')}
-                  sx={{ fontWeight: 800, py: 1.2 }}
-                >
-                  💵 Cash
-                </Button>
-                <Button
-                  fullWidth
-                  variant={paymentMode === 'upi' ? 'contained' : 'outlined'}
-                  onClick={() => setPaymentMode('upi')}
-                  sx={{ fontWeight: 800, py: 1.2 }}
-                >
-                  📱 UPI
-                </Button>
-              </Box>
+              <Grid container spacing={1}>
+                {[
+                  { value: 'cash', label: 'Cash', icon: '💵' },
+                  { value: 'upi', label: 'UPI', icon: '📱' },
+                  { value: 'card', label: 'Card', icon: '💳' },
+                  { value: 'due', label: 'Due', icon: '📝' }
+                ].map((mode) => (
+                  <Grid item xs={3} key={mode.value}>
+                    <Button
+                      fullWidth
+                      variant={paymentMode === mode.value ? 'contained' : 'outlined'}
+                      onClick={() => setPaymentMode(mode.value)}
+                      sx={{ fontWeight: 800, py: 1, textTransform: 'none', minWidth: 0, fontSize: 13 }}
+                    >
+                      {mode.icon} {mode.label}
+                    </Button>
+                  </Grid>
+                ))}
+              </Grid>
             </Box>
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={markFullyPaid}
-                  onChange={(e) => setMarkFullyPaid(e.target.checked)}
-                  color="success"
-                />
-              }
-              label={<Typography variant="body2" sx={{ fontWeight: 700 }}>Mark As Fully Paid (Balance Due: ₹0.00)</Typography>}
-            />
 
             <TextField
               label="Add Notes"
@@ -227,7 +446,7 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
               fullWidth
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Customer requested extra bag"
+              placeholder="e.g. Walk-in transaction details"
             />
           </>
         )}
@@ -235,8 +454,16 @@ export default function SuperBillCartSummary({ open, cart = [], onUpdateCart, on
 
       {!successBill && (
         <DialogActions sx={{ p: 2 }}>
-          <Button fullWidth variant="contained" color="success" size="large" disabled={loading || cart.length === 0} onClick={handleCheckout} sx={{ fontWeight: 900, py: 1.5, fontSize: 18 }}>
-            Save & Print Bill (₹{totalAmount.toFixed(2)})
+          <Button
+            fullWidth
+            variant="contained"
+            color="success"
+            size="large"
+            disabled={loading || cart.length === 0}
+            onClick={handleCheckout}
+            sx={{ fontWeight: 900, py: 1.5, fontSize: 18 }}
+          >
+            {loading ? 'Processing...' : `Save & Print Bill (₹${grandTotal.toFixed(2)})`}
           </Button>
         </DialogActions>
       )}

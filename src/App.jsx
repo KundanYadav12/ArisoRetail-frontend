@@ -20,6 +20,7 @@ import { apiFetch, resolveImageUrl } from './utils/api';
 import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
+import { SyncService } from './utils/syncService';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -28,8 +29,33 @@ export default function App() {
   const [themeMode, setThemeMode] = useState('light');
   const [posFocusMode, setPosFocusMode] = useState(() => localStorage.getItem('pos_focus_mode') === 'true');
 
+  // Shared POS / SuperBill Cart & Checkout States
+  const [cart, setCart] = useState([]);
+  const [discountType, setDiscountType] = useState('percentage');
+  const [discountValue, setDiscountValue] = useState('0');
+  const [paymentMode, setPaymentMode] = useState('cash');
+  const [taxType, setTaxType] = useState('intra');
+  const [receiptSettings, setReceiptSettings] = useState(null);
+
   const [anchorElNav, setAnchorElNav] = useState(null);
   const isMobile = useMediaQuery('(max-width:900px)');
+
+  const [netStatus, setNetStatus] = useState({
+    isOnline: true,
+    pendingCount: 0,
+    isSyncing: false
+  });
+
+  useEffect(() => {
+    if (token) {
+      SyncService.startAutoSync(token, (status) => {
+        setNetStatus(status);
+      });
+    }
+    return () => {
+      SyncService.stopAutoSync();
+    };
+  }, [token]);
 
   useEffect(() => {
     const validateAndSyncSession = async () => {
@@ -105,6 +131,25 @@ export default function App() {
       window.removeEventListener('focus', validateAndSyncSession);
     };
   }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setReceiptSettings(null);
+      return;
+    }
+    const fetchReceipt = async () => {
+      try {
+        const res = await apiFetch('/api/settings/receipt');
+        if (res.ok) {
+          const data = await res.json();
+          setReceiptSettings(data);
+        }
+      } catch (err) {
+        console.warn('[App] Failed to fetch receipt settings:', err);
+      }
+    };
+    fetchReceipt();
+  }, [token]);
 
   const [primaryColor, setPrimaryColor] = useState('#f97316');
   const [secondaryColor, setSecondaryColor] = useState('#10b981');
@@ -267,26 +312,6 @@ export default function App() {
                     >
                       POS Screen
                     </Button>
-                    {(user?.feature_superbill || isSuperAdmin) && (
-                      <>
-                        <Button
-                          variant={currentView === 'superbill_billing' ? 'contained' : 'text'}
-                          onClick={() => setCurrentView('superbill_billing')}
-                          color="secondary"
-                          sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                        >
-                          ⚡ SuperBill Billing
-                        </Button>
-                        <Button
-                          variant={currentView === 'superbill_items' ? 'contained' : 'text'}
-                          onClick={() => setCurrentView('superbill_items')}
-                          color="secondary"
-                          sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                        >
-                          📦 SuperBill Items
-                        </Button>
-                      </>
-                    )}
                     <Button
                       variant={currentView === 'cashier' ? 'contained' : 'text'}
                       onClick={() => setCurrentView('cashier')}
@@ -414,6 +439,27 @@ export default function App() {
 
                 {/* User Profile & Actions */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5, xl: 3 }, flexShrink: 0 }}>
+                  
+                  {/* Network/Offline Sync Indicator */}
+                  {netStatus.isOnline ? (
+                    <Chip
+                      label={netStatus.isSyncing ? "Syncing..." : (netStatus.pendingCount > 0 ? `${netStatus.pendingCount} Pending` : "Online")}
+                      color={netStatus.isSyncing ? "info" : (netStatus.pendingCount > 0 ? "warning" : "success")}
+                      size="small"
+                      onClick={() => { if (netStatus.pendingCount > 0) SyncService.syncPendingOrders(token); }}
+                      sx={{ fontWeight: 'bold', cursor: netStatus.pendingCount > 0 ? 'pointer' : 'default' }}
+                      title={netStatus.pendingCount > 0 ? "Click to Sync Pending Bills Now" : "System Online"}
+                    />
+                  ) : (
+                    <Chip
+                      label={`Offline (${netStatus.pendingCount} Pending)`}
+                      color="error"
+                      size="small"
+                      sx={{ fontWeight: 'bold' }}
+                      title="System Offline - Working Locally"
+                    />
+                  )}
+
                   <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'right' }}>
                     <Typography variant="body2" sx={{ fontWeight: 700, fontSize: { xs: '0.875rem', xl: '1.2rem' } }}>{user?.name || 'User'}</Typography>
                     <Typography variant="caption" color="primary" sx={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: { xs: '0.75rem', xl: '1rem' } }}>
@@ -440,16 +486,45 @@ export default function App() {
                 onLogout={handleLogout}
                 isFocusMode={posFocusMode}
                 onFocusModeChange={handleFocusModeChange}
+                cart={cart}
+                setCart={setCart}
+                discountType={discountType}
+                setDiscountType={setDiscountType}
+                discountValue={discountValue}
+                setDiscountValue={setDiscountValue}
+                paymentMode={paymentMode}
+                setPaymentMode={setPaymentMode}
+                taxType={taxType}
+                setTaxType={setTaxType}
+                receiptSettings={receiptSettings}
+                setReceiptSettings={setReceiptSettings}
+                onNavigate={setCurrentView}
               />
             )}
             {currentView === 'superbill_billing' && user?.feature_superbill && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                <SuperBillBilling user={user} />
+                <SuperBillBilling
+                  user={user}
+                  token={token}
+                  cart={cart}
+                  setCart={setCart}
+                  discountType={discountType}
+                  setDiscountType={setDiscountType}
+                  discountValue={discountValue}
+                  setDiscountValue={setDiscountValue}
+                  paymentMode={paymentMode}
+                  setPaymentMode={setPaymentMode}
+                  taxType={taxType}
+                  setTaxType={setTaxType}
+                  receiptSettings={receiptSettings}
+                  setReceiptSettings={setReceiptSettings}
+                  onNavigate={setCurrentView}
+                />
               </Box>
             )}
             {currentView === 'superbill_items' && user?.feature_superbill && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                <SuperBillItems user={user} />
+                <SuperBillItems user={user} token={localStorage.getItem('ARISO_RETAIL_TOKEN') || ''} />
               </Box>
             )}
             {currentView === 'cashier' && (
@@ -459,7 +534,7 @@ export default function App() {
             )}
             {currentView === 'admin' && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                <AdminPanel token={token} />
+                <AdminPanel user={user} token={token} />
               </Box>
             )}
             {currentView === 'superadmin' && (

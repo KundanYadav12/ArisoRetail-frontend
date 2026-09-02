@@ -4,10 +4,11 @@ import {
   Grid, Card, CardContent, CardMedia, Chip, IconButton, Fab, Button,
   Paper, CircularProgress
 } from '@mui/material';
+import { apiFetch } from '../utils/api';
 import SuperBillAddItemModal from '../components/SuperBillAddItemModal';
 import SuperBillStockAdjustModal from '../components/SuperBillStockAdjustModal';
 
-export default function SuperBillItems() {
+export default function SuperBillItems({ token: propToken }) {
   const [tabIndex, setTabIndex] = useState(0); // 0: Items, 1: Categories
   const [items, setItems] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -21,10 +22,7 @@ export default function SuperBillItems() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
-      const res = await fetch(`/api/superbill/items?search=${encodeURIComponent(search)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await apiFetch(`/api/superbill/items?search=${encodeURIComponent(search)}`);
       const data = await res.json();
       if (res.ok) {
         setItems(data.items || []);
@@ -82,15 +80,21 @@ export default function SuperBillItems() {
               const isService = item.is_veg === 3;
               const stockVal = parseFloat(item.stock || 0);
               return (
-                <Grid item xs={12} sm={6} md={4} key={item.id}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={item.id}>
                   <Card sx={{ borderRadius: 3, border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', position: 'relative' }}>
                     <Box sx={{ display: 'flex', p: 2, gap: 2 }}>
-                      <CardMedia
-                        component="img"
-                        sx={{ width: 80, height: 80, borderRadius: 2, objectFit: 'cover', bgcolor: '#f1f5f9' }}
-                        image={item.image_url || 'https://via.placeholder.com/80?text=Item'}
-                        alt={item.name}
-                      />
+                      {item.image_url ? (
+                        <CardMedia
+                          component="img"
+                          sx={{ width: 80, height: 80, borderRadius: 2, objectFit: 'cover', bgcolor: '#f1f5f9' }}
+                          image={item.image_url}
+                          alt={item.name}
+                        />
+                      ) : (
+                        <Box sx={{ width: 80, height: 80, borderRadius: 2, bgcolor: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <Typography sx={{ fontSize: 32 }}>📦</Typography>
+                        </Box>
+                      )}
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                           <Typography variant="subtitle1" sx={{ fontWeight: 800, truncate: true }}>
@@ -144,7 +148,7 @@ export default function SuperBillItems() {
           /* CATEGORIES GRID */
           <Grid container spacing={2}>
             {categories.map((cat) => (
-              <Grid item xs={12} sm={6} md={4} key={cat.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={cat.id}>
                 <Paper sx={{ p: 2, borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>📁 {cat.name}</Typography>
                 </Paper>

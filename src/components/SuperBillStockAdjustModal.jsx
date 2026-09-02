@@ -3,6 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, Typography, Box, IconButton, Chip
 } from '@mui/material';
+import { apiFetch } from '../utils/api';
 
 export default function SuperBillStockAdjustModal({ open, item, onClose, onSuccess }) {
   const [qty, setQty] = useState(1);
@@ -19,19 +20,14 @@ export default function SuperBillStockAdjustModal({ open, item, onClose, onSucce
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('ariso_retail_token') || sessionStorage.getItem('ariso_retail_token');
-      const res = await fetch('/api/superbill/stock-adjust', {
+      const res = await apiFetch('/api/superbill/stock-adjust', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
+        body: {
           item_id: item.id,
           adjustment_type: type,
           quantity: parseFloat(qty),
           reason: reason.trim() || `Manual Stock ${type.toUpperCase()}`
-        })
+        }
       });
 
       const data = await res.json();
