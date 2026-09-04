@@ -146,7 +146,7 @@ export default function MenuBulkImportModal({ open, onClose, onSuccess, token })
   const handleAddPreviewRow = () => {
     setPreviewItems(prev => [
       ...prev,
-      { category: 'General', name: 'New Item', price: 100, description: '', is_veg: 1, spicy_level: 0, gst_rate: 5, is_available: 1 }
+      { category: 'General', name: 'New Item', sku: '', unit: 'Pcs', price: 100, description: '', is_veg: 1, spicy_level: 0, gst_rate: 5, is_available: 1 }
     ]);
   };
 
@@ -305,13 +305,21 @@ export default function MenuBulkImportModal({ open, onClose, onSuccess, token })
                   </Button>
                 </Box>
 
+                <Alert severity="info" sx={{ py: 0.5, borderRadius: 2 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                    💡 <b>Duplicate Handling:</b> Items with the same name but different SKU codes are created as separate items. Items with the same name AND same SKU update existing records.
+                  </Typography>
+                </Alert>
+
                 <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 350, borderRadius: 2 }}>
                   <Table size="small" stickyHeader>
                     <TableHead>
                       <TableRow>
                         <TableCell sx={{ fontWeight: 800 }}>Category</TableCell>
                         <TableCell sx={{ fontWeight: 800 }}>Item Name</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }}>SKU Code</TableCell>
                         <TableCell sx={{ fontWeight: 800 }}>Price (₹)</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }}>Unit</TableCell>
                         <TableCell sx={{ fontWeight: 800 }}>Type</TableCell>
                         <TableCell sx={{ fontWeight: 800 }}>Description</TableCell>
                         <TableCell align="center" sx={{ fontWeight: 800 }}>Action</TableCell>
@@ -341,12 +349,40 @@ export default function MenuBulkImportModal({ open, onClose, onSuccess, token })
                           <TableCell>
                             <TextField
                               size="small"
+                              placeholder="e.g. SKU-01"
+                              value={item.sku || ''}
+                              onChange={e => handlePreviewItemChange(idx, 'sku', e.target.value)}
+                              variant="standard"
+                              sx={{ minWidth: 90 }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <TextField
+                              size="small"
                               type="number"
                               value={item.price || 0}
                               onChange={e => handlePreviewItemChange(idx, 'price', e.target.value)}
                               variant="standard"
                               sx={{ width: 70 }}
                             />
+                          </TableCell>
+                          <TableCell>
+                            <Select
+                              size="small"
+                              value={item.unit || 'Pcs'}
+                              onChange={e => handlePreviewItemChange(idx, 'unit', e.target.value)}
+                              variant="standard"
+                              sx={{ fontSize: '12px', minWidth: 70 }}
+                            >
+                              <MenuItem value="Pcs">Pcs</MenuItem>
+                              <MenuItem value="Kg">Kg</MenuItem>
+                              <MenuItem value="Gram">Gram</MenuItem>
+                              <MenuItem value="Litre">Litre</MenuItem>
+                              <MenuItem value="Ml">Ml</MenuItem>
+                              <MenuItem value="Box">Box</MenuItem>
+                              <MenuItem value="Pack">Pack</MenuItem>
+                              <MenuItem value="Bottle">Bottle</MenuItem>
+                            </Select>
                           </TableCell>
                           <TableCell>
                             <Select
