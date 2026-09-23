@@ -7,6 +7,7 @@ import DateRangePicker from '../components/DateRangePicker';
 import GstSlabReport from '../components/GstSlabReport';
 import MenuBulkImportModal from '../components/MenuBulkImportModal';
 import { openWhatsAppShare } from '../utils/whatsappHelper';
+import { generateLocalEscPosReceipt, safeUtf8ToBase64 } from '../utils/localReceiptGenerator';
 
 const getLocalDateString = (date) => {
   const year = date.getFullYear();
@@ -168,6 +169,30 @@ export default function AdminPanel({ token, user }) {
   const [printerDeviceId, setPrinterDeviceId] = useState('');
   const [printerBluetoothAddress, setPrinterBluetoothAddress] = useState('');
   const [gatewayDevices, setGatewayDevices] = useState([]);
+  const [systemPrinters, setSystemPrinters] = useState([]);
+  const [loadingSystemPrinters, setLoadingSystemPrinters] = useState(false);
+
+  const handleRefreshSystemPrinters = async (showToast = false) => {
+    if (window.electron && window.electron.getPrinters) {
+      setLoadingSystemPrinters(true);
+      try {
+        const liveList = await window.electron.getPrinters();
+        if (Array.isArray(liveList)) {
+          setSystemPrinters(liveList);
+          if (showToast) {
+            notify.success(`Found ${liveList.length} Windows printer(s).`, 'Printers Refreshed');
+          }
+        }
+      } catch (err) {
+        console.warn('[AdminPanel] Failed to fetch system printers:', err);
+        if (showToast) {
+          notify.error('Could not query Windows printer list.', 'Printer Scan Error');
+        }
+      } finally {
+        setLoadingSystemPrinters(false);
+      }
+    }
+  };
   
   const [categoryName, setCategoryName] = useState('');
   const [categoryDesc, setCategoryDesc] = useState('');
@@ -764,6 +789,8 @@ export default function AdminPanel({ token, user }) {
         } else {
           setGatewayDevices([]);
         }
+
+        handleRefreshSystemPrinters(false);
       } else if (activeTab === 3) {
         let url = '/api/reports/admin';
         const params = [];
@@ -1386,7 +1413,7 @@ export default function AdminPanel({ token, user }) {
     setDialogType('add_printer');
     setSelectedEntity(null);
     setPrinterName('');
-    setPrinterType('lan');
+    setPrinterType(window.electron ? 'usb' : 'lan');
     setPrinterIp('');
     setPrinterPort('9100');
     setPrinterWidth('80');
@@ -1398,6 +1425,7 @@ export default function AdminPanel({ token, user }) {
     setPrinterStatus('online');
     setPrinterDeviceId('');
     setPrinterBluetoothAddress('');
+    handleRefreshSystemPrinters(false);
     setDialogOpen(true);
   };
 
@@ -1405,7 +1433,7 @@ export default function AdminPanel({ token, user }) {
     setDialogType('edit_printer');
     setSelectedEntity(printer);
     setPrinterName(printer.name || '');
-    setPrinterType(printer.type || 'lan');
+    setPrinterType(printer.type || (window.electron ? 'usb' : 'lan'));
     setPrinterIp(printer.ip_address || '');
     setPrinterBluetoothAddress(printer.bluetooth_address || '');
     setPrinterPort((printer.port || 9100).toString());
@@ -1417,6 +1445,7 @@ export default function AdminPanel({ token, user }) {
     setPrinterDefaultKot(Boolean(printer.is_default_kot));
     setPrinterStatus(printer.status || 'online');
     setPrinterDeviceId(printer.device_id ? printer.device_id.toString() : '');
+    handleRefreshSystemPrinters(false);
     setDialogOpen(true);
   };
 
@@ -1442,12 +1471,14 @@ export default function AdminPanel({ token, user }) {
 
   const handleSavePrinter = async (e) => {
     e.preventDefault();
+    const isUsb = printerType === 'usb';
+    const isBt = printerType === 'bluetooth';
     const payload = {
       name: printerName,
       type: printerType,
-      ip_address: printerType === 'bluetooth' ? null : printerIp,
-      bluetooth_address: printerType === 'bluetooth' ? printerBluetoothAddress : null,
-      port: printerType === 'bluetooth' ? null : parseInt(printerPort || 9100),
+      ip_address: (isUsb || isBt) ? null : printerIp,
+      bluetooth_address: isBt ? printerBluetoothAddress : null,
+      port: (isUsb || isBt) ? null : parseInt(printerPort || 9100),
       paper_width: printerWidth,
       role: printerRole,
       auto_cut: parseInt(printerAutoCut),
@@ -1455,7 +1486,7 @@ export default function AdminPanel({ token, user }) {
       is_default_receipt: printerDefaultReceipt,
       is_default_kot: printerDefaultKot,
       status: printerStatus,
-      device_id: printerType === 'bluetooth' ? null : (printerDeviceId ? parseInt(printerDeviceId) : null)
+      device_id: isBt ? null : (printerDeviceId ? parseInt(printerDeviceId) : null)
     };
 
     try {
@@ -1498,6 +1529,31 @@ export default function AdminPanel({ token, user }) {
   };
 
   const handleTestPrinter = async (printer) => {
+    if ((printer.type === 'usb' || !printer.ip_address) && window.electron && window.electron.printWindowsRaw) {
+      try {
+        const testOrder = {
+          unique_order_number: 'TEST-001',
+          subtotal: '100.00',
+          discount_amount: '0.00',
+          tax_amount: '5.00',
+          total_amount: '105.00',
+          payment_mode: 'TEST',
+          cashier_name: user?.name || 'Admin',
+          customer_name: 'Test Customer',
+          created_at: new Date().toISOString(),
+          tax_type: 'intra'
+        };
+        const testItems = [{ name: 'Test Receipt Print', quantity: 1, price: '100.00', total_price: '100.00' }];
+        const rawEscPos = generateLocalEscPosReceipt(testOrder, testItems, user || {}, receiptSettings);
+        const base64Payload = safeUtf8ToBase64(rawEscPos);
+        await window.electron.printWindowsRaw(printer.name, base64Payload);
+        notify.success(`Test receipt sent to USB printer "${printer.name}".`, 'USB Print Success');
+      } catch (err) {
+        notify.error(`USB Print Test Failed: ${err.message}`, 'Printer Error');
+      }
+      return;
+    }
+
     try {
       const response = await apiFetch('/api/printers/test', {
         method: 'POST',
@@ -2299,24 +2355,47 @@ export default function AdminPanel({ token, user }) {
                   Printers & Terminals
                 </Typography>
                 <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
-                  Register hardware LAN IP addresses & dynamic ESC/POS configurations.
+                  Register dynamic USB thermal drivers, network LAN IP addresses & ESC/POS configurations.
                 </Typography>
               </Box>
-              <Button
-                variant="contained"
-                startIcon={<Plus size={14} />}
-                onClick={handleOpenAddPrinter}
-                sx={{
-                  fontWeight: 800,
-                  px: { xs: 1.25, sm: 2.5 },
-                  py: { xs: 0.5, sm: 1 },
-                  fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0
-                }}
-              >
-                Add Printer
-              </Button>
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
+                {window.electron && (
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    startIcon={loadingSystemPrinters ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={14} />}
+                    onClick={() => {
+                      handleRefreshSystemPrinters(true);
+                      fetchData();
+                    }}
+                    disabled={loadingSystemPrinters}
+                    sx={{
+                      fontWeight: 800,
+                      px: { xs: 1.25, sm: 2 },
+                      py: { xs: 0.5, sm: 1 },
+                      fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    Refresh Printers
+                  </Button>
+                )}
+                <Button
+                  variant="contained"
+                  startIcon={<Plus size={14} />}
+                  onClick={handleOpenAddPrinter}
+                  sx={{
+                    fontWeight: 800,
+                    px: { xs: 1.25, sm: 2.5 },
+                    py: { xs: 0.5, sm: 1 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0
+                  }}
+                >
+                  Add Printer
+                </Button>
+              </Box>
             </Box>
 
             <Box
@@ -2348,9 +2427,15 @@ export default function AdminPanel({ token, user }) {
                       </Box>
                     </Box>
 
-                    {/* Compact 2-Column Key-Value Grid on Mobile */}
+                    {/* Compact 2-Column Key-Value Grid */}
                     <Box sx={{ fontSize: { xs: 12, sm: 13 }, display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: '1fr' }, gap: 0.5, color: 'text.secondary', mt: 0.5 }}>
-                      <Box>IP: <b>{printer.ip_address}:{printer.port || 9100}</b></Box>
+                      {printer.type === 'lan' || printer.type === 'network' ? (
+                        <Box>IP: <b>{printer.ip_address}:{printer.port || 9100}</b></Box>
+                      ) : printer.type === 'bluetooth' ? (
+                        <Box>BT: <b>{printer.bluetooth_address || 'Paired Device'}</b></Box>
+                      ) : (
+                        <Box>Device: <b>{printer.name}</b></Box>
+                      )}
                       <Box>Paper: <b>{printer.paper_width || 80}mm Thermal</b></Box>
                       <Box sx={{ gridColumn: { xs: 'span 2', sm: 'span 1' } }}>Type: <b>{(printer.type || 'lan').toUpperCase()}</b></Box>
                       {printer.is_default_receipt === 1 && <Chip label="⭐ Default Receipt" size="small" color="warning" sx={{ width: 'fit-content', mt: 0.5, fontWeight: 700, fontSize: '10px', height: 22 }} />}
@@ -2358,7 +2443,11 @@ export default function AdminPanel({ token, user }) {
                     </Box>
 
                     <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                      <Button onClick={() => handleTestPrinter(printer)} variant="outlined" size="small" sx={{ flex: 1, fontWeight: 700, fontSize: '0.75rem', py: 0.5 }}>Test Socket</Button>
+                      {printer.type === 'lan' || printer.type === 'network' ? (
+                        <Button onClick={() => handleTestPrinter(printer)} variant="outlined" size="small" sx={{ flex: 1, fontWeight: 700, fontSize: '0.75rem', py: 0.5 }}>Test Socket</Button>
+                      ) : (
+                        <Button onClick={() => handleTestPrinter(printer)} variant="outlined" size="small" sx={{ flex: 1, fontWeight: 700, fontSize: '0.75rem', py: 0.5 }}>Test Print</Button>
+                      )}
                       <IconButton onClick={() => handleOpenEditPrinter(printer)} size="small" color="primary"><Edit2 size={16} /></IconButton>
                       <IconButton onClick={() => handleDeletePrinter(printer.id)} size="small" color="error"><Trash2 size={16} /></IconButton>
                     </Box>
@@ -3333,8 +3422,8 @@ export default function AdminPanel({ token, user }) {
 
                   {/* Card 3: Thermal Print Formatting Controls */}
                   <Paper variant="outlined" sx={{ p: 3, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 800, borderBottom: 1, borderColor: 'divider', pb: 1 }}>
-                      🖨️ Paper Layout & Formatting
+                    <Typography variant="subtitle1" sx={{ fontWeight: 800, borderBottom: 1, borderColor: 'divider', pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Printer size={18} /> Paper Layout & Formatting
                     </Typography>
 
                     <Grid container spacing={2}>
@@ -3346,8 +3435,8 @@ export default function AdminPanel({ token, user }) {
                             label="Paper Width"
                             onChange={e => setReceiptSettings({ ...receiptSettings, paper_size: e.target.value })}
                           >
-                            <MenuItem value="80mm">80mm (Standard)</MenuItem>
-                            <MenuItem value="58mm">58mm (Compact)</MenuItem>
+                            <MenuItem value="80mm">3-inch / 80mm (Standard)</MenuItem>
+                            <MenuItem value="58mm">2-inch / 58mm (Compact)</MenuItem>
                           </Select>
                         </FormControl>
                       </Grid>
@@ -3775,6 +3864,63 @@ export default function AdminPanel({ token, user }) {
                         </Grid>
                       )}
                     </Grid>
+                  </Paper>
+
+                  {/* Card 9: POS Keyboard & Fast Entry Settings */}
+                  <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, borderRadius: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: 1, borderColor: 'divider', pb: 1, flexWrap: 'wrap', gap: 1 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                        ⌨️ POS Keyboard & Barcode Workflow
+                      </Typography>
+                      <Button
+                        variant="contained"
+                        color="primary"
+                        size="small"
+                        onClick={handleSaveReceiptSettings}
+                        disabled={savingReceiptSettings}
+                        sx={{ fontWeight: 800, px: 2, py: 0.5, fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+                      >
+                        {savingReceiptSettings ? <CircularProgress size={16} color="inherit" /> : 'Save Settings'}
+                      </Button>
+                    </Box>
+
+                    <Box
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        border: 1,
+                        borderColor: (receiptSettings.enter_key_qty_popup !== undefined ? Number(receiptSettings.enter_key_qty_popup) : 1) === 1 ? 'primary.main' : 'divider',
+                        bgcolor: (receiptSettings.enter_key_qty_popup !== undefined ? Number(receiptSettings.enter_key_qty_popup) : 1) === 1 ? 'rgba(249, 115, 22, 0.05)' : 'background.paper',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 2,
+                        flexWrap: 'wrap'
+                      }}
+                    >
+                      <Box sx={{ flex: 1, minWidth: '240px' }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.primary' }}>
+                          Enter Key – Quantity Popup & Cart
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, lineHeight: 1.4 }}>
+                          When ON, pressing Enter on search/scanned items opens the quantity popup, and pressing Enter again saves quantity & adds/updates the item in Sale Cart. Esc key is reserved to Clear All Items from Cart.
+                        </Typography>
+                      </Box>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={(receiptSettings.enter_key_qty_popup !== undefined ? Number(receiptSettings.enter_key_qty_popup) : 1) === 1}
+                            onChange={e => setReceiptSettings({ ...receiptSettings, enter_key_qty_popup: e.target.checked ? 1 : 0 })}
+                            color="primary"
+                          />
+                        }
+                        label={
+                          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                            {(receiptSettings.enter_key_qty_popup !== undefined ? Number(receiptSettings.enter_key_qty_popup) : 1) === 1 ? 'ON (Default)' : 'OFF'}
+                          </Typography>
+                        }
+                      />
+                    </Box>
                   </Paper>
 
                 </Box>
@@ -5012,48 +5158,152 @@ export default function AdminPanel({ token, user }) {
 
             {dialogType.includes('printer') && (
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <TextField label="Printer Name / Location" size="small" fullWidth value={printerName} onChange={e => setPrinterName(e.target.value)} required placeholder="e.g. Mobile Kitchen Bluetooth Printer" />
-                
-                {printerType === 'bluetooth' ? (
-                  <TextField 
-                    label="Bluetooth MAC Address / Identifier" 
-                    size="small" 
-                    fullWidth 
-                    value={printerBluetoothAddress} 
-                    onChange={e => setPrinterBluetoothAddress(e.target.value)} 
-                    placeholder="e.g. 00:11:22:33:44:55 (Optional)" 
-                    helperText="📱 Direct Bluetooth thermal printing is paired directly inside the Mobile POS app."
-                  />
+                <FormControl fullWidth size="small">
+                  <InputLabel>Printer Connection Type</InputLabel>
+                  <Select
+                    value={printerType}
+                    label="Printer Connection Type"
+                    onChange={e => {
+                      const newType = e.target.value;
+                      setPrinterType(newType);
+                      if (newType === 'usb') {
+                        handleRefreshSystemPrinters(false);
+                      }
+                    }}
+                  >
+                    <MenuItem value="usb">USB / Windows Installed Driver</MenuItem>
+                    <MenuItem value="lan">LAN / Network (TCP Socket)</MenuItem>
+                    <MenuItem value="bluetooth">Bluetooth (Mobile Direct)</MenuItem>
+                    <MenuItem value="network">Network Socket</MenuItem>
+                  </Select>
+                </FormControl>
+
+                {printerType === 'usb' ? (
+                  <>
+                    {window.electron && (
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Detected Windows Printer</InputLabel>
+                          <Select
+                            value={systemPrinters.some(p => p.name === printerName) ? printerName : ''}
+                            label="Detected Windows Printer"
+                            onChange={e => {
+                              if (e.target.value) {
+                                setPrinterName(e.target.value);
+                              }
+                            }}
+                          >
+                            <MenuItem value="">
+                              <em>-- Select Detected Windows Printer --</em>
+                            </MenuItem>
+                            {systemPrinters.map((p, idx) => (
+                              <MenuItem key={idx} value={p.name}>
+                                {p.name} {p.isDefault ? '[Default]' : ''} {p.driverName ? `(Driver: ${p.driverName})` : ''} {p.portName ? `[${p.portName}]` : ''} {p.isOnline ? '(Online)' : p.isVirtual ? '(Virtual)' : '(Offline)'}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        <Tooltip title="Refresh Windows Printers">
+                          <IconButton
+                            color="primary"
+                            onClick={() => handleRefreshSystemPrinters(true)}
+                            disabled={loadingSystemPrinters}
+                            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1.5, p: 1 }}
+                          >
+                            {loadingSystemPrinters ? <CircularProgress size={18} /> : <RefreshCw size={18} />}
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    )}
+
+                    <TextField
+                      label="Printer Device Name"
+                      size="small"
+                      fullWidth
+                      value={printerName}
+                      onChange={e => setPrinterName(e.target.value)}
+                      required
+                      placeholder="e.g. Counter Thermal Printer, Receipt Printer"
+                      helperText="Exact Windows system device name for driver queue printing."
+                    />
+                  </>
+                ) : printerType === 'bluetooth' ? (
+                  <>
+                    <TextField
+                      label="Printer Name / Location"
+                      size="small"
+                      fullWidth
+                      value={printerName}
+                      onChange={e => setPrinterName(e.target.value)}
+                      required
+                      placeholder="e.g. Mobile Kitchen Bluetooth Printer"
+                    />
+                    <TextField 
+                      label="Bluetooth MAC Address / Identifier" 
+                      size="small" 
+                      fullWidth 
+                      value={printerBluetoothAddress} 
+                      onChange={e => setPrinterBluetoothAddress(e.target.value)} 
+                      placeholder="e.g. 00:11:22:33:44:55 (Optional)" 
+                      helperText="📱 Direct Bluetooth thermal printing is paired directly inside the Mobile POS app."
+                    />
+                  </>
                 ) : (
                   <>
-                    <TextField label="IP Address / Host" size="small" fullWidth value={printerIp} onChange={e => setPrinterIp(e.target.value)} required placeholder="192.168.1.100" />
-                    <TextField label="Port" size="small" fullWidth value={printerPort} onChange={e => setPrinterPort(e.target.value)} required placeholder="9100" />
+                    <TextField
+                      label="Printer Name / Location"
+                      size="small"
+                      fullWidth
+                      value={printerName}
+                      onChange={e => setPrinterName(e.target.value)}
+                      required
+                      placeholder="e.g. Counter Receipt Printer"
+                    />
+                    <Grid container spacing={2}>
+                      <Grid size={8}>
+                        <TextField label="IP Address / Host" size="small" fullWidth value={printerIp} onChange={e => setPrinterIp(e.target.value)} required placeholder="192.168.1.100" />
+                      </Grid>
+                      <Grid size={4}>
+                        <TextField label="Port" size="small" fullWidth value={printerPort} onChange={e => setPrinterPort(e.target.value)} required placeholder="9100" />
+                      </Grid>
+                    </Grid>
                   </>
                 )}
 
                 <Grid container spacing={2}>
                   <Grid size={6}>
-                    <Select size="small" fullWidth value={printerType} onChange={e => setPrinterType(e.target.value)}>
-                      <MenuItem value="lan">LAN / Network (TCP)</MenuItem>
-                      <MenuItem value="usb">USB</MenuItem>
-                      <MenuItem value="bluetooth">Bluetooth (Mobile Direct)</MenuItem>
-                      <MenuItem value="network">Network Socket</MenuItem>
-                    </Select>
+                    <FormControl fullWidth size="small">
+                      <InputLabel>Paper Width</InputLabel>
+                      <Select
+                        size="small"
+                        fullWidth
+                        label="Paper Width"
+                        value={printerWidth}
+                        onChange={e => setPrinterWidth(e.target.value)}
+                      >
+                        <MenuItem value="80">80mm Thermal (3-Inch)</MenuItem>
+                        <MenuItem value="58">58mm Thermal (2-Inch)</MenuItem>
+                      </Select>
+                    </FormControl>
                   </Grid>
                   <Grid size={6}>
-                    <Select size="small" fullWidth value={printerWidth} onChange={e => setPrinterWidth(e.target.value)}>
-                      <MenuItem value="80">80mm Thermal</MenuItem>
-                      <MenuItem value="58">58mm Thermal</MenuItem>
-                    </Select>
+                    <FormControl fullWidth size="small">
+                      <InputLabel>Role / Purpose</InputLabel>
+                      <Select
+                        size="small"
+                        fullWidth
+                        label="Role / Purpose"
+                        value={printerRole}
+                        onChange={e => setPrinterRole(e.target.value)}
+                      >
+                        <MenuItem value="receipt">Receipt (Counter)</MenuItem>
+                        <MenuItem value="kitchen">Kitchen (KOT)</MenuItem>
+                        <MenuItem value="bar">Bar Printer</MenuItem>
+                        <MenuItem value="dessert">Dessert Printer</MenuItem>
+                      </Select>
+                    </FormControl>
                   </Grid>
                 </Grid>
-
-                <Select size="small" fullWidth value={printerRole} onChange={e => setPrinterRole(e.target.value)}>
-                  <MenuItem value="receipt">Receipt (Counter)</MenuItem>
-                  <MenuItem value="kitchen">Kitchen (KOT)</MenuItem>
-                  <MenuItem value="bar">Bar Printer</MenuItem>
-                  <MenuItem value="dessert">Dessert Printer</MenuItem>
-                </Select>
 
                 <FormControl fullWidth size="small">
                   <InputLabel>Assigned Print Gateway PC</InputLabel>

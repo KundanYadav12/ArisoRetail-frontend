@@ -3,6 +3,8 @@ import { API_BASE_URL, apiFetch } from './api';
 
 let syncInterval = null;
 let isSyncingInProgress = false;
+let onlineStatusListenersAttached = false;
+let currentStatusCallback = null;
 
 export function generateOfflineOrderId() {
   const date = new Date();
@@ -16,9 +18,12 @@ export class SyncService {
    * Check if the API server is reachable
    */
   static async checkNetworkHealth() {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return false;
+    }
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
       const res = await fetch(`${API_BASE_URL}/health`, {
         method: 'GET',
         signal: controller.signal
@@ -26,57 +31,104 @@ export class SyncService {
       clearTimeout(timeoutId);
       return res.ok;
     } catch (e) {
-      return false;
+      // If /health not found, try a lightweight endpoint
+      try {
+        const controller2 = new AbortController();
+        const timeoutId2 = setTimeout(() => controller2.abort(), 3500);
+        const res2 = await fetch(`${API_BASE_URL}/settings/receipt`, {
+          method: 'GET',
+          signal: controller2.signal
+        });
+        clearTimeout(timeoutId2);
+        return res2.status < 500;
+      } catch (_) {
+        return false;
+      }
     }
   }
 
   /**
-   * Downward Sync: Download latest product catalog, categories, receipt config, and users
+   * Downward Sync: Download latest product catalog, categories, receipt config, and printers
+   * Uses /api/sync/downward with seamless fallback to individual REST endpoints.
    */
   static async downloadLatestCatalog(token) {
-    if (!token) return false;
-    try {
-      const res = await apiFetch('/api/sync/downward');
-      if (!res.ok) throw new Error('Downward sync failed');
-      const data = await res.json();
+    if (!token) {
+      token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '';
+    }
 
-      // Clear local tables and populate with fresh server configuration
+    try {
+      console.log('[SyncService] Starting downward catalog synchronization...');
+      let downwardData = null;
+
+      // 1. Try unified downward sync endpoint
+      try {
+        const res = await apiFetch('/api/sync/downward');
+        if (res.ok) {
+          downwardData = await res.json();
+        }
+      } catch (e) {
+        console.warn('[SyncService] Unified downward sync endpoint unreachable, using REST fallbacks...');
+      }
+
+      // 2. If downwardData was not obtained, fetch all resources in parallel
+      if (!downwardData) {
+        const [catRes, menuRes, receiptRes, profileRes, prnRes] = await Promise.allSettled([
+          apiFetch('/api/categories'),
+          apiFetch('/api/menu'),
+          apiFetch('/api/settings/receipt'),
+          apiFetch('/api/settings/profile'),
+          apiFetch('/api/printers')
+        ]);
+
+        downwardData = {
+          categories: catRes.status === 'fulfilled' && catRes.value.ok ? await catRes.value.json() : null,
+          menu_items: menuRes.status === 'fulfilled' && menuRes.value.ok ? await menuRes.value.json() : null,
+          receipt_settings: receiptRes.status === 'fulfilled' && receiptRes.value.ok ? await receiptRes.value.json() : null,
+          profile: profileRes.status === 'fulfilled' && profileRes.value.ok ? await profileRes.value.json() : null,
+          printers: prnRes.status === 'fulfilled' && prnRes.value.ok ? await prnRes.value.json() : null
+        };
+      }
+
+      // 3. Atomically persist into Dexie IndexedDB
       await db.transaction('rw', [db.menu_items, db.categories, db.settings, db.printers], async () => {
         // Save Menu items
-        await db.menu_items.clear();
-        if (data.menu_items && Array.isArray(data.menu_items)) {
-          await db.menu_items.bulkPut(data.menu_items);
+        if (downwardData.menu_items && Array.isArray(downwardData.menu_items) && downwardData.menu_items.length > 0) {
+          await db.menu_items.clear();
+          await db.menu_items.bulkPut(downwardData.menu_items);
         }
 
         // Save Categories
-        await db.categories.clear();
-        if (data.categories && Array.isArray(data.categories)) {
-          await db.categories.bulkPut(data.categories);
-        }
-
-        // Save Printers for offline hardware access
-        if (db.printers) {
-          await db.printers.clear();
-          if (data.printers && Array.isArray(data.printers)) {
-            await db.printers.bulkPut(data.printers);
-          }
+        if (downwardData.categories && Array.isArray(downwardData.categories) && downwardData.categories.length > 0) {
+          await db.categories.clear();
+          await db.categories.bulkPut(downwardData.categories);
         }
 
         // Save Receipt Settings & Profile
-        if (data.receipt_settings) {
-          await db.settings.put({ key: 'receipt_settings', value: data.receipt_settings });
+        if (downwardData.receipt_settings) {
+          await db.settings.put({ key: 'receipt_settings', value: downwardData.receipt_settings });
         }
-        if (data.profile) {
-          await db.settings.put({ key: 'restaurant_profile', value: data.profile });
+        if (downwardData.profile) {
+          await db.settings.put({ key: 'restaurant_profile', value: downwardData.profile });
+        }
+
+        // Save Printers
+        if (downwardData.printers && Array.isArray(downwardData.printers) && downwardData.printers.length > 0) {
+          await db.printers.clear();
+          await db.printers.bulkPut(downwardData.printers);
         }
       });
 
-      console.log('[SyncService] Successfully synchronized database catalog downward!');
+      console.log('[SyncService] Successfully synchronized database catalog downward to Dexie IndexedDB!');
       return true;
     } catch (err) {
       console.error('[SyncService] Error during downward catalog sync:', err);
       return false;
     }
+  }
+
+  // Alias for backward compatibility
+  static async syncDownward(token) {
+    return SyncService.downloadLatestCatalog(token);
   }
 
   /**
@@ -106,179 +158,179 @@ export class SyncService {
 
       // Decrement Local stock balance immediately in Dexie database
       for (const item of (orderPayload.items || [])) {
-        if (item.menu_item_id) {
-          const cachedProduct = await db.menu_items.get(item.menu_item_id);
-          if (cachedProduct && cachedProduct.stock !== undefined && cachedProduct.stock !== null) {
-            const currentStock = parseFloat(cachedProduct.stock);
-            const qtyUsed = parseFloat(item.quantity || 1);
-            const newStock = Math.max(0, currentStock - qtyUsed);
-            await db.menu_items.update(item.menu_item_id, { stock: newStock });
-            console.log(`[SyncService] Decrement stock of product #${item.menu_item_id}: ${currentStock} -> ${newStock}`);
+        const prodId = item.menu_item_id || item.product_id;
+        if (prodId) {
+          const menuItem = await db.menu_items.get(prodId);
+          if (menuItem && menuItem.current_stock !== null && menuItem.current_stock !== undefined) {
+            const deduction = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (item.quantity || 1);
+            const newStock = Math.max(0, parseFloat(menuItem.current_stock) - deduction);
+            await db.menu_items.update(prodId, { current_stock: newStock });
           }
         }
       }
 
-      console.log(`[SyncService] Saved local offline order #${offlineId}`);
+      console.log(`[SyncService] Offline order ${offlineId} saved locally in queue.`);
       return newOrder;
     } catch (err) {
-      console.error('[SyncService] Error saving offline order:', err);
+      console.error('[SyncService] Failed to save offline order:', err);
       throw err;
     }
   }
 
   /**
-   * Upward Sync: Upload all pending offline orders to the Express server
+   * Sync pending offline orders with the backend server
    */
   static async syncPendingOrders(token) {
-    if (isSyncingInProgress || !token) return { synced: 0, total: 0 };
+    if (isSyncingInProgress) return;
+    if (!token) {
+      token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '';
+    }
+    if (!token) return;
+
     isSyncingInProgress = true;
-
-    let syncedCount = 0;
-    let pendingOrders = [];
+    SyncService.notifyStatusChange();
 
     try {
-      pendingOrders = await db.offline_orders.where('status').equals('pending_sync').toArray();
-    } catch (e) {
-      console.warn('[SyncService] Error fetching offline queue:', e.message);
-      isSyncingInProgress = false;
-      return { synced: 0, total: 0 };
-    }
-
-    if (pendingOrders.length === 0) {
-      isSyncingInProgress = false;
-      return { synced: 0, total: 0 };
-    }
-
-    console.log(`[SyncService] Syncing ${pendingOrders.length} offline orders upward...`);
-
-    for (const item of pendingOrders) {
-      const payload = item.payload;
-      const idempotencyKey = item.idempotency_key || item.offline_id;
-
-      try {
-        const response = await fetch(`${API_BASE_URL}/orders`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({
-            ...payload,
-            idempotency_key: idempotencyKey,
-            offline_id: idempotencyKey
-          })
-        });
-
-        const resData = await response.json().catch(() => ({}));
-
-        if (response.ok || response.status === 201 || response.status === 200) {
-          const serverOrderNumber = resData.orderNumber || resData.order_number || item.offline_id;
-          const serverOrderId = resData.orderId || resData.id || null;
-
-          await db.offline_orders.update(item.offline_id, {
-            status: 'synced',
-            synced_at: new Date().toISOString(),
-            server_order_number: serverOrderNumber,
-            server_order_id: serverOrderId
-          });
-          syncedCount++;
-          console.log(`[SyncService] Order #${item.offline_id} synced -> Server #${serverOrderNumber}`);
-        } else {
-          console.warn(`[SyncService] Sync failed for order #${item.offline_id}:`, resData.error || response.statusText);
-          await db.offline_orders.update(item.offline_id, {
-            retry_count: (item.retry_count || 0) + 1,
-            last_error: resData.error || 'Server error'
-          });
-        }
-      } catch (err) {
-        console.warn(`[SyncService] Network error syncing order #${item.offline_id}:`, err.message);
-        await db.offline_orders.update(item.offline_id, {
-          retry_count: (item.retry_count || 0) + 1,
-          last_error: err.message
-        });
+      const pendingOrders = await db.offline_orders.where('status').equals('pending_sync').toArray();
+      if (!pendingOrders || pendingOrders.length === 0) {
+        isSyncingInProgress = false;
+        SyncService.notifyStatusChange();
+        return;
       }
-    }
 
-    isSyncingInProgress = false;
-    return { synced: syncedCount, total: pendingOrders.length };
+      console.log(`[SyncService] Syncing ${pendingOrders.length} pending offline orders to server...`);
+
+      for (const order of pendingOrders) {
+        try {
+          const res = await apiFetch('/api/orders', {
+            method: 'POST',
+            body: order.payload
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            await db.offline_orders.update(order.offline_id, {
+              status: 'synced',
+              synced_at: new Date().toISOString(),
+              server_order_number: data.unique_order_number || data.orderNumber || data.id
+            });
+            console.log(`[SyncService] Order ${order.offline_id} synced successfully -> Server Order #${data.unique_order_number || data.id}`);
+          } else {
+            const errorData = await res.json().catch(() => ({}));
+            // If duplicate idempotency key detected or already processed
+            if (res.status === 409 || errorData.error?.toLowerCase().includes('duplicate') || errorData.message?.toLowerCase().includes('duplicate')) {
+              await db.offline_orders.update(order.offline_id, {
+                status: 'synced',
+                synced_at: new Date().toISOString(),
+                server_order_number: errorData.orderNumber || order.offline_id
+              });
+              console.log(`[SyncService] Order ${order.offline_id} was already recorded on server (duplicate ack).`);
+            } else {
+              await db.offline_orders.update(order.offline_id, {
+                retry_count: (order.retry_count || 0) + 1
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[SyncService] Failed to sync order', order.offline_id, err.message);
+        }
+      }
+
+      // After syncing orders, refresh catalog in background to reconcile stock
+      SyncService.downloadLatestCatalog(token).catch(() => {});
+    } catch (err) {
+      console.error('[SyncService] Sync pending orders error:', err);
+    } finally {
+      isSyncingInProgress = false;
+      SyncService.notifyStatusChange();
+    }
   }
 
   /**
-   * Fetch local queue status details
+   * Helper to notify registered UI callbacks
    */
-  static async getPendingCount() {
-    return await db.offline_orders.where('status').equals('pending_sync').count();
-  }
-
-  static async getPendingOrders() {
-    return await db.offline_orders.where('status').equals('pending_sync').toArray();
-  }
-
-  static async dismissOrder(offlineId) {
+  static async notifyStatusChange() {
+    if (!currentStatusCallback) return;
     try {
-      await db.offline_orders.update(offlineId, {
-        status: 'dismissed',
-        dismissed_at: new Date().toISOString()
-      });
-      console.log(`[SyncService] Dismissed sync for order #${offlineId}`);
-    } catch (err) {
-      console.error('[SyncService] Error dismissing order:', err);
-    }
-  }
+      const isOnline = await SyncService.checkNetworkHealth();
+      let pendingCount = 0;
+      try {
+        pendingCount = await db.offline_orders.where('status').equals('pending_sync').count();
+      } catch (_) {}
 
-  static async clearAllPending() {
-    try {
-      await db.offline_orders.where('status').equals('pending_sync').modify({
-        status: 'dismissed',
-        dismissed_at: new Date().toISOString()
+      currentStatusCallback({
+        isOnline,
+        pendingCount,
+        isSyncing: isSyncingInProgress
       });
-      console.log('[SyncService] Dismissed all pending orders.');
-    } catch (err) {
-      console.error('[SyncService] Error clearing pending orders:', err);
-    }
+    } catch (_) {}
   }
 
   /**
-   * Start automatic background status checks and upward sync scheduler
+   * Start auto background sync
    */
-  static startAutoSync(token, onStateChange) {
+  static startAutoSync(token, onStatusChange) {
+    currentStatusCallback = onStatusChange;
     if (syncInterval) clearInterval(syncInterval);
 
-    const monitor = async () => {
+    const checkAndSync = async () => {
+      const isOnline = await SyncService.checkNetworkHealth();
+      let pendingCount = 0;
       try {
-        const isOnline = await this.checkNetworkHealth();
-        const pendingCount = await this.getPendingCount();
+        pendingCount = await db.offline_orders.where('status').equals('pending_sync').count();
+      } catch (_) {}
 
-        if (onStateChange) {
-          onStateChange({
-            isOnline,
-            pendingCount,
-            isSyncing: isSyncingInProgress
-          });
-        }
+      if (currentStatusCallback) {
+        currentStatusCallback({
+          isOnline,
+          pendingCount,
+          isSyncing: isSyncingInProgress
+        });
+      }
 
-        if (isOnline && pendingCount > 0 && !isSyncingInProgress && token) {
-          if (onStateChange) onStateChange({ isOnline, pendingCount, isSyncing: true });
-          await this.syncPendingOrders(token);
-          const updatedCount = await this.getPendingCount();
-          if (onStateChange) onStateChange({ isOnline, pendingCount: updatedCount, isSyncing: false });
-        }
-      } catch (err) {
-        console.warn('[SyncService] Background sync task warning:', err.message);
+      if (isOnline && pendingCount > 0 && !isSyncingInProgress) {
+        await SyncService.syncPendingOrders(token);
       }
     };
 
-    monitor();
-    syncInterval = setInterval(monitor, 10000); // Poll connection every 10 seconds
+    // Attach native online/offline listeners once
+    if (!onlineStatusListenersAttached && typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        console.log('[SyncService] Internet connection restored! Triggering sync...');
+        checkAndSync();
+        SyncService.downloadLatestCatalog(token).catch(() => {});
+      });
+
+      window.addEventListener('offline', () => {
+        console.warn('[SyncService] Device is now OFFLINE.');
+        SyncService.notifyStatusChange();
+      });
+
+      onlineStatusListenersAttached = true;
+    }
+
+    checkAndSync();
+    syncInterval = setInterval(checkAndSync, 10000);
   }
 
   /**
-   * Stop background sync scheduler
+   * Stop auto background sync
    */
   static stopAutoSync() {
     if (syncInterval) {
       clearInterval(syncInterval);
       syncInterval = null;
     }
+    currentStatusCallback = null;
+  }
+
+  /**
+   * Manual Sync Trigger for UI buttons
+   */
+  static async triggerManualSync(token) {
+    await SyncService.downloadLatestCatalog(token);
+    await SyncService.syncPendingOrders(token);
+    await SyncService.notifyStatusChange();
   }
 }
+

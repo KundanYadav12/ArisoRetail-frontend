@@ -15,6 +15,8 @@ import SuperAdminPanel from './pages/SuperAdminPanel';
 import SuperBillItems from './pages/SuperBillItems';
 import SuperBillBilling from './pages/SuperBillBilling';
 import ChangePasswordModal from './components/ChangePasswordModal';
+import LanguageSelectorModal from './components/LanguageSelectorModal';
+import KeyboardHelpModal from './components/KeyboardHelpModal';
 import { NotificationProvider } from './context/NotificationContext';
 import { apiFetch, resolveImageUrl } from './utils/api';
 import { applyThemeToCssVariables } from './utils/themePresets';
@@ -28,6 +30,8 @@ export default function App() {
   const [currentView, setCurrentView] = useState('pos'); // pos, cashier, admin, superadmin
   const [themeMode, setThemeMode] = useState('light');
   const [posFocusMode, setPosFocusMode] = useState(() => localStorage.getItem('pos_focus_mode') === 'true');
+  const [languageModalVisible, setLanguageModalVisible] = useState(false);
+  const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
 
   // Shared POS / SuperBill Cart & Checkout States
   const [cart, setCart] = useState([]);
@@ -76,17 +80,23 @@ export default function App() {
           setCurrentView('superadmin');
         }
 
-        // Validate session with backend server
-        const res = await apiFetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.user) {
-            setUser(data.user);
-            localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
+        // Validate session with backend server if online
+        try {
+          const res = await apiFetch('/api/auth/me');
+          if (res && res.ok) {
+            const data = await res.json();
+            if (data.user) {
+              setUser(data.user);
+              localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
+            }
+            // Background preload / sync catalog
+            SyncService.downloadLatestCatalog(savedToken).catch(() => {});
+          } else if (res && (res.status === 401 || res.status === 403)) {
+            console.warn('[Session Sync] Token or session invalid after backend deployment. Prompting re-login.');
+            handleLogout();
           }
-        } else if (res.status === 401 || res.status === 403) {
-          console.warn('[Session Sync] Token or session invalid after backend deployment. Prompting re-login.');
-          handleLogout();
+        } catch (netErr) {
+          console.warn('[Session Sync] Offline or server unreachable, keeping cached offline session:', netErr.message);
         }
       } catch (e) {
         console.error('Session sync error:', e);
@@ -261,6 +271,14 @@ export default function App() {
           open={Boolean(user?.must_change_password)}
           onPasswordChanged={(updatedUser) => setUser(updatedUser)}
         />
+        <LanguageSelectorModal
+          isOpen={languageModalVisible}
+          onClose={() => setLanguageModalVisible(false)}
+        />
+        <KeyboardHelpModal
+          isOpen={keyboardHelpVisible}
+          onClose={() => setKeyboardHelpVisible(false)}
+        />
 
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
           {/* Header Bar */}
@@ -422,6 +440,19 @@ export default function App() {
                     )}
                     <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
                     <MenuItem
+                      onClick={() => { setAnchorElNav(null); setLanguageModalVisible(true); }}
+                      sx={{ fontWeight: 500 }}
+                    >
+                      🌐 &nbsp; Language
+                    </MenuItem>
+                    <MenuItem
+                      onClick={() => { setAnchorElNav(null); setKeyboardHelpVisible(true); }}
+                      sx={{ fontWeight: 500 }}
+                    >
+                      ⌨️ &nbsp; Keyboard Shortcuts
+                    </MenuItem>
+                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
+                    <MenuItem
                       onClick={() => { toggleTheme(); setAnchorElNav(null); }}
                       sx={{ fontWeight: 500 }}
                     >
@@ -499,6 +530,8 @@ export default function App() {
                 receiptSettings={receiptSettings}
                 setReceiptSettings={setReceiptSettings}
                 onNavigate={setCurrentView}
+                netStatus={netStatus}
+                onManualSync={() => SyncService.triggerManualSync(token)}
               />
             )}
             {currentView === 'superbill_billing' && user?.feature_superbill && (

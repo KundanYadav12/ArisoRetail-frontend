@@ -1,17 +1,23 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useKeyboardShortcuts } from '../utils/useKeyboardShortcuts';
 import WeightInputModal from '../components/WeightInputModal';
+import CartQtyEditModal from '../components/CartQtyEditModal';
 import KeyboardHelpModal from '../components/KeyboardHelpModal';
 import LanguageSelectorModal from '../components/LanguageSelectorModal';
 import WebBarcodeScannerModal from '../components/WebBarcodeScannerModal';
+import { Printer, CheckCircle2, AlertTriangle, RotateCw, X } from 'lucide-react';
 import { useLanguage } from '../locales/LanguageContext';
 import {
   apiFetch,
   fetchMobileMenu,
   fetchMobileCategories,
+  fetchReceiptSettings,
+  fetchPrinters,
   createOrder,
   resolveImageUrl
 } from '../utils/api';
+import { db } from '../utils/offlineDb';
+import { SyncService } from '../utils/syncService';
 import {
   generateLocalHtmlReceipt,
   generateLocalEscPosReceipt,
@@ -35,7 +41,9 @@ export default function POS({
   setTaxType: sharedSetTaxType,
   receiptSettings: sharedReceiptSettings,
   setReceiptSettings: sharedSetReceiptSettings,
-  onNavigate
+  onNavigate,
+  netStatus: propNetStatus,
+  onManualSync: propManualSync
 }) {
   const { t, language, supportedLanguages } = useLanguage();
 
@@ -152,6 +160,9 @@ export default function POS({
   const [weightModalVisible, setWeightModalVisible] = useState(false);
   const [selectedWeightProduct, setSelectedWeightProduct] = useState(null);
   const [editingCartIndex, setEditingCartIndex] = useState(null);
+  const [cartQtyModalOpen, setCartQtyModalOpen] = useState(false);
+  const [editingCartItem, setEditingCartItem] = useState(null);
+  const cartTableBodyRef = useRef(null);
 
   const [mobileCartSheetOpen, setMobileCartSheetOpen] = useState(false);
   const [mobileSidebarDrawerOpen, setMobileSidebarDrawerOpen] = useState(false);
@@ -170,6 +181,16 @@ export default function POS({
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState(false);
+
+  // Auto-scroll selected cart row into view when selectedCartIndex changes
+  useEffect(() => {
+    if (cartTableBodyRef.current && selectedCartIndex >= 0) {
+      const row = cartTableBodyRef.current.children[selectedCartIndex];
+      if (row && typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  }, [selectedCartIndex]);
 
   // AudioContext sound helpers for barcode feedback
   const audioCtxRef = useRef(null);
@@ -198,8 +219,6 @@ export default function POS({
   };
   const playBarcodeSuccess = () => { playBeep(1200, 60, 'square', 0.3, 0); playBeep(1600, 100, 'sine', 0.3, 0.07); };
   const playBarcodeError = () => { playBeep(300, 120, 'sawtooth', 0.3, 0); playBeep(220, 120, 'sawtooth', 0.3, 0.14); };
-  const [checkoutSuccessOpen, setCheckoutSuccessOpen] = useState(false);
-  const [checkoutSuccessInfo, setCheckoutSuccessInfo] = useState({ invoiceNo: '', orderId: '', total: 0 });
 
   // POS Quick Edit States
   const [quickEditProduct, setQuickEditProduct] = useState(null);
@@ -226,72 +245,243 @@ export default function POS({
   const [printersList, setPrintersList] = useState([]);
   const [printStatusToast, setPrintStatusToast] = useState(null);
 
+  // Live Network & Auto-Sync State Tracker
+  const [netStatus, setNetStatus] = useState(propNetStatus || {
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    pendingCount: 0,
+    isSyncing: false
+  });
+
+  useEffect(() => {
+    if (propNetStatus) {
+      setNetStatus(propNetStatus);
+    }
+  }, [propNetStatus]);
+
+  useEffect(() => {
+    if (token && !propNetStatus) {
+      SyncService.startAutoSync(token, (st) => setNetStatus(st));
+    }
+  }, [token, propNetStatus]);
+
   // Search input DOM ref for automatic focus management
   const searchInputRef = useRef(null);
+
+  // Resizable Sale Cart Panel Width state with localStorage persistence
+  const [cartPanelWidth, setCartPanelWidth] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ARISO_POS_CART_WIDTH');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 280 && parsed <= 900) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
+    return 420;
+  });
+
+  const [isResizingCart, setIsResizingCart] = useState(false);
+  const isResizingRef = useRef(false);
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(420);
+
+  const startCartResize = useCallback((e) => {
+    e.preventDefault();
+    isResizingRef.current = true;
+    setIsResizingCart(true);
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    startXRef.current = clientX;
+    startWidthRef.current = cartPanelWidth;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+  }, [cartPanelWidth]);
+
+  useEffect(() => {
+    const handleMove = (e) => {
+      if (!isResizingRef.current) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const delta = startXRef.current - clientX;
+      const minW = 280;
+      const maxW = Math.max(380, Math.min(850, window.innerWidth - 320));
+      const newWidth = Math.min(maxW, Math.max(minW, startWidthRef.current + delta));
+      setCartPanelWidth(newWidth);
+    };
+
+    const handleEnd = () => {
+      if (isResizingRef.current) {
+        isResizingRef.current = false;
+        setIsResizingCart(false);
+        document.body.style.userSelect = '';
+        document.body.style.cursor = '';
+        setCartPanelWidth((currentW) => {
+          try {
+            localStorage.setItem('ARISO_POS_CART_WIDTH', currentW.toString());
+          } catch (e) {}
+          return currentW;
+        });
+      }
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+    window.addEventListener('touchcancel', handleEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, []);
+
+  const autoFocusSearch = useCallback(() => {
+    const triggerFocus = () => {
+      if (searchInputRef.current) {
+        // Do not steal focus if user is actively interacting with another input/textarea
+        const activeTag = document.activeElement?.tagName?.toLowerCase();
+        if (activeTag !== 'input' && activeTag !== 'textarea') {
+          searchInputRef.current.focus();
+        } else if (document.activeElement === searchInputRef.current) {
+          // Already active
+        } else if (document.activeElement?.classList?.contains('pos-search-input')) {
+          searchInputRef.current.focus();
+        }
+      }
+    };
+
+    // Staggered multi-stage ticks to ensure focus lands after React render cycles & DOM attachment
+    requestAnimationFrame(triggerFocus);
+    setTimeout(triggerFocus, 40);
+    setTimeout(triggerFocus, 150);
+    setTimeout(triggerFocus, 350);
+    setTimeout(triggerFocus, 600);
+  }, []);
 
   useEffect(() => {
     loadData();
     autoFocusSearch();
 
+    const handleWindowFocus = () => {
+      autoFocusSearch();
+    };
+
+    window.addEventListener('focus', handleWindowFocus);
+
     if (typeof window !== 'undefined' && window.electron?.onGatewayJobStatus) {
       window.electron.onGatewayJobStatus((data) => {
         if (data.status === 'SUCCESS') {
-          setPrintStatusToast({ type: 'success', message: `🖨️ Gateway: ${data.title} printed successfully!` });
+          setPrintStatusToast({ type: 'success', message: `Gateway: ${data.title} printed successfully!` });
           setTimeout(() => setPrintStatusToast(null), 4000);
         } else if (data.status === 'FAILED') {
-          setPrintStatusToast({ type: 'error', message: `⚠️ Gateway Print Failed: ${data.title} (${data.error || 'Timeout'})` });
+          setPrintStatusToast({ type: 'error', message: `Gateway Print Failed: ${data.title} (${data.error || 'Timeout'})` });
         }
       });
     }
-  }, [token]);
 
-  const autoFocusSearch = () => {
-    setTimeout(() => {
-      if (searchInputRef.current) {
-        searchInputRef.current.focus();
-      }
-    }, 150);
-  };
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [token, autoFocusSearch]);
 
   const loadData = async () => {
-    setLoading(true);
+    // 1. Instant Local Offline Load from Dexie IndexedDB (< 50ms)
     try {
-      const [cats, menu, settingsRes] = await Promise.all([
+      const [localCats, localItems, localReceipt, localPrinters] = await Promise.all([
+        db.categories.toArray().catch(() => []),
+        db.menu_items.toArray().catch(() => []),
+        db.settings.get('receipt_settings').catch(() => null),
+        db.printers.toArray().catch(() => [])
+      ]);
+
+      if (localCats && localCats.length > 0) setCategories(localCats);
+      if (localItems && localItems.length > 0) setMenuItems(localItems);
+      if (localReceipt?.value) setReceiptSettings(localReceipt.value);
+      if (localPrinters && localPrinters.length > 0) setPrintersList(localPrinters);
+
+      // If cached data is available, show the POS UI immediately without waiting
+      if ((localCats && localCats.length > 0) || (localItems && localItems.length > 0)) {
+        setLoading(false);
+      }
+    } catch (e) {
+      console.warn('[POS] IndexedDB instant load:', e);
+    }
+
+    // 2. Background Stale-While-Revalidate if Online
+    try {
+      const [cats, menu, receiptData, prnData] = await Promise.allSettled([
         fetchMobileCategories(token),
         fetchMobileMenu(token),
-        apiFetch('/api/settings/receipt')
+        fetchReceiptSettings(token),
+        fetchPrinters(token)
       ]);
-      const catList = Array.isArray(cats) ? cats : (cats?.categories || []);
-      const itemList = Array.isArray(menu) ? menu : (menu?.items || []);
-      setCategories(catList);
-      setMenuItems(itemList);
-      setSelectedCategory(null);
-      if (settingsRes.ok) {
-        setReceiptSettings(await settingsRes.json());
+
+      if (cats.status === 'fulfilled' && cats.value) {
+        const catList = Array.isArray(cats.value) ? cats.value : (cats.value?.categories || []);
+        if (catList.length > 0) setCategories(catList);
       }
 
-      // Load printers list for routing
-      try {
-        const prnRes = await apiFetch('/api/printers');
-        if (prnRes.ok) {
-          const prnData = await prnRes.json();
-          setPrintersList(Array.isArray(prnData) ? prnData : []);
-        } else {
-          const { db } = await import('../utils/offlineDb');
-          if (db.printers) {
-            const cachedPrn = await db.printers.toArray();
-            setPrintersList(cachedPrn);
+      if (menu.status === 'fulfilled' && menu.value) {
+        const itemList = Array.isArray(menu.value) ? menu.value : (menu.value?.items || []);
+        if (itemList.length > 0) setMenuItems(itemList);
+      }
+
+      if (receiptData.status === 'fulfilled' && receiptData.value) {
+        setReceiptSettings(receiptData.value);
+      }
+
+      let loadedPrns = [];
+      if (prnData.status === 'fulfilled' && Array.isArray(prnData.value) && prnData.value.length > 0) {
+        loadedPrns = prnData.value;
+      } else {
+        loadedPrns = await db.printers.toArray().catch(() => []);
+      }
+
+      // Auto-detect Windows physical printers if none configured
+      if (loadedPrns.length === 0 && window.electron && window.electron.getPrinters) {
+        try {
+          const sysList = await window.electron.getPrinters();
+          if (Array.isArray(sysList) && sysList.length > 0) {
+            const virtualKeywords = ['microsoft print to pdf', 'onenote', 'xps', 'fax', 'pdf', 'nul:'];
+
+            const physicalPrinters = sysList.filter(p => {
+              const n = (p.name || '').toLowerCase();
+              const port = (p.portName || '').toLowerCase();
+              const drv = (p.driverName || '').toLowerCase();
+              const isVirtual = virtualKeywords.some(v => n.includes(v) || port.includes(v) || drv.includes(v));
+              return !isVirtual && !p.workOffline;
+            });
+
+            const bestSys = physicalPrinters.find(p => p.isDefault) ||
+                            physicalPrinters[0] ||
+                            sysList.find(p => p.isDefault) ||
+                            sysList[0];
+
+            if (bestSys && bestSys.name) {
+              loadedPrns = [{
+                id: 'sys-default',
+                name: bestSys.name,
+                type: 'usb',
+                role: 'both',
+                paper_width: 80,
+                is_default_receipt: 1,
+                is_default_kot: 1
+              }];
+            }
           }
-        }
-      } catch (pe) {
-        const { db } = await import('../utils/offlineDb');
-        if (db.printers) {
-          const cachedPrn = await db.printers.toArray();
-          setPrintersList(cachedPrn);
+        } catch (sysErr) {
+          console.warn('[POS] Auto-detected printer query failed:', sysErr);
         }
       }
+
+      setPrintersList(loadedPrns);
     } catch (err) {
-      console.warn('[Desktop POS] Error loading data:', err.message);
+      console.warn('[Desktop POS] Error during online background refresh:', err.message);
     } finally {
       setLoading(false);
     }
@@ -325,17 +515,64 @@ export default function POS({
     return ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(u);
   };
 
+  // Enter Key - Quantity Popup Setting Resolver (Default: ON)
+  const isEnterKeyQtyPopupEnabled = receiptSettings?.enter_key_qty_popup !== undefined
+    ? (Number(receiptSettings.enter_key_qty_popup) === 1 || receiptSettings.enter_key_qty_popup === true || receiptSettings.enter_key_qty_popup === '1')
+    : true;
+
+  // Dedicated Clear All Items from Cart Handler (Reserved for Esc key & Clear Button)
+  const handleClearCart = useCallback(() => {
+    setCart([]);
+    setSelectedCartIndex(0);
+    setDiscountValue('0');
+    setCustomerName('');
+    setCustomerPhone('');
+    setCustomerAddress('');
+    setCashReceived('');
+    setCheckoutVisible(false);
+    setWeightModalVisible(false);
+    setCartQtyModalOpen(false);
+    setEditingCartItem(null);
+    setEditingCartIndex(null);
+    setKeyboardHelpVisible(false);
+    setLanguageModalVisible(false);
+    setQuickEditProduct(null);
+    setSearchQuery('');
+    autoFocusSearch();
+  }, [setCart, setDiscountValue]);
+
   // Product Selection & Cart Actions
-  const handleSelectProduct = (product) => {
+  const handleSelectProduct = (product, fromEnterKey = false) => {
     if (!product) return;
     if (isProductWeightBased(product)) {
       setSelectedWeightProduct(product);
       setEditingCartIndex(null);
       setWeightModalVisible(true);
     } else {
-      addPieceItemToCart(product);
-      setSearchQuery('');
-      autoFocusSearch();
+      if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
+        // Open quantity popup for the selected/scanned item
+        const existingIdx = cart.findIndex(
+          (item) => item.product_id === (product.id || product.menu_item_id) && !item.is_weight_based
+        );
+        if (existingIdx > -1) {
+          setSelectedCartIndex(existingIdx);
+          setEditingCartIndex(existingIdx);
+          setEditingCartItem(cart[existingIdx]);
+        } else {
+          setSelectedCartIndex(cart.length);
+          setEditingCartIndex(null);
+          setEditingCartItem({
+            ...product,
+            product_id: product.id || product.menu_item_id,
+            quantity: 1
+          });
+        }
+        setCartQtyModalOpen(true);
+      } else {
+        addPieceItemToCart(product);
+        setSearchQuery('');
+        autoFocusSearch();
+      }
     }
   };
 
@@ -362,6 +599,8 @@ export default function POS({
           {
             product_id: product.id || product.menu_item_id,
             name: product.name,
+            sku: product.sku || '',
+            barcode: product.barcode || '',
             price: price,
             unit_price: price,
             quantity: 1,
@@ -400,6 +639,8 @@ export default function POS({
         {
           product_id: product.id || product.menu_item_id,
           name: product.name,
+          sku: product.sku || '',
+          barcode: product.barcode || '',
           price: pricePerBaseUnit,
           unit_price: pricePerBaseUnit,
           base_unit_price: pricePerBaseUnit,
@@ -423,31 +664,126 @@ export default function POS({
     autoFocusSearch();
   };
 
-  // Cart Controls
+  // Cart Controls - Handles saving quantity for existing or new items
+  const handleSaveCartQty = (newQty) => {
+    if (editingCartIndex !== null && editingCartIndex >= 0 && editingCartIndex < cart.length) {
+      setCart((prevCart) => {
+        const updated = [...prevCart];
+        const item = updated[editingCartIndex];
+        const unitPrice = parseFloat(item.price || item.unit_price || 0);
+        updated[editingCartIndex] = {
+          ...item,
+          quantity: newQty,
+          total_price: (newQty * unitPrice).toFixed(2)
+        };
+        return updated;
+      });
+    } else if (editingCartItem) {
+      const product = editingCartItem;
+      const price = parseFloat(product.price || product.selling_price || product.unit_price || 0);
+      const prodId = product.id || product.menu_item_id || product.product_id;
+
+      setCart((prevCart) => {
+        const existingIdx = prevCart.findIndex(
+          (item) => item.product_id === prodId && !item.is_weight_based
+        );
+
+        if (existingIdx > -1) {
+          const updated = [...prevCart];
+          const item = updated[existingIdx];
+          updated[existingIdx] = {
+            ...item,
+            quantity: newQty,
+            total_price: (newQty * price).toFixed(2)
+          };
+          setSelectedCartIndex(existingIdx);
+          return updated;
+        } else {
+          const newItem = {
+            product_id: prodId,
+            name: product.name,
+            sku: product.sku || '',
+            barcode: product.barcode || '',
+            price: price,
+            unit_price: price,
+            quantity: newQty,
+            unit: product.base_unit || product.unit || 'pcs',
+            is_weight_based: false,
+            total_price: (newQty * price).toFixed(2),
+            gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
+            notes: ''
+          };
+          const nextCart = [...prevCart, newItem];
+          setSelectedCartIndex(nextCart.length - 1);
+          return nextCart;
+        }
+      });
+    }
+    setCartQtyModalOpen(false);
+    setEditingCartItem(null);
+    setEditingCartIndex(null);
+    setSearchQuery('');
+    autoFocusSearch();
+  };
+
+  const openCartItemEdit = (index) => {
+    const idx = index !== undefined && index !== null ? index : selectedCartIndex;
+    const item = cart[idx];
+    if (!item) return;
+    setSelectedCartIndex(idx);
+    setEditingCartIndex(idx);
+    if (item.is_weight_based) {
+      setSelectedWeightProduct({
+        id: item.product_id,
+        name: item.name,
+        price: item.base_unit_price || item.price,
+        selling_price: item.base_unit_price || item.price,
+        unit: item.weight_unit || item.unit || 'kg',
+        base_unit: item.weight_unit || item.unit || 'kg',
+        is_weight_based: true,
+        gst_rate: item.gst_rate
+      });
+      setWeightModalVisible(true);
+    } else {
+      setEditingCartItem(item);
+      setCartQtyModalOpen(true);
+    }
+  };
+
   const updateCartQty = (index, delta) => {
     setCart((prevCart) => {
-      const updated = [...prevCart];
-      const item = updated[index];
-      if (item.is_weight_based) return prevCart;
+      if (!prevCart || index < 0 || index >= prevCart.length) return prevCart;
+      const item = prevCart[index];
+      if (!item || item.is_weight_based) return prevCart;
 
-      const newQty = item.quantity + delta;
+      const currentQty = parseInt(item.quantity, 10) || 1;
+      const newQty = currentQty + delta;
+      const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || item.selling_price || 0));
+
       if (newQty <= 0) {
-        return updated.filter((_, i) => i !== index);
+        const nextCart = prevCart.filter((_, i) => i !== index);
+        const nextIdx = Math.max(0, Math.min(index, nextCart.length - 1));
+        setSelectedCartIndex(nextIdx);
+        return nextCart;
       }
+
+      const updated = [...prevCart];
       updated[index] = {
         ...item,
         quantity: newQty,
-        total_price: (newQty * parseFloat(item.price)).toFixed(2)
+        total_price: (newQty * unitPrice).toFixed(2)
       };
       return updated;
     });
   };
 
   const removeCartItem = (index) => {
-    setCart((prevCart) => prevCart.filter((_, i) => i !== index));
-    if (selectedCartIndex >= cart.length - 1 && selectedCartIndex > 0) {
-      setSelectedCartIndex(selectedCartIndex - 1);
-    }
+    setCart((prevCart) => {
+      const nextCart = prevCart.filter((_, i) => i !== index);
+      const nextIdx = Math.max(0, Math.min(index, nextCart.length - 1));
+      setSelectedCartIndex(nextIdx);
+      return nextCart;
+    });
   };
 
   // Global USB Barcode Scanner Keyboard Emulation Interceptor
@@ -485,7 +821,7 @@ export default function POS({
           );
 
           if (exactMatch) {
-            handleSelectProduct(exactMatch);
+            handleSelectProduct(exactMatch, true);
             playBarcodeSuccess();
           } else {
             playBarcodeError();
@@ -511,7 +847,7 @@ export default function POS({
     };
   }, [menuItems, handleSelectProduct]);
 
-  // USB Barcode Scanner Enter Submission
+  // USB Barcode Scanner & Search Input Enter Submission
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     if (!queryLower) return;
@@ -521,9 +857,9 @@ export default function POS({
     );
 
     if (exactMatch) {
-      handleSelectProduct(exactMatch);
+      handleSelectProduct(exactMatch, true);
     } else if (filteredProducts.length > 0) {
-      handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0]);
+      handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0], true);
     }
   };
 
@@ -535,7 +871,7 @@ export default function POS({
       (p) => (p.barcode || '').toLowerCase() === clean || (p.sku || '').toLowerCase() === clean
     );
     if (matched) {
-      handleSelectProduct(matched);
+      handleSelectProduct(matched, true);
       playBarcodeSuccess();
       return { success: true, message: `Added ${matched.name}` };
     }
@@ -676,30 +1012,19 @@ export default function POS({
 
   const numericCashReceived = parseFloat(cashReceived || '0');
   const changeToReturn = Math.max(0, numericCashReceived - grandTotal);
-  const totalCartCount = cart.reduce((acc, item) => acc + (item.is_weight_based ? 1 : item.quantity), 0);
+  const totalCartCount = cart.reduce((acc, item) => acc + (item.is_weight_based ? 1 : (parseInt(item.quantity, 10) || 1)), 0);
 
   // Complete Sale & Execute Configured Print Stage Workflow
   const handleCompleteSale = async (overridePaymentMode = null, overrideWorkflow = null) => {
     if (submittingSale) return; // Prevent duplicate clicks/re-entrancy
     if (cart.length === 0) {
-      alert('Cart is empty. Add products before completing sale.');
       return;
     }
 
-    const effectivePaymentMode = overridePaymentMode || paymentMode;
-    if (!effectivePaymentMode) {
-      if (!checkoutVisible) {
-        setCashReceived(grandTotal.toFixed(2));
-        setCheckoutVisible(true);
-        return;
-      }
-      alert('Please select a payment method (Cash, UPI, Card, or Due).');
-      return;
-    }
-
-    if (effectivePaymentMode === 'cash' && numericCashReceived < grandTotal) {
-      alert(`Amount received (₹${numericCashReceived.toFixed(2)}) is less than total bill (₹${grandTotal.toFixed(2)}).`);
-      return;
+    const effectivePaymentMode = overridePaymentMode || paymentMode || 'cash';
+    let effectiveCashReceived = numericCashReceived;
+    if (effectivePaymentMode === 'cash' && (effectiveCashReceived <= 0 || effectiveCashReceived < grandTotal)) {
+      effectiveCashReceived = grandTotal;
     }
 
     setPaymentMode(effectivePaymentMode);
@@ -733,23 +1058,32 @@ export default function POS({
     };
 
     try {
-      // Step 1: Save Sale Order to Database
+      // Step 1: Save Sale Order to Database or Offline Queue
       const orderRes = await createOrder(token, orderPayload);
       const invoiceNo = orderRes?.unique_order_number || orderRes?.orderNumber || orderRes?.id || `RET-${Date.now().toString().slice(-6)}`;
 
-      // Step 2: Determine and Execute Print Stage Workflow
-      const workflowAction = overrideWorkflow || receiptSettings?.print_stage2_mode || 'print_receipt_only';
-      await executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartWithTax, workflowAction);
-
-      // Step 3: Show success modal
-      setCheckoutSuccessInfo({
-        invoiceNo,
-        orderId: orderRes?.id || orderRes?.orderId || '',
-        total: grandTotal
+      // Update local product stock in React state immediately
+      setMenuItems((prevItems) => {
+        return prevItems.map((prod) => {
+          const matchedItem = cartWithTax.find(c => (c.product_id || c.id || c.menu_item_id) === (prod.id || prod.menu_item_id));
+          if (matchedItem && prod.current_stock !== null && prod.current_stock !== undefined) {
+            const deduction = matchedItem.is_weight_based ? (parseFloat(matchedItem.item_weight) || 1) : (matchedItem.quantity || 1);
+            const newStock = Math.max(0, parseFloat(prod.current_stock) - deduction);
+            return { ...prod, current_stock: newStock };
+          }
+          return prod;
+        });
       });
-      setCheckoutSuccessOpen(true);
 
-      // Step 4: Clear Cart & Reset UI for next sale
+      // Step 2: Determine and Execute Print Stage Workflow (non-blocking)
+      const workflowAction = overrideWorkflow || receiptSettings?.print_stage2_mode || 'print_receipt_only';
+      try {
+        await executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartWithTax, workflowAction);
+      } catch (printErr) {
+        console.error('[Print Workflow Warning]', printErr);
+      }
+
+      // Step 3: Clear Cart & Reset UI for next sale
       setCart([]);
       setDiscountValue('0');
       setCustomerName('');
@@ -759,14 +1093,17 @@ export default function POS({
       setCashReceived('');
       setActiveMobileTab('catalog');
     } catch (err) {
-      alert('Error completing sale: ' + err.message);
+      console.error('[Complete Sale Error]', err);
+      alert('Error completing sale: ' + (err.message || 'Unknown error'));
     } finally {
       setSubmittingSale(false);
+      autoFocusSearch();
     }
   };
 
   const executePrintWorkflow = async (invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction) => {
-    if (workflowAction === 'save_only') {
+    const action = (workflowAction || 'print_receipt_only').toLowerCase();
+    if (action === 'save_only') {
       return;
     }
 
@@ -792,10 +1129,10 @@ export default function POS({
                           printersList.find(p => p.role === 'kitchen' || p.role === 'both') ||
                           defaultReceiptPrn || null;
 
-    const shouldPrintReceipt = workflowAction === 'print_receipt_only' || workflowAction === 'print_kot_receipt';
-    const shouldPrintKot = workflowAction === 'print_kot_only' || workflowAction === 'print_kot_receipt';
+    const shouldPrintReceipt = action !== 'print_kot_only';
+    const shouldPrintKot = action === 'print_kot_only' || action === 'print_kot_receipt';
 
-    setPrintStatusToast({ type: 'printing', message: '🖨️ Printing thermal receipt...' });
+    setPrintStatusToast({ type: 'printing', message: 'Printing thermal receipt...' });
 
     let printErrors = [];
 
@@ -810,15 +1147,23 @@ export default function POS({
               const base64Payload = safeUtf8ToBase64(rawEscPos);
               await window.electron.printLanRaw(defaultReceiptPrn.ip_address, defaultReceiptPrn.port || 9100, base64Payload);
             } catch (lanErr) {
-              console.warn('[POS Receipt LAN Failover] LAN socket failed, attempting system spooler silent fallback...', lanErr.message);
-              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
-              const targetPrinterName = defaultReceiptPrn?.name || receiptSettings?.default_printer_name || '';
-              await window.electron.printSystemSilent(htmlReceipt, targetPrinterName);
+              console.warn('[POS Receipt LAN Failover] LAN socket failed, attempting Windows Spooler raw fallback...', lanErr.message);
+              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+              await window.electron.printWindowsRaw(defaultReceiptPrn?.name || '', base64Payload);
             }
           } else {
-            const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
             const targetPrinterName = defaultReceiptPrn?.name || receiptSettings?.default_printer_name || '';
-            await window.electron.printSystemSilent(htmlReceipt, targetPrinterName);
+            const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+            const base64Payload = safeUtf8ToBase64(rawEscPos);
+            try {
+              // Primary method for USB Thermal Receipt Printers: Direct RAW ESC/POS Spooling with Hardware Verification
+              await window.electron.printWindowsRaw(targetPrinterName, base64Payload);
+            } catch (rawErr) {
+              console.warn('[POS USB RAW Print Failover] RAW ESC/POS spooling failed, falling back to silent HTML rendering...', rawErr?.message);
+              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+              await window.electron.printSystemSilent(htmlReceipt, targetPrinterName);
+            }
           }
         } else {
           // Browser Web Fallback
@@ -849,15 +1194,23 @@ export default function POS({
               const base64Payload = safeUtf8ToBase64(rawEscPos);
               await window.electron.printLanRaw(defaultKotPrn.ip_address, defaultKotPrn.port || 9100, base64Payload);
             } catch (lanKotErr) {
-              console.warn('[POS KOT LAN Failover] LAN socket failed, attempting system spooler silent fallback...', lanKotErr.message);
-              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
-              const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
-              await window.electron.printSystemSilent(htmlKot, targetPrinterName);
+              console.warn('[POS KOT LAN Failover] LAN socket failed, attempting Windows Spooler raw fallback...', lanKotErr.message);
+              const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+              await window.electron.printWindowsRaw(defaultKotPrn?.name || '', base64Payload);
             }
           } else {
-            const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
             const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
-            await window.electron.printSystemSilent(htmlKot, targetPrinterName);
+            const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
+            const base64Payload = safeUtf8ToBase64(rawEscPos);
+            try {
+              // Primary method for USB Thermal KOT Printers: Direct RAW ESC/POS Spooling with Hardware Verification
+              await window.electron.printWindowsRaw(targetPrinterName, base64Payload);
+            } catch (rawErr) {
+              console.warn('[POS KOT USB RAW Print Failover] RAW ESC/POS spooling failed, falling back to silent HTML rendering...', rawErr?.message);
+              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
+              await window.electron.printSystemSilent(htmlKot, targetPrinterName);
+            }
           }
         }
       } catch (kotErr) {
@@ -869,17 +1222,25 @@ export default function POS({
     if (printErrors.length > 0) {
       setPrintStatusToast({
         type: 'error',
-        message: `⚠️ Printing Issue: ${printErrors.join(' | ')}`,
+        message: `Printing Issue: ${printErrors.join(' | ')}`,
         retryFn: () => executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction)
       });
     } else {
       setPrintStatusToast({
         type: 'success',
-        message: `✅ Printed successfully (${shouldPrintReceipt && shouldPrintKot ? 'Receipt + KOT' : shouldPrintReceipt ? 'Receipt' : 'KOT'})`
+        message: `Printed successfully (${shouldPrintReceipt && shouldPrintKot ? 'Receipt + KOT' : shouldPrintReceipt ? 'Receipt' : 'KOT'})`
       });
       setTimeout(() => setPrintStatusToast(null), 4000);
     }
   };
+
+  const isAnyModalOpen = cartQtyModalOpen ||
+                         weightModalVisible ||
+                         checkoutVisible ||
+                         keyboardHelpVisible ||
+                         languageModalVisible ||
+                         barcodeScannerOpen ||
+                         Boolean(quickEditProduct);
 
   // Keyboard Shortcuts Registration
   useKeyboardShortcuts({
@@ -934,167 +1295,89 @@ export default function POS({
     'F9': (e) => {
       e?.preventDefault();
       if (cart.length > 0 && !submittingSale) {
-        handleCompleteSale('cash');
+        handleCompleteSale('cash', 'print_receipt_only');
+      }
+    },
+    'End': (e) => {
+      e?.preventDefault();
+      if (cart.length > 0 && !submittingSale) {
+        handleCompleteSale('cash', 'print_receipt_only');
       }
     },
     'F10': (e) => {
       e?.preventDefault();
       if (cart.length > 0 && !submittingSale) {
-        handleCompleteSale('upi');
+        handleCompleteSale('upi', 'print_receipt_only');
       }
     },
     'F11': (e) => {
       e?.preventDefault();
       if (cart.length > 0 && !submittingSale) {
-        handleCompleteSale('card');
+        handleCompleteSale('card', 'print_receipt_only');
       }
     },
     'F12': (e) => {
       e?.preventDefault();
       if (cart.length > 0 && !submittingSale) {
-        handleCompleteSale();
+        handleCompleteSale(paymentMode || 'cash', 'print_receipt_only');
+      }
+    },
+    'ArrowDown': (e) => {
+      if (isAnyModalOpen || cart.length === 0) return;
+      if (searchQuery.trim().length > 0) return;
+      e?.preventDefault();
+      setSelectedCartIndex((prev) => Math.min(cart.length - 1, Math.max(0, prev + 1)));
+    },
+    'ArrowUp': (e) => {
+      if (isAnyModalOpen || cart.length === 0) return;
+      if (searchQuery.trim().length > 0) return;
+      e?.preventDefault();
+      setSelectedCartIndex((prev) => Math.max(0, prev - 1));
+    },
+    'Enter': (e) => {
+      if (isAnyModalOpen || cart.length === 0) return;
+      if (searchQuery.trim().length > 0) return;
+      e?.preventDefault();
+      if (selectedCartIndex >= 0 && selectedCartIndex < cart.length) {
+        openCartItemEdit(selectedCartIndex);
       }
     },
     'Esc': (e) => {
-      setCheckoutVisible(false);
-      setWeightModalVisible(false);
-      setKeyboardHelpVisible(false);
-      setLanguageModalVisible(false);
-      autoFocusSearch();
+      e?.preventDefault();
+      handleClearCart();
     },
     'Delete': (e) => {
-      const activeTag = document.activeElement?.tagName;
-      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
-        if (cart.length > 0 && selectedCartIndex < cart.length) {
-          removeCartItem(selectedCartIndex);
-        }
+      if (isAnyModalOpen) return;
+      if (searchQuery.trim().length > 0) return;
+      if (cart.length > 0 && selectedCartIndex >= 0 && selectedCartIndex < cart.length) {
+        e?.preventDefault();
+        removeCartItem(selectedCartIndex);
       }
     },
     '+': (e) => {
-      const activeTag = document.activeElement?.tagName;
-      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
-        if (cart.length > 0) updateCartQty(selectedCartIndex, 1);
+      e?.preventDefault();
+      if (isAnyModalOpen || cart.length === 0) return;
+      if (searchQuery.trim().length > 0) return;
+      if (selectedCartIndex >= 0 && selectedCartIndex < cart.length) {
+        updateCartQty(selectedCartIndex, 1);
       }
     },
     '-': (e) => {
-      const activeTag = document.activeElement?.tagName;
-      if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
-        if (cart.length > 0) updateCartQty(selectedCartIndex, -1);
+      e?.preventDefault();
+      if (isAnyModalOpen || cart.length === 0) return;
+      if (searchQuery.trim().length > 0) return;
+      if (selectedCartIndex >= 0 && selectedCartIndex < cart.length) {
+        updateCartQty(selectedCartIndex, -1);
       }
     },
     '?': (e) => setKeyboardHelpVisible((prev) => !prev),
     'Ctrl+/': (e) => setKeyboardHelpVisible((prev) => !prev),
-  }, [cart, selectedCartIndex, filteredProducts, selectedProductIndex, grandTotal, paymentMode, cashReceived, submittingSale, checkoutVisible]);
+  }, [cart, selectedCartIndex, searchQuery, isAnyModalOpen, filteredProducts, selectedProductIndex, grandTotal, paymentMode, cashReceived, submittingSale, checkoutVisible, handleClearCart]);
 
   const currentLangObj = supportedLanguages.find(l => l.code === language) || supportedLanguages[0];
 
   return (
     <div style={{ ...styles.container, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
-      {/* HEADER */}
-      <header style={{ ...styles.header, backgroundColor: colors.bgHeader, borderColor: colors.borderColor }} className="pos-header">
-        <div style={styles.headerLeft}>
-          {user?.restaurant_logo_url ? (
-            <img
-              src={resolveImageUrl(user.restaurant_logo_url)}
-              alt="Logo"
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '6px',
-                marginRight: '8px',
-                objectFit: 'cover',
-                border: '1px solid',
-                borderColor: colors.borderColor
-              }}
-              onError={(e) => {
-                e.target.style.display = 'none';
-              }}
-            />
-          ) : (
-            <span style={styles.logo}>🛍️</span>
-          )}
-          {(() => {
-            const maxTitleWidth = windowWidth < 600 ? '90px' : windowWidth < 900 ? '140px' : windowWidth < 1200 ? '200px' : '320px';
-            return (
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <h1
-                  style={{
-                    ...styles.brandTitle,
-                    color: colors.textPrimary,
-                    maxWidth: maxTitleWidth,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
-                  }}
-                  className="pos-brand-title"
-                  title={user?.restaurant_name || t('brandName')}
-                >
-                  {user?.restaurant_name || t('brandName')}
-                </h1>
-                <span
-                  style={{
-                    ...styles.storeName,
-                    maxWidth: maxTitleWidth,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    display: 'block'
-                  }}
-                  title={`${t('counterLabel')} • ${t('cashierLabel')}: ${user.name || 'Admin'}`}
-                >
-                  {t('counterLabel')} • {t('cashierLabel')}: {user.name || 'Admin'}
-                </span>
-              </div>
-            );
-          })()}
-        </div>
-
-        <div style={styles.headerRight}>
-          {/* Mobile Tab Switcher Toggle (Catalog / Cart) */}
-          <div style={styles.mobileTabGroup} className="pos-mobile-tab-group">
-            <button
-              style={{
-                ...styles.mobileTabBtn,
-                backgroundColor: activeMobileTab === 'catalog' ? colors.accentOrange : colors.bgInput,
-                color: activeMobileTab === 'catalog' ? '#FFFFFF' : colors.textPrimary
-              }}
-              onClick={() => setActiveMobileTab('catalog')}
-            >
-              📦 Catalog
-            </button>
-            <button
-              style={{
-                ...styles.mobileTabBtn,
-                backgroundColor: activeMobileTab === 'cart' ? colors.accentOrange : colors.bgInput,
-                color: activeMobileTab === 'cart' ? '#FFFFFF' : colors.textPrimary
-              }}
-              onClick={() => setActiveMobileTab('cart')}
-            >
-              🛒 Cart ({totalCartCount})
-            </button>
-          </div>
-
-          {/* Language Switcher Button */}
-          <button
-            style={{
-              ...styles.headerIconBtn,
-              backgroundColor: isDark ? '#334155' : '#F1F5F9',
-              color: colors.textPrimary,
-              borderColor: colors.borderColor
-            }}
-            onClick={() => setLanguageModalVisible(true)}
-            title="Change Language"
-          >
-            🌐 {currentLangObj.nativeName}
-          </button>
-
-
-          <button style={styles.shortcutHelpBtn} onClick={() => setKeyboardHelpVisible(true)}>
-            ⌨️ {t('shortcutsBtn')}
-          </button>
-        </div>
-      </header>
-
       {/* Floating Thermal Print Status Toast / Banner */}
       {printStatusToast && (
         <div style={{
@@ -1110,15 +1393,21 @@ export default function POS({
           boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
           display: 'flex',
           alignItems: 'center',
-          gap: '12px',
+          gap: '10px',
           fontWeight: '700',
           fontSize: '13px'
         }}>
+          {printStatusToast.type === 'printing' && <Printer size={16} />}
+          {printStatusToast.type === 'error' && <AlertTriangle size={16} />}
+          {printStatusToast.type === 'success' && <CheckCircle2 size={16} />}
           <span>{printStatusToast.message}</span>
           {printStatusToast.retryFn && (
             <button
               onClick={printStatusToast.retryFn}
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
                 padding: '6px 12px',
                 borderRadius: '6px',
                 backgroundColor: '#DC2626',
@@ -1129,7 +1418,8 @@ export default function POS({
                 fontSize: '12px'
               }}
             >
-              🔄 Retry Print
+              <RotateCw size={13} />
+              Retry Print
             </button>
           )}
           <button
@@ -1139,11 +1429,14 @@ export default function POS({
               border: 'none',
               color: 'inherit',
               cursor: 'pointer',
-              fontWeight: '900',
-              padding: '0 4px'
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '2px',
+              opacity: 0.75
             }}
           >
-            ✕
+            <X size={15} />
           </button>
         </div>
       )}
@@ -1163,6 +1456,7 @@ export default function POS({
             <span style={styles.searchIcon}>🔍</span>
             <input
               ref={searchInputRef}
+              autoFocus
               style={{ ...styles.searchInput, color: colors.textPrimary }}
               className="pos-search-input"
               type="text"
@@ -1178,8 +1472,58 @@ export default function POS({
             )}
           </form>
 
-          {/* CONTROL BAR: Focus | Sidebar Toggle | Density (Icon | Compact | Standard | Spacious) */}
+          {/* CONTROL BAR: Live Status | Barcode Camera | Focus | Sidebar Toggle | Density */}
           <div style={{ ...styles.controlBar, backgroundColor: colors.bgCard, borderColor: colors.borderColor }} className="pos-control-bar">
+            {/* Network & Offline Sync Status Chip */}
+            <button
+              type="button"
+              className="pos-control-pill"
+              onClick={async () => {
+                if (netStatus.isSyncing) return;
+                setPrintStatusToast({ type: 'printing', message: '🔄 Syncing catalog & pending sales...' });
+                try {
+                  if (propManualSync) {
+                    await propManualSync();
+                  } else {
+                    await SyncService.triggerManualSync(token);
+                  }
+                  await loadData();
+                  setPrintStatusToast({ type: 'success', message: '✅ All sales & items synchronized successfully!' });
+                  setTimeout(() => setPrintStatusToast(null), 3000);
+                } catch (e) {
+                  setPrintStatusToast({ type: 'error', message: '⚠️ Sync: ' + (e.message || 'Offline') });
+                  setTimeout(() => setPrintStatusToast(null), 4000);
+                }
+              }}
+              style={{
+                ...styles.controlPill,
+                backgroundColor: !netStatus.isOnline 
+                  ? (isDark ? '#78350F' : '#FEF3C7') 
+                  : (netStatus.pendingCount > 0 ? (isDark ? '#0C4A6E' : '#E0F2FE') : (isDark ? '#064E3B' : '#ECFDF5')),
+                color: !netStatus.isOnline 
+                  ? (isDark ? '#FDE68A' : '#92400E') 
+                  : (netStatus.pendingCount > 0 ? (isDark ? '#BAE6FD' : '#0369A1') : (isDark ? '#A7F3D0' : '#059669')),
+                borderColor: !netStatus.isOnline 
+                  ? '#F59E0B' 
+                  : (netStatus.pendingCount > 0 ? '#38BDF8' : '#10B981'),
+                fontWeight: '700',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title={netStatus.isOnline ? "Online: Click to sync with server" : "Offline Mode: Sales are queued locally and will auto-sync when online"}
+            >
+              <span>{netStatus.isSyncing ? '🔄' : (!netStatus.isOnline ? '⚡' : '🟢')}</span>
+              <span>
+                {netStatus.isSyncing 
+                  ? 'Syncing...' 
+                  : (!netStatus.isOnline 
+                      ? `Offline (${netStatus.pendingCount} pending)` 
+                      : (netStatus.pendingCount > 0 ? `Sync (${netStatus.pendingCount})` : 'Online'))}
+              </span>
+            </button>
+
             {/* Live Camera Barcode Scanner Button */}
             <button
               type="button"
@@ -1253,7 +1597,15 @@ export default function POS({
           </div>
 
           {/* TOP CATEGORY PILLS RAIL (Visible when categoryLayout === 'horizontal' OR on Mobile) */}
-          <div style={styles.categoryRail} className="pos-category-rail">
+          <div
+            style={styles.categoryRail}
+            className="pos-category-rail"
+            onWheel={(e) => {
+              if (e.deltaY !== 0) {
+                e.currentTarget.scrollLeft += e.deltaY;
+              }
+            }}
+          >
             <button
               style={{
                 ...styles.catBtn,
@@ -1374,26 +1726,46 @@ export default function POS({
                       style={{
                         ...styles.productCard,
                         padding: cardPadding,
-                        borderColor: selectedProductIndex === idx ? colors.accentOrange : colors.borderColor,
+                        borderColor: colors.borderColor,
                         boxShadow: isDark ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.05)',
                         position: 'relative',
                         overflow: 'hidden',
                         cursor: 'pointer',
-                        ...(product.image_url
-                          ? {
-                              backgroundImage: `url(${resolveImageUrl(product.image_url)})`,
-                              backgroundSize: 'cover',
-                              backgroundPosition: 'center',
-                            }
-                          : {
-                              backgroundColor: colors.bgCard,
-                            })
+                        backgroundColor: colors.bgCard,
                       }}
                       onTouchStart={() => handleTouchStart(product)}
                       onTouchEnd={handleTouchEnd}
                       onContextMenu={(e) => handleProductContextMenu(product, e)}
                       onClick={(e) => handleProductClick(product, e)}
                     >
+                      {/* Product Image Tile */}
+                      {product.image_url && (
+                        <img
+                          src={resolveImageUrl(product.image_url)}
+                          alt={product.name}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            zIndex: 1,
+                            pointerEvents: 'none',
+                          }}
+                          onError={(e) => {
+                            const raw = String(product.image_url || '').trim();
+                            const clean = raw.startsWith('/') ? raw.slice(1) : raw;
+                            if (!e.currentTarget.dataset.retried) {
+                              e.currentTarget.dataset.retried = 'true';
+                              e.currentTarget.src = './' + clean;
+                            } else {
+                              e.currentTarget.style.display = 'none';
+                            }
+                          }}
+                        />
+                      )}
+
                       {/* Dark gradient overlay scrim for text legibility, only if image is present */}
                       {product.image_url && (
                         <div
@@ -1404,7 +1776,8 @@ export default function POS({
                             right: 0,
                             bottom: 0,
                             background: 'linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.65) 50%, rgba(0,0,0,0.92) 100%)',
-                            zIndex: 1,
+                            zIndex: 2,
+                            pointerEvents: 'none',
                           }}
                         />
                       )}
@@ -1412,7 +1785,7 @@ export default function POS({
                       {/* Card Content - Z-Indexed above the scrim */}
                       <div
                         style={{
-                          zIndex: 2,
+                          zIndex: 3,
                           display: 'flex',
                           flexDirection: 'column',
                           justifyContent: 'space-between',
@@ -1425,12 +1798,12 @@ export default function POS({
                           <span style={{ ...styles.badge, ...(isWeight ? styles.weightBadge : styles.pieceBadge) }}>
                             {isWeight ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
                           </span>
-                          {product.barcode && (
+                          {(product.barcode || product.sku) && (
                             <span style={{
                               ...styles.barcodeText,
-                              color: product.image_url ? 'rgba(255,255,255,0.7)' : colors.textSecondary
+                              color: product.image_url ? 'rgba(255,255,255,0.85)' : colors.textSecondary
                             }}>
-                              #{product.barcode}
+                              #{product.sku || product.barcode}
                             </span>
                           )}
                         </div>
@@ -1438,20 +1811,22 @@ export default function POS({
                           ...styles.cardTitle,
                           fontSize: titleFontSize,
                           color: product.image_url ? '#FFFFFF' : colors.textPrimary,
-                          textShadow: product.image_url ? '0 1px 3px rgba(0,0,0,0.9)' : 'none'
+                          textShadow: product.image_url ? '0 1px 4px rgba(0,0,0,0.95)' : 'none',
+                          fontWeight: '800'
                         }}>
                           {product.name}
                         </h3>
                         <div style={styles.cardFooter}>
                           <span style={{
                             ...styles.cardPrice,
-                            color: product.image_url ? '#FB923C' : colors.textPrimary
+                            color: product.image_url ? '#FB923C' : '#10B981',
+                            textShadow: product.image_url ? '0 1px 3px rgba(0,0,0,0.9)' : 'none'
                           }}>
                             ₹{price.toFixed(2)}
                           </span>
                           <span style={{
                             ...styles.cardUnit,
-                            color: product.image_url ? 'rgba(255,255,255,0.8)' : colors.textSecondary
+                            color: product.image_url ? 'rgba(255,255,255,0.85)' : colors.textSecondary
                           }}>
                             per {isWeight ? (product.base_unit || product.unit || 'kg') : (product.base_unit || product.unit || 'pcs')}
                           </span>
@@ -1465,20 +1840,59 @@ export default function POS({
           </div>
         </div>
 
+        {/* VISIBLE DRAGGABLE VERTICAL DIVIDER (Between Product Grid and Sale Cart) */}
+        {!focusMode && activeMobileTab === 'catalog' && windowWidth >= 700 && (
+          <div
+            onMouseDown={startCartResize}
+            onTouchStart={startCartResize}
+            title="Drag to resize Product Grid & Sale Cart width"
+            style={{
+              width: '8px',
+              cursor: 'col-resize',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: isResizingCart ? (colors.accentOrange || '#F97316') : colors.borderColor,
+              transition: isResizingCart ? 'none' : 'background-color 0.2s ease',
+              zIndex: 20,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'none',
+            }}
+            className="pos-cart-resize-handle"
+          >
+            {/* Visual centered grab grip pill */}
+            <div
+              style={{
+                width: '4px',
+                height: isResizingCart ? '54px' : '40px',
+                borderRadius: '4px',
+                backgroundColor: isResizingCart ? '#FFFFFF' : (themeMode === 'dark' ? '#94A3B8' : '#64748B'),
+                boxShadow: isResizingCart ? '0 0 10px rgba(249,115,22,0.9)' : '0 1px 3px rgba(0,0,0,0.15)',
+                transition: 'all 0.15s ease'
+              }}
+            />
+          </div>
+        )}
+
         {/* CART SECTION (Visible on desktop unless Focus Mode is active, or when activeMobileTab is 'cart') */}
         <div style={{
           ...styles.cartSection,
+          width: windowWidth >= 700 ? `${cartPanelWidth}px` : '100%',
+          minWidth: windowWidth >= 700 ? `${cartPanelWidth}px` : 'auto',
+          maxWidth: windowWidth >= 700 ? `${cartPanelWidth}px` : '100%',
           backgroundColor: colors.bgCard,
           borderColor: colors.borderColor,
           display: focusMode ? 'none' : (activeMobileTab === 'cart' ? 'flex' : 'flex')
         }} className="pos-cart-panel">
           <div style={styles.cartHeader}>
-            <h2 style={{ ...styles.cartTitle, color: colors.textPrimary }}>🛒 {t('cartTitle')}</h2>
-            <button style={styles.clearCartBtn} onClick={() => setCart([])}>{t('clearCart')}</button>
+            <h2 style={{ ...styles.cartTitle, color: colors.textPrimary }}>🛒 {t('cartTitle')} | Items: {cart.length} | Total Qty: {totalCartCount}</h2>
+            <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
           </div>
 
           {/* CART ITEMS TABLE */}
-          <div style={styles.cartTableContainer}>
+          <div style={styles.cartTableContainer} className="pos-cart-table-container">
             {cart.length === 0 ? (
               <div style={{ ...styles.emptyCart, color: colors.textSecondary }}>
                 <span style={{ fontSize: '36px' }}>🛒</span>
@@ -1496,41 +1910,108 @@ export default function POS({
                     <th style={{ ...styles.th, color: colors.textSecondary }}></th>
                   </tr>
                 </thead>
-                <tbody>
-                  {cart.map((item, idx) => (
-                    <tr
-                      key={idx}
-                      style={{
-                        ...styles.trBody,
-                        borderColor: colors.borderColor,
-                        backgroundColor: selectedCartIndex === idx ? colors.rowHoverBg : 'transparent'
-                      }}
-                      onClick={() => setSelectedCartIndex(idx)}
-                    >
-                      <td style={styles.td}>
-                        <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
-                        <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                          {item.is_weight_based ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
-                        </div>
-                      </td>
-                      <td style={{ ...styles.td, color: colors.textPrimary }}>
-                        {item.is_weight_based ? (
-                          <span>{item.displayWeight || item.item_weight} {item.weight_unit || 'kg'}</span>
-                        ) : (
-                          <div style={styles.qtyBox}>
-                            <button style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }} onClick={() => updateCartQty(idx, -1)}>-</button>
-                            <span style={{ fontWeight: '800', margin: '0 6px' }}>{item.quantity}</span>
-                            <button style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }} onClick={() => updateCartQty(idx, 1)}>+</button>
+                <tbody ref={cartTableBodyRef}>
+                  {cart.map((item, idx) => {
+                    const isSelected = selectedCartIndex === idx;
+                    const itemSku = (item.sku || item.barcode || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.sku || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.barcode || '').trim();
+                    return (
+                      <tr
+                        key={idx}
+                        style={{
+                          ...styles.trBody,
+                          borderColor: colors.borderColor,
+                          backgroundColor: isSelected ? (themeMode === 'dark' ? '#1E3A5F' : '#EFF6FF') : 'transparent',
+                          borderLeft: isSelected ? `4px solid ${colors.accentOrange || '#F97316'}` : '4px solid transparent',
+                          boxShadow: isSelected ? 'inset 0 0 0 1px rgba(249, 115, 22, 0.35)' : 'none',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease, border-left 0.15s ease'
+                        }}
+                        onClick={() => setSelectedCartIndex(idx)}
+                        onDoubleClick={() => openCartItemEdit(idx)}
+                      >
+                        <td style={styles.td}>
+                          <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
+                          {isSelected && itemSku && (
+                            <div style={{
+                              fontSize: '10px',
+                              color: themeMode === 'dark' ? '#94A3B8' : '#64748B',
+                              fontFamily: 'monospace',
+                              fontWeight: '600',
+                              lineHeight: 1.2,
+                              marginTop: '1px'
+                            }}>
+                              #{itemSku}
+                            </div>
+                          )}
+                          <div style={{ fontSize: '11px', color: colors.accentOrange }}>
+                            {item.is_weight_based ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
                           </div>
-                        )}
-                      </td>
-                      <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
-                      <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
-                      <td style={styles.td}>
-                        <button style={styles.deleteBtn} onClick={() => removeCartItem(idx)}>✕</button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td style={{ ...styles.td, color: colors.textPrimary }}>
+                          {item.is_weight_based ? (
+                            <span
+                              style={{
+                                cursor: 'pointer',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                backgroundColor: isSelected ? (themeMode === 'dark' ? '#334155' : '#DBEAFE') : 'transparent'
+                              }}
+                              title="Click or press Enter to edit weight"
+                              onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                            >
+                              {item.displayWeight || item.item_weight} {item.weight_unit || 'kg'}
+                            </span>
+                          ) : (
+                            <div style={styles.qtyBox}>
+                              <button
+                                type="button"
+                                style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  updateCartQty(idx, -1);
+                                }}
+                                title="Decrease Quantity (-1)"
+                              >
+                                -
+                              </button>
+                              <span
+                                style={{
+                                  fontWeight: '800',
+                                  margin: '0 6px',
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  backgroundColor: isSelected ? (themeMode === 'dark' ? '#334155' : '#DBEAFE') : 'transparent'
+                                }}
+                                title="Click or press Enter to edit quantity"
+                                onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                              >
+                                {item.quantity}
+                              </span>
+                              <button
+                                type="button"
+                                style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  updateCartQty(idx, 1);
+                                }}
+                                title="Increase Quantity (+1)"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
+                        <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
+                        <td style={styles.td}>
+                          <button style={styles.deleteBtn} onClick={(e) => { e.stopPropagation(); removeCartItem(idx); }}>✕</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -1614,14 +2095,14 @@ export default function POS({
             onClick={(e) => e.stopPropagation()}
           >
             <div style={styles.cartHeader}>
-              <h2 style={{ ...styles.cartTitle, color: colors.textPrimary }}>🛒 {t('cartTitle')} ({totalCartCount})</h2>
+              <h2 style={{ ...styles.cartTitle, color: colors.textPrimary }}>🛒 {t('cartTitle')} | Items: {cart.length} | Total Qty: {totalCartCount}</h2>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button style={styles.clearCartBtn} onClick={() => setCart([])}>{t('clearCart')}</button>
+                <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
                 <button style={styles.closeBtn} onClick={() => setMobileCartSheetOpen(false)}>✕</button>
               </div>
             </div>
 
-            <div style={styles.cartTableContainer}>
+            <div style={styles.cartTableContainer} className="pos-cart-table-container">
               {cart.length === 0 ? (
                 <div style={{ ...styles.emptyCart, color: colors.textSecondary }}>
                   <span style={{ fontSize: '36px' }}>🛒</span>
@@ -1639,40 +2120,107 @@ export default function POS({
                     </tr>
                   </thead>
                   <tbody>
-                    {cart.map((item, idx) => (
-                      <tr
-                        key={idx}
-                        style={{
-                          ...styles.trBody,
-                          borderColor: colors.borderColor,
-                          backgroundColor: selectedCartIndex === idx ? colors.rowHoverBg : 'transparent'
-                        }}
-                        onClick={() => setSelectedCartIndex(idx)}
-                      >
-                        <td style={styles.td}>
-                          <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
-                          <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                            {item.is_weight_based ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
-                          </div>
-                        </td>
-                        <td style={{ ...styles.td, color: colors.textPrimary }}>
-                          {item.is_weight_based ? (
-                            <span>{item.displayWeight || item.item_weight} {item.weight_unit || 'kg'}</span>
-                          ) : (
-                            <div style={styles.qtyBox}>
-                              <button style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }} onClick={() => updateCartQty(idx, -1)}>-</button>
-                              <span style={{ fontWeight: '800', margin: '0 6px' }}>{item.quantity}</span>
-                              <button style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }} onClick={() => updateCartQty(idx, 1)}>+</button>
+                    {cart.map((item, idx) => {
+                      const isSelected = selectedCartIndex === idx;
+                      const itemSku = (item.sku || item.barcode || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.sku || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.barcode || '').trim();
+                      return (
+                        <tr
+                          key={idx}
+                          style={{
+                            ...styles.trBody,
+                            borderColor: colors.borderColor,
+                            backgroundColor: isSelected ? (themeMode === 'dark' ? '#1E3A5F' : '#EFF6FF') : 'transparent',
+                            borderLeft: isSelected ? `4px solid ${colors.accentOrange || '#F97316'}` : '4px solid transparent',
+                            boxShadow: isSelected ? 'inset 0 0 0 1px rgba(249, 115, 22, 0.35)' : 'none',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease, border-left 0.15s ease'
+                          }}
+                          onClick={() => setSelectedCartIndex(idx)}
+                          onDoubleClick={() => openCartItemEdit(idx)}
+                        >
+                          <td style={styles.td}>
+                            <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
+                            {isSelected && itemSku && (
+                              <div style={{
+                                fontSize: '10px',
+                                color: themeMode === 'dark' ? '#94A3B8' : '#64748B',
+                                fontFamily: 'monospace',
+                                fontWeight: '600',
+                                lineHeight: 1.2,
+                                marginTop: '1px'
+                              }}>
+                                #{itemSku}
+                              </div>
+                            )}
+                            <div style={{ fontSize: '11px', color: colors.accentOrange }}>
+                              {item.is_weight_based ? `⚖️ ${t('weightBadge')}` : `📦 ${t('pcsBadge')}`}
                             </div>
-                          )}
-                        </td>
-                        <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
-                        <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
-                        <td style={styles.td}>
-                          <button style={styles.deleteBtn} onClick={() => removeCartItem(idx)}>✕</button>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td style={{ ...styles.td, color: colors.textPrimary }}>
+                            {item.is_weight_based ? (
+                              <span
+                                style={{
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  backgroundColor: isSelected ? (themeMode === 'dark' ? '#334155' : '#DBEAFE') : 'transparent'
+                                }}
+                                title="Click or press Enter to edit weight"
+                                onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                              >
+                                {item.displayWeight || item.item_weight} {item.weight_unit || 'kg'}
+                              </span>
+                            ) : (
+                              <div style={styles.qtyBox}>
+                                <button
+                                  type="button"
+                                  style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    updateCartQty(idx, -1);
+                                  }}
+                                  title="Decrease Quantity (-1)"
+                                >
+                                  -
+                                </button>
+                                <span
+                                  style={{
+                                    fontWeight: '800',
+                                    margin: '0 6px',
+                                    cursor: 'pointer',
+                                    padding: '2px 6px',
+                                    borderRadius: '4px',
+                                    backgroundColor: isSelected ? (themeMode === 'dark' ? '#334155' : '#DBEAFE') : 'transparent'
+                                  }}
+                                  title="Click or press Enter to edit quantity"
+                                  onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                                >
+                                  {item.quantity}
+                                </span>
+                                <button
+                                  type="button"
+                                  style={{ ...styles.qtyBtn, backgroundColor: colors.bgInput, color: colors.textPrimary }}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    updateCartQty(idx, 1);
+                                  }}
+                                  title="Increase Quantity (+1)"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
+                          <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
+                          <td style={styles.td}>
+                            <button style={styles.deleteBtn} onClick={(e) => { e.stopPropagation(); removeCartItem(idx); }}>✕</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -1810,6 +2358,19 @@ export default function POS({
         onClose={() => setWeightModalVisible(false)}
       />
 
+      <CartQtyEditModal
+        isOpen={cartQtyModalOpen}
+        item={editingCartItem || (editingCartIndex !== null ? cart[editingCartIndex] : cart[selectedCartIndex])}
+        onConfirm={handleSaveCartQty}
+        onClose={() => {
+          setCartQtyModalOpen(false);
+          setEditingCartItem(null);
+          setEditingCartIndex(null);
+          autoFocusSearch();
+        }}
+        onClearCart={handleClearCart}
+      />
+
       <KeyboardHelpModal
         isOpen={keyboardHelpVisible}
         onClose={() => setKeyboardHelpVisible(false)}
@@ -1828,73 +2389,6 @@ export default function POS({
         title="📷 POS Camera Barcode Scanner"
         subtitle="Point camera at item barcode to continuously add items to cart"
       />
-
-      {/* CHECKOUT SUCCESS MODAL */}
-      {checkoutSuccessOpen && (
-        <div style={styles.modalOverlay}>
-          <div
-            style={{
-              ...styles.checkoutModal,
-              backgroundColor: colors.bgCard,
-              borderColor: colors.borderColor,
-              maxWidth: '450px',
-              padding: '24px',
-              textAlign: 'center'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎉</div>
-            <h2 style={{ margin: 0, fontSize: '22px', fontWeight: '900', color: colors.textPrimary }}>
-              Sale Completed Successfully!
-            </h2>
-            <p style={{ color: colors.textSecondary, marginTop: '8px', marginBottom: '24px' }}>
-              Bill <strong>#{checkoutSuccessInfo.invoiceNo}</strong> | Total: <strong>₹{parseFloat(checkoutSuccessInfo.total).toFixed(2)}</strong>
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {checkoutSuccessInfo.orderId && (
-                <button
-                  style={{
-                    padding: '12px',
-                    borderRadius: '8px',
-                    border: 'none',
-                    backgroundColor: colors.accentOrange,
-                    color: '#ffffff',
-                    fontWeight: '800',
-                    cursor: 'pointer',
-                    fontSize: '14px'
-                  }}
-                  onClick={() => {
-                    window.open(`/api/orders/${checkoutSuccessInfo.orderId}/pdf?token=${token}`, '_blank');
-                  }}
-                >
-                  📄 Download PDF Receipt
-                </button>
-              )}
-
-              <button
-                style={{
-                  padding: '12px',
-                  borderRadius: '8px',
-                  border: '1px solid',
-                  borderColor: colors.borderColor,
-                  backgroundColor: 'transparent',
-                  color: colors.textPrimary,
-                  fontWeight: '800',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-                onClick={() => {
-                  setCheckoutSuccessOpen(false);
-                  autoFocusSearch();
-                }}
-              >
-                Close & Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* QUICK EDIT MODAL */}
       {quickEditProduct && (
@@ -2056,28 +2550,28 @@ export default function POS({
             <div style={styles.payGrid}>
               <button
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'cash' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('cash')}
+                onClick={() => !submittingSale && handleCompleteSale('cash', 'print_receipt_only')}
                 disabled={submittingSale}
               >
                 💵 {t('cashPay')} (F9)
               </button>
               <button
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'upi' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('upi')}
+                onClick={() => !submittingSale && handleCompleteSale('upi', 'print_receipt_only')}
                 disabled={submittingSale}
               >
                 📱 {t('upiPay')} (F10)
               </button>
               <button
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'card' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('card')}
+                onClick={() => !submittingSale && handleCompleteSale('card', 'print_receipt_only')}
                 disabled={submittingSale}
               >
                 💳 {t('cardPay')} (F11)
               </button>
               <button
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'due' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('due')}
+                onClick={() => !submittingSale && handleCompleteSale('due', 'print_receipt_only')}
                 disabled={submittingSale}
               >
                 📝 {t('duePay')}
@@ -2105,7 +2599,7 @@ export default function POS({
 
             <button
               style={{ ...styles.completeBtn, opacity: submittingSale ? 0.7 : 1 }}
-              onClick={() => !submittingSale && handleCompleteSale()}
+              onClick={() => !submittingSale && handleCompleteSale(paymentMode || 'cash', 'print_receipt_only')}
               disabled={submittingSale}
             >
               {submittingSale ? '⌛ Processing Sale & Printing...' : `💾 ${t('completeSaleBtn')} (F12)`}
@@ -2124,7 +2618,6 @@ export default function POS({
           }
           .pos-cart-panel {
             display: flex !important;
-            width: 380px !important;
             flex-shrink: 0 !important;
           }
           .pos-floating-cart-bar {
@@ -2143,7 +2636,6 @@ export default function POS({
           }
           .pos-cart-panel {
             display: flex !important;
-            width: 320px !important;
             flex-shrink: 0 !important;
             padding: 10px !important;
           }
@@ -2160,6 +2652,10 @@ export default function POS({
             padding: 4px 8px !important;
             font-size: 11px !important;
           }
+        }
+
+        .pos-cart-resize-handle:hover {
+          background-color: #F97316 !important;
         }
 
         /* MOBILE BREAKPOINT (< 768px) */
@@ -2547,17 +3043,22 @@ const styles = {
     fontSize: '10px',
   },
   cartSection: {
-    width: '400px',
     borderLeft: '1px solid #E2E8F0',
     display: 'flex',
     flexDirection: 'column',
     padding: '14px',
+    height: '100%',
+    overflow: 'hidden',
+    minHeight: 0,
+    boxSizing: 'border-box',
+    flexShrink: 0,
   },
   cartHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: '10px',
+    flexShrink: 0,
   },
   cartTitle: {
     fontSize: '15px',
@@ -2573,9 +3074,12 @@ const styles = {
     fontSize: '12px',
   },
   cartTableContainer: {
-    flex: 1,
+    flex: '1 1 0%',
     overflowY: 'auto',
+    overflowX: 'hidden',
+    minHeight: 0,
     marginBottom: '10px',
+    WebkitOverflowScrolling: 'touch',
   },
   emptyCart: {
     display: 'flex',
@@ -2618,10 +3122,17 @@ const styles = {
   qtyBtn: {
     border: 'none',
     borderRadius: '4px',
-    width: '20px',
-    height: '20px',
+    width: '22px',
+    height: '22px',
     cursor: 'pointer',
     fontWeight: 'bold',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    userSelect: 'none',
+    fontSize: '14px',
+    lineHeight: '1',
+    padding: 0
   },
   deleteBtn: {
     background: 'none',

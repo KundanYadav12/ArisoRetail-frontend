@@ -2,32 +2,41 @@
  * Centralized API fetch wrapper with automatic JWT token refresh.
  * Uses import.meta.env.VITE_API_URL for production and development environment compatibility.
  */
+import { db } from './offlineDb.js';
+import { SyncService } from './syncService.js';
 
-import { db } from './offlineDb';
-import { SyncService } from './syncService';
+export function getBaseUrl() {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('ARISO_API_SERVER_URL');
+    if (custom && custom.trim()) {
+      return custom.trim().replace(/\/+$/, '');
+    }
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocal) {
+      return 'http://localhost:5005/api';
+    }
+  }
+  
+  if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api') {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
+  }
+  
+  return 'https://arisoretail.duckdns.org/api';
+}
 
-export const PRODUCTION_API_URL = (import.meta.env.VITE_PRODUCTION_API_URL || 'https://arisoretail.duckdns.org/api').replace(/\/+$/, '');
-export const LOCAL_DEV_API_URL = (import.meta.env.VITE_DEV_API_URL || 'http://localhost:5005/api').replace(/\/+$/, '');
+export function setCustomBaseUrl(url) {
+  if (!url) {
+    localStorage.removeItem('ARISO_API_SERVER_URL');
+  } else {
+    localStorage.setItem('ARISO_API_SERVER_URL', url.trim().replace(/\/+$/, ''));
+  }
+}
 
-const isElectron = typeof window !== 'undefined' && (window.electron || window.location.protocol === 'file:');
-const storedApiUrl = typeof window !== 'undefined' ? window.localStorage.getItem('ARISO_RETAIL_API_URL') : null;
-const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+export const API_BASE_URL = getBaseUrl();
 
-// In Electron / Windows application:
-// - If user configured a custom URL in localStorage, use it.
-// - If running in local Vite development (import.meta.env.DEV), default to local backend.
-// - In production builds, default to the live production backend (https://arisoretail.duckdns.org/api).
-// In Web browser:
-// - If on localhost, use local dev backend.
-// - In production web, use relative '/api' or production URL.
-const defaultBaseUrl = isElectron 
-  ? (storedApiUrl || (import.meta.env.DEV ? LOCAL_DEV_API_URL : PRODUCTION_API_URL)) 
-  : (isLocalhost ? (import.meta.env.VITE_API_URL || LOCAL_DEV_API_URL) : (import.meta.env.VITE_API_URL || '/api'));
-
-export const API_BASE_URL = (storedApiUrl || (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api' ? import.meta.env.VITE_API_URL : defaultBaseUrl)).replace(/\/+$/, '');
-
-export function getApiUrl(endpoint) {
-  if (!endpoint) return API_BASE_URL;
+export function getApiUrl(endpoint, customBase = null) {
+  const base = customBase ? customBase.replace(/\/+$/, '') : getBaseUrl();
+  if (!endpoint) return base;
   if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
     return endpoint;
   }
@@ -43,12 +52,12 @@ export function getApiUrl(endpoint) {
     cleanEndpoint = '/' + cleanEndpoint;
   }
   
-  return `${API_BASE_URL}${cleanEndpoint}`;
+  return `${base}${cleanEndpoint}`;
 }
 
 export function resolveImageUrl(path) {
   if (!path) return '';
-  let cleanPath = path;
+  let cleanPath = String(path).trim();
   if (cleanPath.startsWith('file://') || cleanPath.startsWith('content://') || cleanPath.startsWith('ph://') || cleanPath.startsWith('data:') || cleanPath.startsWith('blob:')) {
     return cleanPath;
   }
@@ -61,7 +70,8 @@ export function resolveImageUrl(path) {
     }
   }
   const formattedPath = cleanPath.startsWith('/') ? cleanPath : '/' + cleanPath;
-  const host = API_BASE_URL.replace(/\/api\/?$/, '');
+  const currentBase = getBaseUrl();
+  const host = (currentBase || 'http://localhost:5005/api').replace(/\/api\/?$/, '');
   return `${host}${formattedPath}`;
 }
 
@@ -86,15 +96,22 @@ export function handleSessionExpired(reason = null) {
   localStorage.removeItem('ARISO_RETAIL_TOKEN');
   localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
   localStorage.removeItem('ARISO_RETAIL_USER');
+  localStorage.removeItem('pos_token');
+  localStorage.removeItem('pos_refresh_token');
+  localStorage.removeItem('pos_user');
   window.dispatchEvent(new CustomEvent('auth_session_expired', { detail: { reason } }));
 }
 
 export async function apiFetch(url, options = {}) {
   const fullUrl = getApiUrl(url);
-  const headers = options.headers || {};
-  let token = localStorage.getItem('ARISO_RETAIL_TOKEN');
+  const token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
+  const refreshToken = localStorage.getItem('ARISO_RETAIL_REFRESH_TOKEN') || localStorage.getItem('pos_refresh_token');
 
-  if (token && !headers['Authorization']) {
+  const headers = {
+    ...(options.headers || {})
+  };
+
+  if (token && !headers['Authorization'] && !headers['authorization']) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -108,7 +125,23 @@ export async function apiFetch(url, options = {}) {
     headers
   };
 
-  const response = await fetch(fullUrl, fetchOptions);
+  let response;
+  try {
+    response = await fetch(fullUrl, fetchOptions);
+  } catch (netErr) {
+    // Automatic Network Failover to Local Gateway when internet or cloud fails
+    if (!fullUrl.includes('localhost') && !fullUrl.includes('127.0.0.1')) {
+      const localFallbackUrl = fullUrl.replace(/^https?:\/\/[^\/]+/, 'http://localhost:5005');
+      try {
+        console.warn(`[API Network Failover] Cloud connection lost. Route fallback -> ${localFallbackUrl}`);
+        response = await fetch(localFallbackUrl, fetchOptions);
+      } catch (localErr) {
+        throw netErr;
+      }
+    } else {
+      throw netErr;
+    }
+  }
 
   // Exclude auth-specific endpoints to prevent infinite refresh loops
   const isAuthEndpoint = fullUrl.includes('/api/auth/login') ||
@@ -117,7 +150,6 @@ export async function apiFetch(url, options = {}) {
 
   // Handle 401 Unauthorized (Expired or Invalid Access Token)
   if (response.status === 401 && !isAuthEndpoint) {
-    // Check if session was invalidated due to single device login elsewhere
     try {
       const clonedRes = response.clone();
       const errorData = await clonedRes.json();
@@ -129,8 +161,6 @@ export async function apiFetch(url, options = {}) {
       // Ignore clone/JSON parsing errors
     }
 
-    const refreshToken = localStorage.getItem('ARISO_RETAIL_REFRESH_TOKEN') || localStorage.getItem('pos_refresh_token');
-
     // If no refresh token is present, clear session and return 401 response
     if (!refreshToken) {
       handleSessionExpired();
@@ -138,7 +168,7 @@ export async function apiFetch(url, options = {}) {
     }
 
     // Check if another concurrent request or tab already refreshed the token
-    const latestToken = localStorage.getItem('ARISO_RETAIL_TOKEN');
+    const latestToken = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
     if (latestToken && latestToken !== token) {
       fetchOptions.headers['Authorization'] = `Bearer ${latestToken}`;
       return fetch(fullUrl, fetchOptions);
@@ -161,7 +191,8 @@ export async function apiFetch(url, options = {}) {
     isRefreshing = true;
 
     try {
-      const refreshRes = await fetch(getApiUrl('/api/auth/refresh'), {
+      const refreshUrl = getApiUrl('/auth/refresh');
+      const refreshRes = await fetch(refreshUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken, token: refreshToken })
@@ -174,12 +205,15 @@ export async function apiFetch(url, options = {}) {
 
         if (newAccessToken) {
           localStorage.setItem('ARISO_RETAIL_TOKEN', newAccessToken);
+          localStorage.setItem('pos_token', newAccessToken);
         }
         if (newRefreshToken) {
           localStorage.setItem('ARISO_RETAIL_REFRESH_TOKEN', newRefreshToken);
+          localStorage.setItem('pos_refresh_token', newRefreshToken);
         }
         if (data.user) {
           localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
+          localStorage.setItem('pos_user', JSON.stringify(data.user));
         }
 
         // Notify all queued subscribers
@@ -193,7 +227,6 @@ export async function apiFetch(url, options = {}) {
         fetchOptions.headers['Authorization'] = `Bearer ${newAccessToken}`;
         response = await fetch(fullUrl, fetchOptions);
       } else {
-        // Refresh token expired or invalid
         let reason = null;
         try {
           const rData = await refreshRes.json();
@@ -263,9 +296,7 @@ export async function fetchMobileMenu(token) {
   try {
     const res = await apiFetch('/api/menu');
     if (res.ok) {
-      const items = await res.json();
-      const menuList = Array.isArray(items) ? items : (items?.items || []);
-      // Cache locally in background
+      const menuList = await res.json();
       db.menu_items.clear().then(() => {
         db.menu_items.bulkPut(menuList);
       }).catch(err => console.warn('[IndexedDB] Failed to cache menu:', err.message));
@@ -274,7 +305,6 @@ export async function fetchMobileMenu(token) {
   } catch (err) {
     console.warn('[API Fetch Menu Fallback] Offline, reading local DB:', err.message);
   }
-  // Fallback to local Dexie cache
   return await db.menu_items.toArray();
 }
 
@@ -283,7 +313,6 @@ export async function fetchMobileCategories(token) {
     const res = await apiFetch('/api/categories');
     if (res.ok) {
       const categories = await res.json();
-      // Cache locally in background
       db.categories.clear().then(() => {
         db.categories.bulkPut(categories);
       }).catch(err => console.warn('[IndexedDB] Failed to cache categories:', err.message));
@@ -292,7 +321,6 @@ export async function fetchMobileCategories(token) {
   } catch (err) {
     console.warn('[API Fetch Categories Fallback] Offline, reading local DB:', err.message);
   }
-  // Fallback to local Dexie cache
   return await db.categories.toArray();
 }
 
@@ -326,7 +354,38 @@ export async function fetchReceiptSettings(token) {
   return local ? local.value : null;
 }
 
+export async function fetchPrinters(token) {
+  try {
+    const res = await apiFetch('/api/printers');
+    if (res.ok) {
+      const printers = await res.json();
+      if (Array.isArray(printers) && printers.length > 0) {
+        db.printers.clear().then(() => {
+          db.printers.bulkPut(printers);
+        }).catch(() => {});
+        return printers;
+      }
+    }
+  } catch (e) {
+    console.warn('[API Fetch Printers Fallback] Offline, reading local DB:', e.message);
+  }
+  return await db.printers.toArray();
+}
+
 export async function createOrder(token, orderData) {
+  // If explicitly offline, save to queue immediately without network delay
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    console.log('[API CreateOrder Offline] Device is offline. Saving directly to queue:', orderData);
+    const savedOrder = await SyncService.saveOfflineOrder(orderData);
+    return {
+      message: 'Order saved locally in offline queue.',
+      unique_order_number: savedOrder.offline_id,
+      orderNumber: savedOrder.offline_id,
+      id: savedOrder.offline_id,
+      isOffline: true
+    };
+  }
+
   try {
     const res = await apiFetch('/api/orders', {
       method: 'POST',
@@ -340,13 +399,14 @@ export async function createOrder(token, orderData) {
       throw new Error(data.error || 'Failed to create order on server.');
     }
   } catch (err) {
-    // If it's a network/fetch error, fall back to offline order persistence
     const isNetworkError = !err.status && (
-      err.message.includes('Failed to fetch') || 
-      err.message.includes('NetworkError') || 
-      err.message.includes('network') ||
-      err.message.includes('TypeError') ||
-      err.message.includes('type error')
+      err.message?.includes('Failed to fetch') || 
+      err.message?.includes('NetworkError') || 
+      err.message?.includes('network') ||
+      err.message?.includes('TypeError') ||
+      err.message?.includes('type error') ||
+      err.message?.includes('abort') ||
+      err.name === 'AbortError'
     );
                            
     if (isNetworkError) {
@@ -364,3 +424,4 @@ export async function createOrder(token, orderData) {
     throw err;
   }
 }
+

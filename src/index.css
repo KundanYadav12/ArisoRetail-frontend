@@ -548,3 +548,64 @@ body {
     position: relative;
   }
 }
+
+/* POS Cart Panel & High-Responsiveness Scrollbar */
+.pos-cart-panel {
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.pos-cart-resize-handle {
+  width: 6px !important;
+  cursor: col-resize !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  touch-action: none !important;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+.pos-cart-resize-handle:hover {
+  background-color: #f97316 !important;
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.4) !important;
+}
+
+.pos-cart-resize-handle:hover > div {
+  background-color: #ffffff !important;
+  height: 54px !important;
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.8) !important;
+}
+
+.pos-cart-table-container {
+  flex: 1 1 auto !important;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: #f97316 rgba(0, 0, 0, 0.08) !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+.pos-cart-table-container::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+.pos-cart-table-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.04) !important;
+  border-radius: 4px !important;
+}
+
+.pos-cart-table-container::-webkit-scrollbar-thumb {
+  background: #f97316 !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+}
+
+.pos-cart-table-container::-webkit-scrollbar-thumb:hover {
+  background: #ea580c !important;
+}
+

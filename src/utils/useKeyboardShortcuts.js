@@ -34,17 +34,64 @@ export function useKeyboardShortcuts(shortcuts = {}, deps = []) {
         }
       } else if (key === 'Escape') {
         actionKey = 'Esc';
+        event.preventDefault();
       } else if (key === 'Delete') {
         const activeTag = document.activeElement?.tagName;
-        if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
+        if (activeTag === 'INPUT') {
+          const inputEl = document.activeElement;
+          if (inputEl && inputEl.classList.contains('pos-search-input') && !inputEl.value) {
+            actionKey = 'Delete';
+            event.preventDefault();
+          }
+        } else if (activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
           actionKey = 'Delete';
+          event.preventDefault();
         }
-      } else if (key === '+' || key === '-') {
+      } else if (key === '+' || key === '=' || key === '-' || event.code === 'NumpadAdd' || event.code === 'NumpadSubtract' || event.code === 'Equal' || event.code === 'Minus') {
+        const isPlus = key === '+' || key === '=' || event.code === 'NumpadAdd' || (event.code === 'Equal' && !ctrlKey);
+        const isMinus = key === '-' || event.code === 'NumpadSubtract' || (event.code === 'Minus' && !ctrlKey);
+        const mappedKey = isMinus ? '-' : (isPlus ? '+' : null);
+
+        if (mappedKey) {
+          const activeTag = document.activeElement?.tagName;
+          if (activeTag === 'INPUT') {
+            const inputEl = document.activeElement;
+            if (inputEl && inputEl.classList.contains('pos-search-input') && !inputEl.value) {
+              actionKey = mappedKey;
+              event.preventDefault();
+            }
+          } else if (activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
+            actionKey = mappedKey;
+            event.preventDefault();
+          }
+        }
+      } else if (key === 'ArrowUp' || key === 'ArrowDown') {
         const activeTag = document.activeElement?.tagName;
-        if (activeTag !== 'INPUT' && activeTag !== 'TEXTAREA') {
+        if (activeTag === 'INPUT') {
+          const inputEl = document.activeElement;
+          if (inputEl && inputEl.classList.contains('pos-search-input') && !inputEl.value) {
+            actionKey = key;
+            event.preventDefault();
+          }
+        } else if (activeTag !== 'TEXTAREA' && activeTag !== 'SELECT') {
           actionKey = key;
           event.preventDefault();
         }
+      } else if (key === 'Enter') {
+        const activeTag = document.activeElement?.tagName;
+        if (activeTag === 'INPUT') {
+          const inputEl = document.activeElement;
+          if (inputEl && inputEl.classList.contains('pos-search-input') && !inputEl.value) {
+            actionKey = 'Enter';
+            event.preventDefault();
+          }
+        } else if (activeTag !== 'TEXTAREA' && activeTag !== 'BUTTON') {
+          actionKey = 'Enter';
+          event.preventDefault();
+        }
+      } else if (key === 'End') {
+        actionKey = 'End';
+        event.preventDefault();
       }
 
       if (actionKey && shortcuts[actionKey]) {
