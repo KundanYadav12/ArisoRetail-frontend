@@ -1,5 +1,5 @@
-import { db } from './offlineDb';
-import { API_BASE_URL, apiFetch } from './api';
+import { db } from './offlineDb.js';
+import { API_BASE_URL, apiFetch } from './api.js';
 
 let syncInterval = null;
 let isSyncingInProgress = false;
@@ -72,12 +72,15 @@ export class SyncService {
 
       // 2. If downwardData was not obtained, fetch all resources in parallel
       if (!downwardData) {
-        const [catRes, menuRes, receiptRes, profileRes, prnRes] = await Promise.allSettled([
+        const [catRes, menuRes, receiptRes, profileRes, prnRes, finAccRes, finMapRes, expCatRes] = await Promise.allSettled([
           apiFetch('/api/categories'),
           apiFetch('/api/menu'),
           apiFetch('/api/settings/receipt'),
           apiFetch('/api/settings/profile'),
-          apiFetch('/api/printers')
+          apiFetch('/api/printers'),
+          apiFetch('/api/finance/accounts'),
+          apiFetch('/api/finance/mappings'),
+          apiFetch('/api/expenses/categories')
         ]);
 
         downwardData = {
@@ -85,36 +88,72 @@ export class SyncService {
           menu_items: menuRes.status === 'fulfilled' && menuRes.value.ok ? await menuRes.value.json() : null,
           receipt_settings: receiptRes.status === 'fulfilled' && receiptRes.value.ok ? await receiptRes.value.json() : null,
           profile: profileRes.status === 'fulfilled' && profileRes.value.ok ? await profileRes.value.json() : null,
-          printers: prnRes.status === 'fulfilled' && prnRes.value.ok ? await prnRes.value.json() : null
+          printers: prnRes.status === 'fulfilled' && prnRes.value.ok ? await prnRes.value.json() : null,
+          financial_accounts: finAccRes.status === 'fulfilled' && finAccRes.value.ok ? (await finAccRes.value.json())?.accounts : null,
+          payment_mappings: finMapRes.status === 'fulfilled' && finMapRes.value.ok ? (await finMapRes.value.json())?.mappings : null,
+          expense_categories: expCatRes.status === 'fulfilled' && expCatRes.value.ok ? (await expCatRes.value.json())?.categories : null
         };
       }
 
-      // 3. Atomically persist into Dexie IndexedDB
-      await db.transaction('rw', [db.menu_items, db.categories, db.settings, db.printers], async () => {
+      // 3. Atomically persist into Dexie IndexedDB and dual-cache to localStorage
+      await db.transaction('rw', [db.menu_items, db.categories, db.settings, db.printers, db.financial_accounts, db.payment_account_mappings, db.expense_categories], async () => {
         // Save Menu items
         if (downwardData.menu_items && Array.isArray(downwardData.menu_items) && downwardData.menu_items.length > 0) {
           await db.menu_items.clear();
           await db.menu_items.bulkPut(downwardData.menu_items);
+          try {
+            localStorage.setItem('ariso_offline_menu_items', JSON.stringify(downwardData.menu_items));
+          } catch (e) {}
         }
 
         // Save Categories
         if (downwardData.categories && Array.isArray(downwardData.categories) && downwardData.categories.length > 0) {
           await db.categories.clear();
           await db.categories.bulkPut(downwardData.categories);
+          try {
+            localStorage.setItem('ariso_offline_categories', JSON.stringify(downwardData.categories));
+          } catch (e) {}
         }
 
         // Save Receipt Settings & Profile
         if (downwardData.receipt_settings) {
           await db.settings.put({ key: 'receipt_settings', value: downwardData.receipt_settings });
+          try {
+            localStorage.setItem('ariso_offline_receipt_settings', JSON.stringify(downwardData.receipt_settings));
+          } catch (e) {}
         }
         if (downwardData.profile) {
           await db.settings.put({ key: 'restaurant_profile', value: downwardData.profile });
+          try {
+            localStorage.setItem('ariso_offline_restaurant_profile', JSON.stringify(downwardData.profile));
+          } catch (e) {}
         }
 
         // Save Printers
         if (downwardData.printers && Array.isArray(downwardData.printers) && downwardData.printers.length > 0) {
           await db.printers.clear();
           await db.printers.bulkPut(downwardData.printers);
+          try {
+            localStorage.setItem('ariso_offline_printers', JSON.stringify(downwardData.printers));
+          } catch (e) {}
+        }
+
+        // Save Financial Accounts
+        if (downwardData.financial_accounts && Array.isArray(downwardData.financial_accounts)) {
+          await db.financial_accounts.clear();
+          await db.financial_accounts.bulkPut(downwardData.financial_accounts);
+        }
+
+        // Save Payment Mappings
+        if (downwardData.payment_mappings && Array.isArray(downwardData.payment_mappings)) {
+          await db.payment_account_mappings.clear();
+          await db.payment_account_mappings.bulkPut(downwardData.payment_mappings);
+        }
+
+        // Save Expense Categories
+        if (downwardData.expense_categories && Array.isArray(downwardData.expense_categories)) {
+          await db.expense_categories.clear();
+          await db.expense_categories.bulkPut(downwardData.expense_categories);
         }
       });
 
@@ -291,6 +330,9 @@ export class SyncService {
       if (isOnline && pendingCount > 0 && !isSyncingInProgress) {
         await SyncService.syncPendingOrders(token);
       }
+      if (isOnline) {
+        await SyncService.syncPendingExpenses(token);
+      }
     };
 
     // Attach native online/offline listeners once
@@ -314,6 +356,62 @@ export class SyncService {
   }
 
   /**
+   * Save a newly created expense locally in Dexie when offline
+   */
+  static async saveOfflineExpense(expensePayload) {
+    try {
+      const offlineId = `OFF-EXP-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const record = {
+        offline_id: offlineId,
+        status: 'pending_sync',
+        created_at: new Date().toISOString(),
+        payload: {
+          ...expensePayload,
+          offline_id: offlineId
+        }
+      };
+      await db.offline_expenses.put(record);
+      console.log(`[SyncService] Offline expense ${offlineId} saved locally in queue.`);
+      return record;
+    } catch (err) {
+      console.error('[SyncService] Failed to save offline expense:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Sync pending offline expenses to server
+   */
+  static async syncPendingExpenses(token) {
+    try {
+      const pending = await db.offline_expenses.where('status').equals('pending_sync').toArray();
+      if (!pending || pending.length === 0) return;
+
+      console.log(`[SyncService] Syncing ${pending.length} pending offline expenses to server...`);
+      for (const item of pending) {
+        try {
+          const res = await apiFetch('/api/expenses', {
+            method: 'POST',
+            body: item.payload
+          });
+          if (res.ok) {
+            const data = await res.json();
+            await db.offline_expenses.update(item.offline_id, {
+              status: 'synced',
+              synced_at: new Date().toISOString(),
+              server_expense_number: data.expense?.expense_number || data.expense_number
+            });
+          }
+        } catch (err) {
+          console.warn('[SyncService] Failed to sync expense', item.offline_id, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[SyncService] Sync pending expenses error:', err);
+    }
+  }
+
+  /**
    * Stop auto background sync
    */
   static stopAutoSync() {
@@ -330,6 +428,7 @@ export class SyncService {
   static async triggerManualSync(token) {
     await SyncService.downloadLatestCatalog(token);
     await SyncService.syncPendingOrders(token);
+    await SyncService.syncPendingExpenses(token);
     await SyncService.notifyStatusChange();
   }
 }

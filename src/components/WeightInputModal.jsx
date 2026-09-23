@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Scale, ShoppingCart, X } from 'lucide-react';
 
 export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, onConfirm, onClose }) {
   const [weightValue, setWeightValue] = useState('1.000');
@@ -60,7 +61,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
             <h2 style={styles.productName}>{product.name}</h2>
             <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</p>
           </div>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
+          <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
         </div>
 
         {/* Input Section */}
@@ -128,8 +129,12 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         {/* Action Buttons */}
         <div style={styles.actionRow}>
           <button type="button" style={styles.cancelBtn} onClick={onClose}>Cancel (Esc)</button>
-          <button type="button" style={styles.confirmBtn} onClick={handleConfirm}>
-            {initialWeightInKg > 0 ? `✏️ Update Weight (₹${calculatedTotal})` : `🛒 Add to Cart (Enter)`}
+          <button type="button" style={{ ...styles.confirmBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} onClick={handleConfirm}>
+            {initialWeightInKg > 0 ? (
+              <><Scale size={16} /> Update Weight (₹{calculatedTotal})</>
+            ) : (
+              <><ShoppingCart size={16} /> Add to Cart (Enter)</>
+            )}
           </button>
         </div>
       </div>

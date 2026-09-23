@@ -5,6 +5,7 @@ import {
   Grid, Select, MenuItem, InputLabel, FormControl
 } from '@mui/material';
 import { apiFetch, createOrder } from '../utils/api';
+import { calculateDocumentTax } from '../utils/gstCalculator';
 
 export default function SuperBillCartSummary({
   open,
@@ -29,7 +30,7 @@ export default function SuperBillCartSummary({
   const [notes, setNotes] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(null);
 
-  // 1. Math matching POS.jsx exactly
+  // 1. Math matching POS.jsx exactly via central GST calculator
   const subtotal = cart.reduce((acc, item) => acc + parseFloat(item.total_price || 0), 0);
   const numDiscVal = parseFloat(discountValue || 0);
 
@@ -42,39 +43,37 @@ export default function SuperBillCartSummary({
 
   const isGstEnabled = receiptSettings ? (receiptSettings.gst_enabled === 1 || receiptSettings.gst_enabled === true || receiptSettings.gst_enabled === 'true') : true;
   const gstMode = receiptSettings?.gst_mode || 'excluded';
+  const isComposition = receiptSettings?.gst_registration_type === 'composition';
 
-  let calculatedTax = 0;
-  const cartWithTax = cart.map(item => {
-    const itemTotalPrice = parseFloat(item.total_price || 0);
-    const itemGstRate = parseFloat(item.gst_rate !== undefined ? item.gst_rate : 5);
-
-    // Proportional discount distribution
-    const itemDiscountShare = subtotal > 0 ? (itemTotalPrice / subtotal) * discountAmount : 0;
-    const itemTaxableAmount = Math.max(0, itemTotalPrice - itemDiscountShare);
-
-    let itemTaxAmount = 0;
-    if (isGstEnabled && itemGstRate > 0) {
-      if (gstMode === 'included') {
-        itemTaxAmount = itemTaxableAmount - (itemTaxableAmount / (1 + (itemGstRate / 100)));
-      } else {
-        itemTaxAmount = itemTaxableAmount * (itemGstRate / 100);
-      }
-    }
-
-    calculatedTax += itemTaxAmount;
-
-    return {
+  const docTax = calculateDocumentTax({
+    items: cart.map(item => ({
       ...item,
-      discount_amount: itemDiscountShare,
-      tax_amount: itemTaxAmount
-    };
+      price: parseFloat(item.price || 0),
+      quantity: item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity) || 1),
+      gst_rate: isGstEnabled ? (parseFloat(item.gst_rate !== undefined ? item.gst_rate : 5)) : 0,
+      is_tax_exempt: Boolean(item.is_tax_exempt),
+      hsn_code: item.hsn_code || item.hsnCode || null
+    })),
+    orderDiscountType: discountType,
+    orderDiscountValue: numDiscVal,
+    gstMode,
+    taxType,
+    additionalCharges: 0,
+    isComposition,
+    storeStateCode: receiptSettings?.state_code || '27'
   });
 
-  const taxAmount = parseFloat(calculatedTax.toFixed(2));
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const grandTotal = gstMode === 'included'
-    ? taxableAmount
-    : Math.max(0, taxableAmount + taxAmount);
+  const cartWithTax = docTax.items.map(item => ({
+    ...item,
+    discount_amount: item.discountAmount,
+    tax_amount: item.totalTax
+  }));
+
+  const taxAmount = docTax.totalTax;
+  const taxableAmount = docTax.taxableAmount;
+  const grandTotal = docTax.grandTotal;
+  const roundOff = docTax.roundOff;
+  const taxInvoiceType = docTax.taxInvoiceType;
 
   // Qty Increment/Decrement
   const handleIncrement = (idx) => {
@@ -125,29 +124,43 @@ export default function SuperBillCartSummary({
       // Construct identical orderPayload for POS checkout compatibility
       const orderPayload = {
         items: cartWithTax.map((i) => ({
-          menu_item_id: i.product_id,
+          menu_item_id: i.product_id || i.id,
           name: i.name,
           price: i.price,
           quantity: i.quantity || 1,
           item_weight: null,
           weight_unit: i.unit || 'pcs',
           is_weight_based: 0,
-          total_price: i.total_price,
-          gst_rate: i.gst_rate,
-          tax_amount: parseFloat(i.tax_amount || 0).toFixed(2),
-          discount_amount: parseFloat(i.discount_amount || 0).toFixed(2),
+          total_price: i.total_price || (parseFloat(i.price) * (parseFloat(i.quantity) || 1)),
+          gst_rate: i.gstRate !== undefined ? i.gstRate : (parseFloat(i.gst_rate) || 0),
+          hsn_code: i.hsnCode || i.hsn_code || null,
+          taxable_amount: i.taxableAmount !== undefined ? i.taxableAmount : 0,
+          cgst_rate: i.cgstRate || 0,
+          cgst_amount: i.cgstAmount || 0,
+          sgst_rate: i.sgstRate || 0,
+          sgst_amount: i.sgstAmount || 0,
+          igst_rate: i.igstRate || 0,
+          igst_amount: i.igstAmount || 0,
+          tax_amount: parseFloat(i.totalTax !== undefined ? i.totalTax : (i.tax_amount || 0)).toFixed(2),
+          discount_amount: parseFloat(i.discountAmount !== undefined ? i.discountAmount : (i.discount_amount || 0)).toFixed(2),
           notes: i.notes || ''
         })),
-        subtotal: subtotal.toFixed(2),
-        discount_amount: discountAmount.toFixed(2),
-        tax_amount: taxAmount.toFixed(2),
-        total_amount: grandTotal.toFixed(2),
+        subtotal: docTax.subtotal.toFixed(2),
+        discount_amount: docTax.discountAmount.toFixed(2),
+        taxable_amount: docTax.taxableAmount.toFixed(2),
+        cgst_amount: docTax.cgstAmount.toFixed(2),
+        sgst_amount: docTax.sgstAmount.toFixed(2),
+        igst_amount: docTax.igstAmount.toFixed(2),
+        tax_amount: docTax.totalTax.toFixed(2),
+        round_off: docTax.roundOff.toFixed(2),
+        tax_invoice_type: docTax.taxInvoiceType,
+        total_amount: docTax.grandTotal.toFixed(2),
         payment_mode: paymentMode,
         cashier_name: user?.name || 'SuperBill Cashier',
         customer_name: 'Walk-in Customer',
         customer_phone: '',
         customer_address: '',
-        tax_type: taxType,
+        tax_type: docTax.taxType || taxType,
         notes: notes
       };
 

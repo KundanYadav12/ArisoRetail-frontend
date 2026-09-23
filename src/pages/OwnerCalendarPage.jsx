@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { getOwnerCalendarApi, toggleBlockSlotApi } from '../services/ownerService';
 import WalkinModal from '../components/owner/WalkinModal';
 import { Calendar as CalendarIcon, Shield, Lock, Unlock, PlusCircle, RefreshCw } from 'lucide-react';
+import { getISTDateString } from '../utils/dateUtils';
 
 const OwnerCalendarPage = () => {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => getISTDateString());
   const [calendarData, setCalendarData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isWalkinOpen, setIsWalkinOpen] = useState(false);

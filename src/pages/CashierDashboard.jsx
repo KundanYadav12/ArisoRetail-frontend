@@ -5,8 +5,12 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import PrintIcon from '@mui/icons-material/Print';
 import PaymentIcon from '@mui/icons-material/Payment';
 import SearchIcon from '@mui/icons-material/Search';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import { apiFetch } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
+import CashDenominationModal from '../components/day_end/CashDenominationModal';
+import XReportModal from '../components/day_end/XReportModal';
 
 export default function CashierDashboard({ user, token, onLogout }) {
   const { notify, confirmDialog } = useNotify();
@@ -31,6 +35,19 @@ export default function CashierDashboard({ user, token, onLogout }) {
   const [receiptSettings, setReceiptSettings] = useState(null);
   const [showStage2Dialog, setShowStage2Dialog] = useState(false);
   const [pendingPaymentMode, setPendingPaymentMode] = useState('cash');
+
+  // Shift Close & Day End integration states
+  const [shiftCloseOpen, setShiftCloseOpen] = useState(false);
+  const [countedCash, setCountedCash] = useState('');
+  const [varianceReason, setVarianceReason] = useState('');
+  const [handoverNotes, setHandoverNotes] = useState('');
+  const [cashCounts, setCashCounts] = useState(null);
+  const [denominationModalOpen, setDenominationModalOpen] = useState(false);
+
+  // X Report live snapshot states
+  const [xReportOpen, setXReportOpen] = useState(false);
+  const [xReportData, setXReportData] = useState(null);
+  const [xReportLoading, setXReportLoading] = useState(false);
 
   useEffect(() => {
     fetchShiftSummary();
@@ -98,17 +115,63 @@ export default function CashierDashboard({ user, token, onLogout }) {
     }
   };
 
-  const handleEndShift = async () => {
-    const isConfirmed = await confirmDialog({
-      title: 'Close Shift & Logout',
-      message: 'Are you sure you want to end your shift and logout? Shift collections will be committed to audit reports.',
-      confirmText: 'Close Shift & Logout',
-      isDestructive: false
-    });
+  const handleEndShift = () => {
+    const expected = parseFloat(shiftData?.drawer_cash || 0);
+    setCountedCash(String(expected));
+    setVarianceReason('');
+    setHandoverNotes('');
+    setShiftCloseOpen(true);
+  };
 
-    if (isConfirmed) {
-      notify.info('Shift closed successfully.', 'Shift Complete', 1000);
-      onLogout();
+  const handleSubmitCloseShift = async () => {
+    const expected = parseFloat(shiftData?.drawer_cash || 0);
+    const counted = parseFloat(countedCash || 0);
+    const variance = counted - expected;
+
+    if (variance !== 0 && !varianceReason.trim()) {
+      notify.error(`Cash variance of ₹${variance.toFixed(2)} requires a reason.`);
+      return;
+    }
+
+    try {
+      const res = await apiFetch('/api/cashier/close-shift', {
+        method: 'POST',
+        body: {
+          shift_id: shiftData?.shift_id || null,
+          cash_counted: counted,
+          variance_reason: varianceReason,
+          handover_notes: handoverNotes,
+          cash_count: cashCounts
+        }
+      });
+
+      if (res.ok) {
+        notify.success('Shift closed and logged to audit successfully.', 'Shift Complete', 1500);
+        setShiftCloseOpen(false);
+        onLogout();
+      } else {
+        const err = await res.json();
+        notify.error(err.error || 'Failed to close shift.');
+      }
+    } catch (e) {
+      notify.error('Network error closing shift.');
+    }
+  };
+
+  const handleFetchXReport = async () => {
+    setXReportLoading(true);
+    setXReportOpen(true);
+    try {
+      const res = await apiFetch('/api/day-end/x-report');
+      if (res.ok) {
+        setXReportData(await res.json());
+      } else {
+        notify.error('Failed to fetch live X Report.');
+      }
+    } catch (e) {
+      notify.error('Network error fetching X Report.');
+    } finally {
+      setXReportLoading(false);
     }
   };
 
@@ -218,6 +281,22 @@ export default function CashierDashboard({ user, token, onLogout }) {
               </Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'nowrap', flexShrink: 0 }}>
+              <Button
+                variant="outlined"
+                color="warning"
+                startIcon={<ReceiptLongIcon sx={{ fontSize: 18 }} />}
+                onClick={handleFetchXReport}
+                sx={{
+                  fontWeight: 800,
+                  px: { xs: 1.25, sm: 2 },
+                  py: { xs: 0.5, sm: 0.8 },
+                  fontSize: { xs: '0.75rem', sm: '0.85rem' },
+                  minHeight: { xs: 40, sm: 44 },
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                X Report
+              </Button>
               <Button
                 variant="outlined"
                 startIcon={<RefreshIcon sx={{ fontSize: 18 }} />}
@@ -647,6 +726,140 @@ export default function CashierDashboard({ user, token, onLogout }) {
           <Button onClick={() => setShowStage2Dialog(false)} color="inherit" sx={{ fontWeight: 'bold' }}>Cancel</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Cashier Shift Close Dialog */}
+      <Dialog open={shiftCloseOpen} onClose={() => setShiftCloseOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
+          Close Cashier Shift & Handover
+        </DialogTitle>
+        <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">Starting Cash Float:</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>₹{(shiftData?.starting_cash || 0).toFixed(2)}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">Cash Sales ({shiftData?.total_orders || 0} Bills):</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>+ ₹{(shiftData?.cash_sales || 0).toFixed(2)}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">Cash In / Out Movements:</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>+ ₹{((shiftData?.total_cash_in || 0) - (shiftData?.total_cash_out || 0)).toFixed(2)}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="body2" color="text.secondary">Cash Expenses Deducted:</Typography>
+              <Typography variant="body2" color="error.main" sx={{ fontWeight: 700 }}>- ₹{(shiftData?.cash_expenses || 0).toFixed(2)}</Typography>
+            </Box>
+            <Divider sx={{ my: 0.5 }} />
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: '1.05rem' }}>
+              <span>Expected Drawer Cash:</span>
+              <span style={{ color: '#10b981' }}>₹{(shiftData?.drawer_cash || 0).toFixed(2)}</span>
+            </Box>
+          </Paper>
+
+          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+            <TextField
+              label="Actual Physical Cash Counted (₹)"
+              type="number"
+              value={countedCash}
+              onChange={e => setCountedCash(e.target.value)}
+              fullWidth
+              slotProps={{ htmlInput: { style: { fontWeight: 'bold', fontSize: '1.1rem' } } }}
+            />
+            <Button
+              variant="outlined"
+              color="primary"
+              startIcon={<CalculateOutlinedIcon />}
+              onClick={() => setDenominationModalOpen(true)}
+              sx={{ fontWeight: 800, whiteSpace: 'nowrap', minHeight: 48 }}
+            >
+              Denominations
+            </Button>
+          </Box>
+
+          {/* Variance Display */}
+          {(() => {
+            const exp = parseFloat(shiftData?.drawer_cash || 0);
+            const cnt = parseFloat(countedCash || 0);
+            const diff = parseFloat((cnt - exp).toFixed(2));
+            return (
+              <Box>
+                <Paper
+                  variant="outlined"
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 1.5,
+                    bgcolor: diff < 0 ? 'error.light' : (diff > 0 ? 'warning.light' : 'success.light'),
+                    color: diff < 0 ? 'error.contrastText' : (diff > 0 ? 'warning.contrastText' : 'success.contrastText'),
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    fontWeight: 800
+                  }}
+                >
+                  <span>Shift Cash Variance:</span>
+                  <span>{diff < 0 ? `-₹${Math.abs(diff).toFixed(2)} (Short)` : (diff > 0 ? `+₹${diff.toFixed(2)} (Excess)` : '₹0.00 (Balanced)')}</span>
+                </Paper>
+
+                {diff !== 0 && (
+                  <TextField
+                    size="small"
+                    label="Variance Reason (Mandatory)"
+                    required
+                    value={varianceReason}
+                    onChange={e => setVarianceReason(e.target.value)}
+                    placeholder="e.g. Minor shortage, change discrepancy..."
+                    fullWidth
+                    sx={{ mt: 1.5 }}
+                  />
+                )}
+              </Box>
+            );
+          })()}
+
+          <TextField
+            size="small"
+            label="Handover Notes / Next Cashier Remarks"
+            multiline
+            rows={2}
+            value={handoverNotes}
+            onChange={e => setHandoverNotes(e.target.value)}
+            placeholder="Notes for the next cashier or manager..."
+            fullWidth
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2, display: 'flex', justifyContent: 'space-between' }}>
+          <Button onClick={() => setShiftCloseOpen(false)} color="inherit">Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            startIcon={<LogOutIcon />}
+            onClick={handleSubmitCloseShift}
+            sx={{ fontWeight: 800 }}
+          >
+            Submit Shift Close & Logout
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Denominations Counter Modal */}
+      <CashDenominationModal
+        open={denominationModalOpen}
+        onClose={() => setDenominationModalOpen(false)}
+        onApply={({ counts, total }) => {
+          setCashCounts(counts);
+          setCountedCash(String(total));
+        }}
+        initialCounts={cashCounts}
+        expectedCash={parseFloat(shiftData?.drawer_cash || 0)}
+      />
+
+      {/* X Report Modal */}
+      <XReportModal
+        open={xReportOpen}
+        onClose={() => setXReportOpen(false)}
+        reportData={xReportData}
+        loading={xReportLoading}
+      />
     </Container>
   </Box>
   );

@@ -13,6 +13,7 @@ import {
   Alert
 } from '@mui/material';
 import { Close as CloseIcon, FlashOn as FlashOnIcon, FlashOff as FlashOffIcon, Cameraswitch as CameraSwitchIcon } from '@mui/icons-material';
+import { CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 // Audio feedback synthesizers using Web Audio API
@@ -54,7 +55,7 @@ export default function WebBarcodeScannerModal({
   onClose,
   onScan,
   continuous = true,
-  title = '📷 Barcode Camera Scanner',
+  title = 'Barcode Camera Scanner',
   subtitle = 'Point camera at any barcode to scan'
 }) {
   const [cameras, setCameras] = useState([]);
@@ -379,7 +380,13 @@ export default function WebBarcodeScannerModal({
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography sx={{ fontSize: 20 }}>{recentScan.success ? '✅' : '⚠️'}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                {recentScan.success ? (
+                  <CheckCircle2 size={22} color="#10B981" />
+                ) : (
+                  <AlertTriangle size={22} color="#EF4444" />
+                )}
+              </Box>
               <Box>
                 <Typography variant="subtitle2" sx={{ fontWeight: 800, color: recentScan.success ? '#34D399' : '#FCA5A5' }}>
                   {recentScan.message}

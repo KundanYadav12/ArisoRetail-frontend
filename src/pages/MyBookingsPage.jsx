@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { getMyBookingsApi, cancelBookingApi } from '../services/bookingService';
 import { Ticket, Calendar, Clock, MapPin, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import QRCode from 'qrcode.react';
+import { getISTDateString } from '../utils/dateUtils';
 
 const MyBookingsPage = () => {
   const [bookings, setBookings] = useState([]);
@@ -38,7 +39,7 @@ const MyBookingsPage = () => {
     }
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getISTDateString();
 
   const filteredBookings = bookings.filter((b) => {
     if (activeTab === 'UPCOMING') return b.bookingStatus === 'CONFIRMED' && b.bookingDate >= todayStr;

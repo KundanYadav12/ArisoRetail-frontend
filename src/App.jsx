@@ -6,10 +6,23 @@ import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import LogOutIcon from '@mui/icons-material/Logout';
 import StorefrontIcon from '@mui/icons-material/Storefront';
+import ShoppingCartOutlinedIcon from '@mui/icons-material/ShoppingCartOutlined';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import PointOfSaleOutlinedIcon from '@mui/icons-material/PointOfSaleOutlined';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
+import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
+import KeyboardOutlinedIcon from '@mui/icons-material/KeyboardOutlined';
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
+import ElectricBoltOutlinedIcon from '@mui/icons-material/ElectricBoltOutlined';
+import VerifiedIcon from '@mui/icons-material/Verified';
 
 import Login from './pages/Login';
 import POSScreen from './pages/POS';
 import CashierDashboard from './pages/CashierDashboard';
+import DayEndDashboard from './components/day_end/DayEndDashboard';
+import PaymentReconciliationSuite from './components/finance/PaymentReconciliationSuite';
+import { ArrowRightLeft } from 'lucide-react';
 import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
 import SuperBillItems from './pages/SuperBillItems';
@@ -23,11 +36,28 @@ import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
 import { SyncService } from './utils/syncService';
+import retailLogo from './assets/retail-logo.png';
 
 export default function App() {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState('');
-  const [currentView, setCurrentView] = useState('pos'); // pos, cashier, admin, superadmin
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+  const [token, setToken] = useState(() => localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '');
+  const [currentView, setCurrentView] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.role === 'super_admin' || parsed.role === 'superadmin') return 'superadmin';
+      }
+    } catch (e) {}
+    return 'pos';
+  });
   const [themeMode, setThemeMode] = useState('light');
   const [posFocusMode, setPosFocusMode] = useState(() => localStorage.getItem('pos_focus_mode') === 'true');
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
@@ -62,25 +92,20 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    const validateAndSyncSession = async () => {
-      const savedToken = localStorage.getItem('ARISO_RETAIL_TOKEN');
-      const savedUser = localStorage.getItem('ARISO_RETAIL_USER');
+    const syncSessionAndCatalog = async () => {
+      const savedToken = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
+      const savedUser = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
       if (!savedToken || !savedUser) {
-        setToken('');
-        setUser(null);
         return;
       }
 
       try {
         const parsedUser = JSON.parse(savedUser);
-        setToken(savedToken);
-        setUser(parsedUser);
-        
         if (parsedUser.role === 'super_admin' || parsedUser.role === 'superadmin') {
           setCurrentView('superadmin');
         }
 
-        // Validate session with backend server if online
+        // Validate session with backend server in background if online
         try {
           const res = await apiFetch('/api/auth/me');
           if (res && res.ok) {
@@ -88,30 +113,29 @@ export default function App() {
             if (data.user) {
               setUser(data.user);
               localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
+              localStorage.setItem('pos_user', JSON.stringify(data.user));
             }
             // Background preload / sync catalog
             SyncService.downloadLatestCatalog(savedToken).catch(() => {});
-          } else if (res && (res.status === 401 || res.status === 403)) {
-            console.warn('[Session Sync] Token or session invalid after backend deployment. Prompting re-login.');
-            handleLogout();
+          } else {
+            console.warn('[Session Sync] Server status:', res?.status, '- maintaining persistent session.');
           }
         } catch (netErr) {
-          console.warn('[Session Sync] Offline or server unreachable, keeping cached offline session:', netErr.message);
+          console.warn('[Session Sync] Offline or server unreachable, maintaining local offline session:', netErr.message);
         }
       } catch (e) {
         console.error('Session sync error:', e);
       }
     };
 
-    validateAndSyncSession();
+    syncSessionAndCatalog();
 
     const handleSessionExpired = (e) => {
       const reason = e?.detail?.reason;
       if (reason === 'LOGGED_IN_ELSEWHERE') {
         alert('You have been logged out because your account was logged in from another device.');
+        handleLogout();
       }
-      setToken('');
-      setUser(null);
     };
 
     const handleTokenRefreshed = (e) => {
@@ -123,22 +147,12 @@ export default function App() {
       }
     };
 
-    const handleStorageChange = (e) => {
-      if (e.key === 'ARISO_RETAIL_TOKEN' || e.key === 'ARISO_RETAIL_USER' || e.key === 'ARISO_RETAIL_REFRESH_TOKEN') {
-        validateAndSyncSession();
-      }
-    };
-
     window.addEventListener('auth_session_expired', handleSessionExpired);
     window.addEventListener('auth_token_refreshed', handleTokenRefreshed);
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('focus', validateAndSyncSession);
 
     return () => {
       window.removeEventListener('auth_session_expired', handleSessionExpired);
       window.removeEventListener('auth_token_refreshed', handleTokenRefreshed);
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('focus', validateAndSyncSession);
     };
   }, []);
 
@@ -237,6 +251,9 @@ export default function App() {
       localStorage.removeItem('ARISO_RETAIL_TOKEN');
       localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
       localStorage.removeItem('ARISO_RETAIL_USER');
+      localStorage.removeItem('pos_token');
+      localStorage.removeItem('pos_refresh_token');
+      localStorage.removeItem('pos_user');
       setUser(null);
       setToken('');
     }
@@ -260,6 +277,7 @@ export default function App() {
 
   const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'superadmin';
   const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
+  const isSalesman = user?.role === 'salesman';
 
   return (
     <LanguageProvider>
@@ -290,7 +308,7 @@ export default function App() {
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.75, sm: 1.5, xl: 2 }, flexShrink: 1, minWidth: 0, maxWidth: { xs: 200, sm: 320, md: 500 } }}>
                   <Box
                     component="img"
-                    src={resolveImageUrl(user?.restaurant_logo_url) || '/ariso-pos-logo.png'}
+                    src={resolveImageUrl(user?.restaurant_logo_url) || retailLogo}
                     alt="Ariso POS"
                     sx={{
                       width: { xs: 28, sm: 34, xl: 42 },
@@ -301,11 +319,11 @@ export default function App() {
                       borderColor: 'divider',
                       flexShrink: 0
                     }}
-                    onError={(e) => { e.target.src = '/ariso-pos-logo.png'; }}
+                    onError={(e) => { e.target.src = retailLogo; }}
                   />
                   <Typography
                     variant="h6"
-                    title={user?.restaurant_name || 'Ariso Retail'}
+                    title={user?.restaurant_name || 'Ariso Retail Flagship'}
                     sx={{
                       fontWeight: 800,
                       fontSize: { xs: '0.95rem', sm: '1.1rem', xl: '1.6rem' },
@@ -315,7 +333,7 @@ export default function App() {
                       textOverflow: 'ellipsis'
                     }}
                   >
-                    {user?.restaurant_name || 'Ariso Retail'}
+                    {user?.restaurant_name || 'Ariso Retail Flagship'}
                   </Typography>
                 </Box>
 
@@ -326,30 +344,66 @@ export default function App() {
                     <Button
                       variant={currentView === 'pos' ? 'contained' : 'text'}
                       onClick={() => setCurrentView('pos')}
+                      startIcon={<ShoppingCartOutlinedIcon fontSize="small" />}
                       sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
                     >
                       POS Screen
                     </Button>
-                    <Button
-                      variant={currentView === 'cashier' ? 'contained' : 'text'}
-                      onClick={() => setCurrentView('cashier')}
-                      sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                    >
-                      Cashier Shift
-                    </Button>
+                    {isSalesman && (
+                      <Button
+                        variant={currentView === 'inventory' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('inventory')}
+                        startIcon={<Inventory2OutlinedIcon fontSize="small" />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        Stock Inventory
+                      </Button>
+                    )}
+                    {!isSalesman && (
+                      <Button
+                        variant={currentView === 'cashier' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('cashier')}
+                        startIcon={<PointOfSaleOutlinedIcon fontSize="small" />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        Cashier Shift
+                      </Button>
+                    )}
                     {isAdminOrManager && (
                       <Button
                         variant={currentView === 'admin' ? 'contained' : 'text'}
                         onClick={() => setCurrentView('admin')}
+                        startIcon={<AdminPanelSettingsOutlinedIcon fontSize="small" />}
                         sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
                       >
                         Admin Panel
+                      </Button>
+                    )}
+                    {isAdminOrManager && (
+                      <Button
+                        variant={currentView === 'day_end' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('day_end')}
+                        startIcon={<VerifiedIcon fontSize="small" />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        Day End
+                      </Button>
+                    )}
+                    {isAdminOrManager && (
+                      <Button
+                        variant={currentView === 'payment_reconciliation' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('payment_reconciliation')}
+                        startIcon={<ArrowRightLeft size={18} />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        Reconciliation
                       </Button>
                     )}
                     {isSuperAdmin && (
                       <Button
                         variant={currentView === 'superadmin' ? 'contained' : 'text'}
                         onClick={() => setCurrentView('superadmin')}
+                        startIcon={<SecurityOutlinedIcon fontSize="small" />}
                         color="secondary"
                         sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
                       >
@@ -384,86 +438,116 @@ export default function App() {
                     slotProps={{
                       paper: {
                         elevation: 4,
-                        sx: { minWidth: 200, borderRadius: 2, mt: 1 }
+                        sx: { minWidth: 220, borderRadius: 2, mt: 1 }
                       }
                     }}
                   >
                     <MenuItem
                       onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
                       selected={currentView === 'pos'}
-                      sx={{ fontWeight: currentView === 'pos' ? 800 : 500 }}
+                      sx={{ fontWeight: currentView === 'pos' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                     >
-                      🛒 &nbsp; POS Screen
+                      <ShoppingCartOutlinedIcon fontSize="small" /> POS Screen
                     </MenuItem>
-                    {(user?.feature_superbill || isSuperAdmin) && (
+                    {isSalesman && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('inventory'); setAnchorElNav(null); }}
+                        selected={currentView === 'inventory'}
+                        sx={{ fontWeight: currentView === 'inventory' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <Inventory2OutlinedIcon fontSize="small" /> Stock Inventory
+                      </MenuItem>
+                    )}
+                    {(user?.feature_superbill || isSuperAdmin) && !isSalesman && (
                       <>
                         <MenuItem
                           onClick={() => { setCurrentView('superbill_billing'); setAnchorElNav(null); }}
                           selected={currentView === 'superbill_billing'}
-                          sx={{ fontWeight: currentView === 'superbill_billing' ? 800 : 500 }}
+                          sx={{ fontWeight: currentView === 'superbill_billing' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                         >
-                          ⚡ &nbsp; SuperBill Billing
+                          <ElectricBoltOutlinedIcon fontSize="small" /> SuperBill Billing
                         </MenuItem>
                         <MenuItem
                           onClick={() => { setCurrentView('superbill_items'); setAnchorElNav(null); }}
                           selected={currentView === 'superbill_items'}
-                          sx={{ fontWeight: currentView === 'superbill_items' ? 800 : 500 }}
+                          sx={{ fontWeight: currentView === 'superbill_items' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                         >
-                          📦 &nbsp; SuperBill Items
+                          <Inventory2OutlinedIcon fontSize="small" /> SuperBill Items
                         </MenuItem>
                       </>
                     )}
-                    <MenuItem
-                      onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
-                      selected={currentView === 'cashier'}
-                      sx={{ fontWeight: currentView === 'cashier' ? 800 : 500 }}
-                    >
-                      💼 &nbsp; Cashier Shift
-                    </MenuItem>
+                    {!isSalesman && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
+                        selected={currentView === 'cashier'}
+                        sx={{ fontWeight: currentView === 'cashier' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <PointOfSaleOutlinedIcon fontSize="small" /> Cashier Shift
+                      </MenuItem>
+                    )}
                     {isAdminOrManager && (
                       <MenuItem
                         onClick={() => { setCurrentView('admin'); setAnchorElNav(null); }}
                         selected={currentView === 'admin'}
-                        sx={{ fontWeight: currentView === 'admin' ? 800 : 500 }}
+                        sx={{ fontWeight: currentView === 'admin' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                       >
-                        ⚙️ &nbsp; Admin Panel
+                        <AdminPanelSettingsOutlinedIcon fontSize="small" /> Admin Panel
+                      </MenuItem>
+                    )}
+                    {isAdminOrManager && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('day_end'); setAnchorElNav(null); }}
+                        selected={currentView === 'day_end'}
+                        sx={{ fontWeight: currentView === 'day_end' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <VerifiedIcon fontSize="small" /> Day End Closing
+                      </MenuItem>
+                    )}
+                    {isAdminOrManager && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('payment_reconciliation'); setAnchorElNav(null); }}
+                        selected={currentView === 'payment_reconciliation'}
+                        sx={{ fontWeight: currentView === 'payment_reconciliation' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <ArrowRightLeft size={18} /> Payment Reconciliation
                       </MenuItem>
                     )}
                     {isSuperAdmin && (
                       <MenuItem
                         onClick={() => { setCurrentView('superadmin'); setAnchorElNav(null); }}
                         selected={currentView === 'superadmin'}
-                        sx={{ fontWeight: currentView === 'superadmin' ? 800 : 500 }}
+                        sx={{ fontWeight: currentView === 'superadmin' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                       >
-                        👑 &nbsp; Super Admin
+                        <SecurityOutlinedIcon fontSize="small" /> Super Admin
                       </MenuItem>
                     )}
                     <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
                     <MenuItem
                       onClick={() => { setAnchorElNav(null); setLanguageModalVisible(true); }}
-                      sx={{ fontWeight: 500 }}
+                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                     >
-                      🌐 &nbsp; Language
+                      <LanguageOutlinedIcon fontSize="small" /> Language
                     </MenuItem>
                     <MenuItem
                       onClick={() => { setAnchorElNav(null); setKeyboardHelpVisible(true); }}
-                      sx={{ fontWeight: 500 }}
+                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                     >
-                      ⌨️ &nbsp; Keyboard Shortcuts
+                      <KeyboardOutlinedIcon fontSize="small" /> Keyboard Shortcuts
                     </MenuItem>
                     <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
                     <MenuItem
                       onClick={() => { toggleTheme(); setAnchorElNav(null); }}
-                      sx={{ fontWeight: 500 }}
+                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
                     >
-                      {themeMode === 'light' ? '🌓 \u00a0 Dark Mode' : '☀️ \u00a0 Light Mode'}
+                      {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
+                      {themeMode === 'light' ? 'Dark Mode' : 'Light Mode'}
                     </MenuItem>
                     <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
                     <MenuItem
                       onClick={() => { setAnchorElNav(null); handleLogout(); }}
-                      sx={{ color: 'error.main', fontWeight: 700 }}
+                      sx={{ color: 'error.main', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1.5 }}
                     >
-                      🚪 &nbsp; Logout
+                      <LogOutIcon fontSize="small" /> Logout
                     </MenuItem>
                   </Menu>
                 </Box>
@@ -565,9 +649,24 @@ export default function App() {
                 <CashierDashboard user={user} token={token} onLogout={handleLogout} />
               </Box>
             )}
+            {currentView === 'inventory' && isSalesman && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <AdminPanel user={user} token={token} initialTab={5} isSalesmanView={true} />
+              </Box>
+            )}
             {currentView === 'admin' && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <AdminPanel user={user} token={token} />
+              </Box>
+            )}
+            {currentView === 'day_end' && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <DayEndDashboard user={user} token={token} />
+              </Box>
+            )}
+            {currentView === 'payment_reconciliation' && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <PaymentReconciliationSuite user={user} />
               </Box>
             )}
             {currentView === 'superadmin' && (

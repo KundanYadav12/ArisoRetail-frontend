@@ -1,4 +1,5 @@
 import React from 'react';
+import { Globe, CheckCircle2, Circle, X } from 'lucide-react';
 import { useLanguage } from '../locales/LanguageContext';
 
 export default function LanguageSelectorModal({ isOpen, onClose }) {
@@ -11,10 +12,12 @@ export default function LanguageSelectorModal({ isOpen, onClose }) {
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <div>
-            <h2 style={styles.title}>🌐 {t('languageSettings')}</h2>
+            <h2 style={{ ...styles.title, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Globe size={20} /> {t('languageSettings')}
+            </h2>
             <p style={styles.subTitle}>{t('selectLanguage')}</p>
           </div>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
+          <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
         </div>
 
         <div style={styles.grid}>
@@ -32,8 +35,8 @@ export default function LanguageSelectorModal({ isOpen, onClose }) {
                   onClose();
                 }}
               >
-                <div style={styles.radioBox}>
-                  {isSelected ? '🔘' : '⚪'}
+                <div style={{ ...styles.radioBox, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {isSelected ? <CheckCircle2 size={18} color="#0284C7" /> : <Circle size={18} color="#94A3B8" />}
                 </div>
                 <div>
                   <div style={styles.nativeName}>{lang.nativeName}</div>

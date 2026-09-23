@@ -27,12 +27,13 @@ export function NotificationProvider({ children }) {
     ]);
   };
 
-  const notify = {
-    success: (message, title, duration) => addToast('success', message, title, duration),
-    error: (message, title, duration) => addToast('error', message, title, duration),
-    warning: (message, title, duration) => addToast('warning', message, title, duration),
-    info: (message, title, duration) => addToast('info', message, title, duration)
+  const notify = (message, type = 'info', title, duration) => {
+    addToast(type || 'info', message, title, duration);
   };
+  notify.success = (message, title, duration) => addToast('success', message, title, duration);
+  notify.error = (message, title, duration) => addToast('error', message, title, duration);
+  notify.warning = (message, title, duration) => addToast('warning', message, title, duration);
+  notify.info = (message, title, duration) => addToast('info', message, title, duration);
 
   const removeToast = (id) => {
     setToasts(prev => prev.filter(t => t.id !== id));

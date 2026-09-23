@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { createOfflineBookingApi } from '../../services/ownerService';
 import { X, UserPlus, Calendar, Clock } from 'lucide-react';
+import { getISTDateString } from '../../utils/dateUtils';
 
 const WalkinModal = ({ isOpen, onClose, venueId, courts, onSuccess }) => {
   const [selectedCourtId, setSelectedCourtId] = useState(courts && courts.length > 0 ? courts[0].id : '');
-  const [bookingDate, setBookingDate] = useState(new Date().toISOString().split('T')[0]);
+  const [bookingDate, setBookingDate] = useState(() => getISTDateString());
   const [startTime, setStartTime] = useState('18:00:00');
   const [endTime, setEndTime] = useState('19:00:00');
   const [customerName, setCustomerName] = useState('');

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Key, Eye, EyeOff, Store, ArrowLeft } from 'lucide-react';
 import { getApiUrl } from '../utils/api';
+import arisoLogo from '../assets/retail-logo.png';
 
 export default function Register({ onBackToLogin }) {
   const [licenseId, setLicenseId] = useState('');
@@ -114,7 +115,12 @@ export default function Register({ onBackToLogin }) {
             justifyContent: 'center',
             marginBottom: '12px',
           }}>
-            <img src="/ariso-pos-logo.png" alt="Ariso POS" style={{ width: '64px', height: '64px', borderRadius: '14px', objectFit: 'contain' }} />
+            <img 
+              src={arisoLogo} 
+              alt="Ariso POS" 
+              style={{ width: '72px', height: '72px', borderRadius: '16px', objectFit: 'contain' }} 
+              onError={(e) => { e.target.src = arisoLogo; }}
+            />
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: '800', color: '#0f172a', margin: '0 0 4px 0' }}>
             Store Registration

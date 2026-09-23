@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Package, Check, X } from 'lucide-react';
 
 export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onClearCart }) {
   const [qtyValue, setQtyValue] = useState('1');
@@ -51,10 +52,12 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
       <div style={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div style={styles.header}>
           <div>
-            <h2 style={styles.productName}>📦 Enter Quantity</h2>
+            <h2 style={{ ...styles.productName, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Package size={20} /> Enter Quantity
+            </h2>
             <p style={styles.itemTitle}>{item.name}</p>
           </div>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
+          <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
         </div>
 
         <div style={styles.inputSection}>
@@ -109,7 +112,9 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
         {/* Action Buttons */}
         <div style={styles.actionRow}>
           <button style={styles.cancelBtn} type="button" onClick={onClose}>Cancel</button>
-          <button style={styles.confirmBtn} type="button" onClick={handleConfirm}>💾 Save Quantity (Enter)</button>
+          <button style={{ ...styles.confirmBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={handleConfirm}>
+            <Check size={16} /> Save Quantity (Enter)
+          </button>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { Keyboard, X } from 'lucide-react';
 
 export default function KeyboardHelpModal({ isOpen, onClose }) {
   if (!isOpen) return null;
@@ -27,8 +28,10 @@ export default function KeyboardHelpModal({ isOpen, onClose }) {
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
-          <h2 style={styles.title}>⌨️ POS Keyboard Shortcuts Guide</h2>
-          <button style={styles.closeBtn} onClick={onClose}>✕</button>
+          <h2 style={{ ...styles.title, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Keyboard size={20} /> POS Keyboard Shortcuts Guide
+          </h2>
+          <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
         </div>
 
         <p style={styles.subTitle}>Operate Ariso Retail POS fast without touching the mouse!</p>

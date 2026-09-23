@@ -7,17 +7,25 @@ import { SyncService } from './syncService.js';
 
 export function getBaseUrl() {
   if (typeof window !== 'undefined') {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocal) {
+      const custom = localStorage.getItem('ARISO_API_SERVER_URL');
+      if (custom && (custom.includes('localhost') || custom.includes('127.0.0.1'))) {
+        return custom.trim().replace(/\/+$/, '');
+      }
+      if (custom && !custom.includes('localhost') && !custom.includes('127.0.0.1')) {
+        localStorage.removeItem('ARISO_API_SERVER_URL');
+      }
+      return 'http://localhost:5005/api';
+    }
+
     const custom = localStorage.getItem('ARISO_API_SERVER_URL');
     if (custom && custom.trim()) {
       return custom.trim().replace(/\/+$/, '');
     }
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (isLocal) {
-      return 'http://localhost:5005/api';
-    }
   }
   
-  if (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api') {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api') {
     return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
   }
   
@@ -103,6 +111,14 @@ export function handleSessionExpired(reason = null) {
 }
 
 export async function apiFetch(url, options = {}) {
+  // Fast offline failover: if device is explicitly offline, throw immediately without hanging network calls
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    const offlineErr = new Error('Device is offline');
+    offlineErr.name = 'NetworkError';
+    offlineErr.isOffline = true;
+    throw offlineErr;
+  }
+
   const fullUrl = getApiUrl(url);
   const token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
   const refreshToken = localStorage.getItem('ARISO_RETAIL_REFRESH_TOKEN') || localStorage.getItem('pos_refresh_token');
@@ -125,16 +141,28 @@ export async function apiFetch(url, options = {}) {
     headers
   };
 
+  // Attach 4.5s timeout controller if no custom signal provided to prevent hanging requests when network is dead
+  const controller = typeof AbortController !== 'undefined' && !options.signal ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 4500) : null;
+  if (controller) {
+    fetchOptions.signal = controller.signal;
+  }
+
   let response;
   try {
     response = await fetch(fullUrl, fetchOptions);
+    if (timeoutId) clearTimeout(timeoutId);
   } catch (netErr) {
+    if (timeoutId) clearTimeout(timeoutId);
     // Automatic Network Failover to Local Gateway when internet or cloud fails
     if (!fullUrl.includes('localhost') && !fullUrl.includes('127.0.0.1')) {
       const localFallbackUrl = fullUrl.replace(/^https?:\/\/[^\/]+/, 'http://localhost:5005');
       try {
         console.warn(`[API Network Failover] Cloud connection lost. Route fallback -> ${localFallbackUrl}`);
-        response = await fetch(localFallbackUrl, fetchOptions);
+        const localController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const localTimeout = localController ? setTimeout(() => localController.abort(), 2000) : null;
+        response = await fetch(localFallbackUrl, { ...fetchOptions, signal: localController?.signal });
+        if (localTimeout) clearTimeout(localTimeout);
       } catch (localErr) {
         throw netErr;
       }
@@ -161,9 +189,8 @@ export async function apiFetch(url, options = {}) {
       // Ignore clone/JSON parsing errors
     }
 
-    // If no refresh token is present, clear session and return 401 response
+    // If no refresh token is present, return 401 response without destroying cached session
     if (!refreshToken) {
-      handleSessionExpired();
       return response;
     }
 
@@ -227,21 +254,28 @@ export async function apiFetch(url, options = {}) {
         fetchOptions.headers['Authorization'] = `Bearer ${newAccessToken}`;
         response = await fetch(fullUrl, fetchOptions);
       } else {
-        let reason = null;
+        let rData = null;
         try {
-          const rData = await refreshRes.json();
-          if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
-            reason = 'LOGGED_IN_ELSEWHERE';
-          }
+          rData = await refreshRes.json();
         } catch (e) {}
-        processQueue(new Error('Refresh token expired'), null);
+
+        processQueue(new Error('Silent token refresh failed'), null);
         isRefreshing = false;
-        handleSessionExpired(reason);
+
+        // Only explicitly terminate session if account was logged in elsewhere or permanently deactivated
+        if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
+          handleSessionExpired('LOGGED_IN_ELSEWHERE');
+        } else if (rData && rData.code === 'USER_INACTIVE') {
+          handleSessionExpired('USER_INACTIVE');
+        } else {
+          console.warn('[API Auth] Background token refresh failed, keeping persistent offline session intact.');
+        }
       }
     } catch (refreshErr) {
+      console.warn('[API Auth] Network error during silent token refresh, maintaining local session:', refreshErr.message);
       processQueue(refreshErr, null);
       isRefreshing = false;
-      handleSessionExpired();
+      // Do NOT clear credentials on network errors
     }
   }
 
@@ -293,68 +327,162 @@ export async function downloadFile(endpoint, defaultFilename = 'export.xlsx') {
 }
 
 export async function fetchMobileMenu(token) {
+  // Fast offline return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try {
+      const cached = await db.menu_items.toArray();
+      if (cached && cached.length > 0) return cached;
+    } catch (e) {
+      console.warn('[Dexie Menu Read Error]', e);
+    }
+    const local = localStorage.getItem('ariso_offline_menu_items');
+    return local ? JSON.parse(local) : [];
+  }
+
   try {
     const res = await apiFetch('/api/menu');
     if (res.ok) {
       const menuList = await res.json();
-      db.menu_items.clear().then(() => {
-        db.menu_items.bulkPut(menuList);
-      }).catch(err => console.warn('[IndexedDB] Failed to cache menu:', err.message));
+      if (Array.isArray(menuList) && menuList.length > 0) {
+        db.menu_items.clear().then(() => {
+          db.menu_items.bulkPut(menuList);
+        }).catch(err => console.warn('[IndexedDB] Failed to cache menu:', err.message));
+        try {
+          localStorage.setItem('ariso_offline_menu_items', JSON.stringify(menuList));
+        } catch (e) {}
+      }
       return menuList;
     }
   } catch (err) {
-    console.warn('[API Fetch Menu Fallback] Offline, reading local DB:', err.message);
+    console.warn('[API Fetch Menu Fallback] Offline, reading local DB/Storage:', err.message);
   }
-  return await db.menu_items.toArray();
+
+  try {
+    const items = await db.menu_items.toArray();
+    if (items && items.length > 0) return items;
+  } catch (e) {}
+  const local = localStorage.getItem('ariso_offline_menu_items');
+  return local ? JSON.parse(local) : [];
 }
 
 export async function fetchMobileCategories(token) {
+  // Fast offline return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try {
+      const cached = await db.categories.toArray();
+      if (cached && cached.length > 0) return cached;
+    } catch (e) {
+      console.warn('[Dexie Categories Read Error]', e);
+    }
+    const local = localStorage.getItem('ariso_offline_categories');
+    return local ? JSON.parse(local) : [];
+  }
+
   try {
     const res = await apiFetch('/api/categories');
     if (res.ok) {
       const categories = await res.json();
-      db.categories.clear().then(() => {
-        db.categories.bulkPut(categories);
-      }).catch(err => console.warn('[IndexedDB] Failed to cache categories:', err.message));
+      if (Array.isArray(categories) && categories.length > 0) {
+        db.categories.clear().then(() => {
+          db.categories.bulkPut(categories);
+        }).catch(err => console.warn('[IndexedDB] Failed to cache categories:', err.message));
+        try {
+          localStorage.setItem('ariso_offline_categories', JSON.stringify(categories));
+        } catch (e) {}
+      }
       return categories;
     }
   } catch (err) {
-    console.warn('[API Fetch Categories Fallback] Offline, reading local DB:', err.message);
+    console.warn('[API Fetch Categories Fallback] Offline, reading local DB/Storage:', err.message);
   }
-  return await db.categories.toArray();
+
+  try {
+    const cats = await db.categories.toArray();
+    if (cats && cats.length > 0) return cats;
+  } catch (e) {}
+  const local = localStorage.getItem('ariso_offline_categories');
+  return local ? JSON.parse(local) : [];
 }
 
 export async function fetchRestaurantProfile(token) {
+  // Fast offline return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try {
+      const local = await db.settings.get('restaurant_profile');
+      if (local && local.value) return local.value;
+    } catch (e) {}
+    const str = localStorage.getItem('ariso_offline_restaurant_profile');
+    return str ? JSON.parse(str) : null;
+  }
+
   try {
     const res = await apiFetch('/api/settings/profile');
     if (res.ok) {
       const profile = await res.json();
-      db.settings.put({ key: 'restaurant_profile', value: profile }).catch(() => {});
+      if (profile) {
+        db.settings.put({ key: 'restaurant_profile', value: profile }).catch(() => {});
+        try {
+          localStorage.setItem('ariso_offline_restaurant_profile', JSON.stringify(profile));
+        } catch (e) {}
+      }
       return profile;
     }
   } catch (e) {
     console.warn('[API Fetch Profile Fallback] Offline, reading local profile settings');
   }
-  const local = await db.settings.get('restaurant_profile');
-  return local ? local.value : null;
+  try {
+    const local = await db.settings.get('restaurant_profile');
+    if (local && local.value) return local.value;
+  } catch (e) {}
+  const str = localStorage.getItem('ariso_offline_restaurant_profile');
+  return str ? JSON.parse(str) : null;
 }
 
 export async function fetchReceiptSettings(token) {
+  // Fast offline return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try {
+      const local = await db.settings.get('receipt_settings');
+      if (local && local.value) return local.value;
+    } catch (e) {}
+    const str = localStorage.getItem('ariso_offline_receipt_settings');
+    return str ? JSON.parse(str) : null;
+  }
+
   try {
     const res = await apiFetch('/api/settings/receipt');
     if (res.ok) {
       const settings = await res.json();
-      db.settings.put({ key: 'receipt_settings', value: settings }).catch(() => {});
+      if (settings) {
+        db.settings.put({ key: 'receipt_settings', value: settings }).catch(() => {});
+        try {
+          localStorage.setItem('ariso_offline_receipt_settings', JSON.stringify(settings));
+        } catch (e) {}
+      }
       return settings;
     }
   } catch (e) {
     console.warn('[API Fetch Settings Fallback] Offline, reading local receipt settings');
   }
-  const local = await db.settings.get('receipt_settings');
-  return local ? local.value : null;
+  try {
+    const local = await db.settings.get('receipt_settings');
+    if (local && local.value) return local.value;
+  } catch (e) {}
+  const str = localStorage.getItem('ariso_offline_receipt_settings');
+  return str ? JSON.parse(str) : null;
 }
 
 export async function fetchPrinters(token) {
+  // Fast offline return
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    try {
+      const cached = await db.printers.toArray();
+      if (cached && cached.length > 0) return cached;
+    } catch (e) {}
+    const str = localStorage.getItem('ariso_offline_printers');
+    return str ? JSON.parse(str) : [];
+  }
+
   try {
     const res = await apiFetch('/api/printers');
     if (res.ok) {
@@ -363,13 +491,21 @@ export async function fetchPrinters(token) {
         db.printers.clear().then(() => {
           db.printers.bulkPut(printers);
         }).catch(() => {});
+        try {
+          localStorage.setItem('ariso_offline_printers', JSON.stringify(printers));
+        } catch (e) {}
         return printers;
       }
     }
   } catch (e) {
     console.warn('[API Fetch Printers Fallback] Offline, reading local DB:', e.message);
   }
-  return await db.printers.toArray();
+  try {
+    const items = await db.printers.toArray();
+    if (items && items.length > 0) return items;
+  } catch (e) {}
+  const str = localStorage.getItem('ariso_offline_printers');
+  return str ? JSON.parse(str) : [];
 }
 
 export async function createOrder(token, orderData) {
@@ -423,5 +559,57 @@ export async function createOrder(token, orderData) {
     
     throw err;
   }
+}
+
+export async function fetchCustomers(query = '') {
+  const url = query ? `/api/customers?search=${encodeURIComponent(query)}` : '/api/customers';
+  const res = await apiFetch(url);
+  if (!res.ok) {
+    throw new Error('Failed to fetch customers');
+  }
+  return await res.json();
+}
+
+export async function createCustomer(customerData) {
+  const res = await apiFetch('/api/customers', {
+    method: 'POST',
+    body: customerData
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to create customer');
+  }
+  return await res.json();
+}
+
+export async function fetchPendingOrders() {
+  const res = await apiFetch('/api/orders?status=pending');
+  if (!res.ok) {
+    throw new Error('Failed to fetch pending orders');
+  }
+  return await res.json();
+}
+
+export async function confirmPendingOrder(orderId) {
+  const res = await apiFetch(`/api/orders/${orderId}/confirm`, {
+    method: 'POST'
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to confirm order');
+  }
+  return await res.json();
+}
+
+export async function cancelPendingOrder(orderId, cancelReason = 'Cancelled by user') {
+  const res = await apiFetch(`/api/orders/${orderId}/status`, {
+    method: 'PUT',
+    body: { status: 'cancelled', cancel_reason: cancelReason }
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to cancel order');
+  }
+  return await res.json();
 }
 

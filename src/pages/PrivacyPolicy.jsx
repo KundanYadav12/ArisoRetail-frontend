@@ -28,6 +28,12 @@
 
 
 
+import React from 'react';
+import { Box, Container, Typography, Button, Chip, useTheme } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import PrintIcon from '@mui/icons-material/Print';
+import retailLogo from '../assets/retail-logo.png';
+
 export default function PrivacyPolicy({ onBack }) {
   const theme = useTheme();
 
@@ -96,10 +102,10 @@ export default function PrivacyPolicy({ onBack }) {
             <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
               <Box
                 component="img"
-                src="/ariso-pos-logo.png"
+                src={retailLogo}
                 alt="Ariso POS Logo"
                 onError={(e) => { e.target.style.display = 'none'; }}
-                sx={{ width: 44, height: 44, borderRadius: 2 }}
+                sx={{ width: 44, height: 44, borderRadius: 2, objectFit: 'contain' }}
               />
               <Typography variant="h4" component="h1" sx={{ fontWeight: 800, color: '#0f172a', letterSpacing: '-0.5px' }}>
                 Ariso POS

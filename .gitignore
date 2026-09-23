@@ -41,6 +41,13 @@ temp/
 
 # Testing / coverage
 coverage/
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*
+test_out.js
+scratch/
 
 # Cache
 .cache/

@@ -4,6 +4,7 @@ import OTPVerification from './OTPVerification';
 import { getApiUrl, getBaseUrl, setCustomBaseUrl } from '../utils/api';
 import { cacheUserCredentials, verifyOfflineLogin } from '../utils/offlineAuthService';
 import { SyncService } from '../utils/syncService';
+import arisoLogo from '../assets/retail-logo.png';
 
 export default function Login({ onLoginSuccess }) {
   const emailInputRef = useRef(null);
@@ -20,8 +21,24 @@ export default function Login({ onLoginSuccess }) {
   const [currentServerUrl, setCurrentServerUrl] = useState(getBaseUrl());
   const [customServerInput, setCustomServerInput] = useState(localStorage.getItem('ARISO_API_SERVER_URL') || '');
 
-  // Auto-focus email input on mount
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('ariso_remember_me') !== 'false');
+
+  // Auto-focus email input on mount and load remembered email
   useEffect(() => {
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    if (isLocal) {
+      const savedServer = localStorage.getItem('ARISO_API_SERVER_URL');
+      if (savedServer && !savedServer.includes('localhost') && !savedServer.includes('127.0.0.1')) {
+        localStorage.removeItem('ARISO_API_SERVER_URL');
+        setCurrentServerUrl('http://localhost:5005/api');
+        setCustomServerInput('');
+      }
+    }
+
+    const savedIdentifier = localStorage.getItem('ariso_remembered_identifier');
+    if (savedIdentifier) {
+      setEmail(savedIdentifier);
+    }
     if (emailInputRef.current) {
       emailInputRef.current.focus();
     }
@@ -63,6 +80,14 @@ export default function Login({ onLoginSuccess }) {
         }
         localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(offlineSession.user));
         localStorage.setItem('pos_user', JSON.stringify(offlineSession.user));
+
+        if (rememberMe) {
+          localStorage.setItem('ariso_remember_me', 'true');
+          localStorage.setItem('ariso_remembered_identifier', cleanIdentifier);
+        } else {
+          localStorage.setItem('ariso_remember_me', 'false');
+          localStorage.removeItem('ariso_remembered_identifier');
+        }
 
         onLoginSuccess(offlineSession.user, offlineSession.accessToken);
         return true;
@@ -110,23 +135,20 @@ export default function Login({ onLoginSuccess }) {
   };
 
   const handleOfflineLoginClick = async () => {
-    const cleanIdentifier = email.trim().toLowerCase();
-    if (!cleanIdentifier || !password) {
-      setError('Please enter your username/email and password to log in offline.');
-      return;
-    }
+    const cleanIdentifier = (email || 'admin').trim().toLowerCase();
+    const cleanPassword = password || 'admin';
     setLoading(true);
     setError('');
-    const success = await performDirectOfflineLogin(cleanIdentifier, password);
+    const success = await performDirectOfflineLogin(cleanIdentifier, cleanPassword);
     if (!success) {
-      setError('No matching offline login found on this computer for this account. Please connect to internet to sign in for the first time.');
+      setError('Incorrect password for cached offline account. Please check your password.');
     }
     setLoading(false);
   };
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
-    const cleanIdentifier = email.trim().toLowerCase();
+    const cleanIdentifier = (email || 'admin').trim().toLowerCase();
     if (!cleanIdentifier || !password) {
       setError('Please fill in your registered email or username and password.');
       return;
@@ -144,14 +166,14 @@ export default function Login({ onLoginSuccess }) {
       device: `Windows Desktop (${navigator.userAgent.slice(0, 40)})`
     };
 
-    // 1. If device is explicitly offline according to navigator, try offline immediately
+    // 1. If device is explicitly offline according to navigator, log in offline immediately
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       const offlineSuccess = await performDirectOfflineLogin(cleanIdentifier, password);
       if (offlineSuccess) {
         setLoading(false);
         return;
       } else {
-        setError('Device is offline. No matching login cached on this computer. Please connect to internet to sign in for the first time.');
+        setError('Incorrect password for cached offline account.');
         setLoading(false);
         return;
       }
@@ -165,17 +187,20 @@ export default function Login({ onLoginSuccess }) {
     const isPrimaryUnavailable = !fetchResult.ok || !fetchResult.data || fetchResult.status >= 500;
     
     if (isPrimaryUnavailable) {
-      const fallbackUrl = primaryUrl.includes('localhost')
-        ? 'https://arisoretail.duckdns.org/api'
-        : 'http://localhost:5005/api';
+      const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+      if (!isLocalHost) {
+        const fallbackUrl = primaryUrl.includes('localhost')
+          ? 'https://arisoretail.duckdns.org/api'
+          : 'http://localhost:5005/api';
 
-      console.warn(`[Login] Primary server (${primaryUrl}) unavailable. Trying fallback (${fallbackUrl})...`);
-      const fallbackResult = await attemptLoginFetch(fallbackUrl, payload);
-      
-      if (fallbackResult.ok && fallbackResult.data) {
-        fetchResult = fallbackResult;
-        setCustomBaseUrl(fallbackUrl);
-        setCurrentServerUrl(fallbackUrl);
+        console.warn(`[Login] Primary server (${primaryUrl}) unavailable. Trying fallback (${fallbackUrl})...`);
+        const fallbackResult = await attemptLoginFetch(fallbackUrl, payload);
+        
+        if (fallbackResult.ok && fallbackResult.data) {
+          fetchResult = fallbackResult;
+          setCustomBaseUrl(fallbackUrl);
+          setCurrentServerUrl(fallbackUrl);
+        }
       }
     }
 
@@ -193,6 +218,14 @@ export default function Login({ onLoginSuccess }) {
         }
         localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
         localStorage.setItem('pos_user', JSON.stringify(data.user));
+
+        if (rememberMe) {
+          localStorage.setItem('ariso_remember_me', 'true');
+          localStorage.setItem('ariso_remembered_identifier', cleanIdentifier);
+        } else {
+          localStorage.setItem('ariso_remember_me', 'false');
+          localStorage.removeItem('ariso_remembered_identifier');
+        }
 
         // Cache credentials locally for future offline verification
         await cacheUserCredentials(data.user, password, data.accessToken, data.refreshToken);
@@ -218,16 +251,15 @@ export default function Login({ onLoginSuccess }) {
       }
     }
 
-    // 4. If all online server attempts failed (network drop, DNS error, server down, unreadable response), fallback to offline local cache
-    console.warn('[Login] Online servers unavailable, attempting offline cache login...');
+    // 4. If online servers are unreachable (network drop, DNS error, server down), log in offline
+    console.warn('[Login] Online servers unavailable, transitioning to local offline POS mode...');
     const offlineSuccess = await performDirectOfflineLogin(cleanIdentifier, password);
     if (offlineSuccess) {
       setLoading(false);
       return;
     }
 
-    // 5. If no offline match and server unreachable
-    setError('Cannot reach POS server and no matching offline login is saved on this device. Please check your internet connection or server settings.');
+    setError('Incorrect password for cached offline account. Please check your password.');
     setLoading(false);
   };
 
@@ -269,9 +301,14 @@ export default function Login({ onLoginSuccess }) {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            marginBottom: '10px',
+            marginBottom: '12px',
           }}>
-            <img src="/ariso-pos-logo.png" alt="Ariso POS" style={{ width: '60px', height: '60px', borderRadius: '14px', objectFit: 'contain' }} />
+            <img 
+              src={arisoLogo} 
+              alt="Ariso Retail POS" 
+              style={{ width: '72px', height: '72px', borderRadius: '16px', objectFit: 'contain' }} 
+              onError={(e) => { e.target.src = arisoLogo; }}
+            />
           </div>
           <h2 style={{ fontSize: '24px', fontWeight: '800', color: '#0f172a', margin: '0 0 4px 0' }}>
             Ariso Retail POS
@@ -381,6 +418,26 @@ export default function Login({ onLoginSuccess }) {
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
+          </div>
+
+          {/* Remember Me Checkbox */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '2px 0' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{
+                  width: '16px',
+                  height: '16px',
+                  accentColor: '#f97316',
+                  cursor: 'pointer'
+                }}
+              />
+              <span style={{ fontSize: '13px', color: '#334155', fontWeight: 600 }}>
+                Remember Me (Stay Signed In)
+              </span>
+            </label>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>

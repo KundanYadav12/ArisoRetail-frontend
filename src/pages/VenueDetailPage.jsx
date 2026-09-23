@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getVenueDetailsApi } from '../services/venueService';
 import { getCourtSlotsApi } from '../services/bookingService';
-import CheckoutModal from '../components/player/CheckoutModal';
 import { MapPin, Star, Calendar, Clock, ShieldCheck, CheckCircle, Info, ChevronRight, Award } from 'lucide-react';
+import { getISTDateString } from '../utils/dateUtils';
 
 const VenueDetailPage = () => {
   const { idOrSlug } = useParams();
@@ -11,7 +11,7 @@ const VenueDetailPage = () => {
 
   const [venue, setVenue] = useState(null);
   const [selectedCourt, setSelectedCourt] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => getISTDateString());
   const [slots, setSlots] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -64,8 +64,8 @@ const VenueDetailPage = () => {
     for (let i = 0; i < 6; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() + i);
-      const isoDate = d.toISOString().split('T')[0];
-      const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      const isoDate = getISTDateString(d);
+      const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'Asia/Kolkata' });
       dates.push({ isoDate, label });
     }
     return dates;
