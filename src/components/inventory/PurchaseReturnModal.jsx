@@ -195,7 +195,7 @@ export default function PurchaseReturnModal({
 
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Supplier / Vendor *"
@@ -213,7 +213,7 @@ export default function PurchaseReturnModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Source Warehouse *"
@@ -231,7 +231,7 @@ export default function PurchaseReturnModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="Return Date *"
                 type="date"
@@ -244,7 +244,7 @@ export default function PurchaseReturnModal({
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 label="Return Reason *"
                 size="small"

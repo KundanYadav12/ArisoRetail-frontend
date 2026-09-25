@@ -57,5 +57,9 @@ db.version(9).stores({
   offline_supplier_payments: 'offline_id, supplier_id, status, created_at'
 });
 
+db.version(10).stores({
+  held_receipts: 'id, hold_number, status, restaurant_id, created_at'
+});
+
 export default db;
 

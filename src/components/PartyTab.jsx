@@ -13,7 +13,14 @@ import {
   X, CheckCircle, Clock, XCircle, FileText, Truck, Receipt,
   ArrowDownRight, ArrowUpRight, DollarSign
 } from 'lucide-react';
-import { apiFetch } from '../utils/api';
+import {
+  apiFetch,
+  fetchCustomerUnpaidInvoices,
+  recordCustomerPayment,
+  fetchReceivablesSummary,
+  fetchCustomerAgeingReport,
+  fetchCustomerStatement
+} from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
 
 const INDIAN_STATES = [
@@ -52,6 +59,8 @@ export default function PartyTab({
   const [shippingAddress, setShippingAddress] = useState('');
   const [placeOfSupply, setPlaceOfSupply] = useState('27-Maharashtra');
   const [creditLimit, setCreditLimit] = useState(0);
+  const [creditDays, setCreditDays] = useState(30);
+  const [allowCredit, setAllowCredit] = useState(true);
   const [openingBalance, setOpeningBalance] = useState(0);
 
   // Order & Ledger History Drawer / Modal
@@ -64,13 +73,22 @@ export default function PartyTab({
   const [partyLedgerSummary, setPartyLedgerSummary] = useState(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Payment Recording Modal
+  // Payment Recording Modal & Invoice Allocations
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('cash');
   const [paymentRef, setPaymentRef] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [recordingPayment, setRecordingPayment] = useState(false);
+  const [partyUnpaidInvoices, setPartyUnpaidInvoices] = useState([]);
+  const [invoiceAllocations, setInvoiceAllocations] = useState({});
+  const [loadingUnpaidInvoices, setLoadingUnpaidInvoices] = useState(false);
+
+  // Top Receivables KPIs & Sub-tabs
+  const [mainSubTab, setMainSubTab] = useState(0); // 0: Parties, 1: Receivables Invoices, 2: Ageing
+  const [receivablesSummary, setReceivablesSummary] = useState(null);
+  const [ageingReport, setAgeingReport] = useState([]);
+  const [loadingReceivables, setLoadingReceivables] = useState(false);
 
   useEffect(() => {
     loadParties();
@@ -104,6 +122,8 @@ export default function PartyTab({
     setShippingAddress('');
     setPlaceOfSupply('27-Maharashtra');
     setCreditLimit(0);
+    setCreditDays(30);
+    setAllowCredit(true);
     setOpeningBalance(0);
     setPartyModalOpen(true);
   };
@@ -120,6 +140,8 @@ export default function PartyTab({
     setShippingAddress(party.shipping_address || party.address || '');
     setPlaceOfSupply(party.place_of_supply || '27-Maharashtra');
     setCreditLimit(parseFloat(party.credit_limit || 0));
+    setCreditDays(parseInt(party.credit_days !== undefined ? party.credit_days : 30));
+    setAllowCredit(party.allow_credit !== undefined ? Boolean(party.allow_credit) : true);
     setOpeningBalance(parseFloat(party.opening_balance || 0));
     setPartyModalOpen(true);
   };
@@ -144,6 +166,8 @@ export default function PartyTab({
         shipping_address: shippingAddress.trim() || billingAddress.trim() || null,
         place_of_supply: placeOfSupply,
         credit_limit: parseFloat(creditLimit) || 0,
+        credit_days: parseInt(creditDays) || 0,
+        allow_credit: allowCredit ? 1 : 0,
         opening_balance: parseFloat(openingBalance) || 0
       };
 
@@ -226,6 +250,68 @@ export default function PartyTab({
     }
   };
 
+  // Load Receivables Summary and Ageing Report
+  const loadReceivablesData = async () => {
+    setLoadingReceivables(true);
+    try {
+      const [sumRes, ageRes] = await Promise.allSettled([
+        fetchReceivablesSummary(),
+        fetchCustomerAgeingReport()
+      ]);
+      if (sumRes.status === 'fulfilled' && sumRes.value) {
+        setReceivablesSummary(sumRes.value);
+      }
+      if (ageRes.status === 'fulfilled' && ageRes.value) {
+        setAgeingReport(Array.isArray(ageRes.value) ? ageRes.value : (ageRes.value?.report || []));
+      }
+    } catch (e) {
+      console.warn('Receivables load notice:', e);
+    } finally {
+      setLoadingReceivables(false);
+    }
+  };
+
+  useEffect(() => {
+    loadReceivablesData();
+  }, []);
+
+  // Open Payment Recording Dialog with customer unpaid invoices
+  const handleOpenPaymentModal = async (party = null) => {
+    const targetParty = party || selectedPartyForHistory;
+    if (!targetParty) return;
+    setSelectedPartyForHistory(targetParty);
+    setPaymentAmount('');
+    setPaymentRef('');
+    setPaymentNotes('');
+    setInvoiceAllocations({});
+    setPaymentModalOpen(true);
+    setLoadingUnpaidInvoices(true);
+    try {
+      const data = await fetchCustomerUnpaidInvoices(targetParty.id);
+      const invs = Array.isArray(data) ? data : (data.invoices || []);
+      setPartyUnpaidInvoices(invs);
+    } catch (e) {
+      console.warn('Could not load unpaid invoices:', e);
+      setPartyUnpaidInvoices([]);
+    } finally {
+      setLoadingUnpaidInvoices(false);
+    }
+  };
+
+  // Auto-allocate payment amount FIFO across open invoices
+  const handleAutoAllocate = (amountStr) => {
+    let rem = parseFloat(amountStr) || 0;
+    const allocMap = {};
+    for (const inv of partyUnpaidInvoices) {
+      if (rem <= 0) break;
+      const due = parseFloat(inv.remaining_due || 0);
+      const toAlloc = Math.min(rem, due);
+      allocMap[inv.id] = parseFloat(toAlloc.toFixed(2));
+      rem -= toAlloc;
+    }
+    setInvoiceAllocations(allocMap);
+  };
+
   // Record Payment
   const handleRecordPayment = async () => {
     const amt = parseFloat(paymentAmount);
@@ -236,29 +322,33 @@ export default function PartyTab({
 
     setRecordingPayment(true);
     try {
-      const res = await apiFetch(`/api/customers/${selectedPartyForHistory.id}/payment`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: amt,
-          payment_mode: paymentMode,
-          reference_number: paymentRef.trim() || null,
-          notes: paymentNotes.trim() || null
-        })
+      const allocList = Object.entries(invoiceAllocations)
+        .filter(([_, allocAmt]) => parseFloat(allocAmt) > 0)
+        .map(([orderId, allocAmt]) => ({
+          order_id: parseInt(orderId),
+          allocated_amount: parseFloat(allocAmt)
+        }));
+
+      await recordCustomerPayment({
+        customer_id: selectedPartyForHistory.id,
+        amount: amt,
+        payment_mode: paymentMode,
+        reference_number: paymentRef.trim() || null,
+        notes: paymentNotes.trim() || null,
+        allocations: allocList.length > 0 ? allocList : null
       });
 
-      if (res.ok) {
-        notify.success(`Payment of ₹${amt.toFixed(2)} recorded successfully!`, 'Payment Success');
-        setPaymentModalOpen(false);
-        setPaymentAmount('');
-        setPaymentRef('');
-        setPaymentNotes('');
+      notify.success(`Payment of ₹${amt.toFixed(2)} recorded successfully!`, 'Payment Success');
+      setPaymentModalOpen(false);
+      setPaymentAmount('');
+      setPaymentRef('');
+      setPaymentNotes('');
+      setInvoiceAllocations({});
+      if (selectedPartyForHistory?.id) {
         loadPartyHistoryData(selectedPartyForHistory.id);
-        loadParties();
-      } else {
-        const err = await res.json();
-        notify.error(err.error || 'Failed to record payment.', 'Error');
       }
+      loadParties();
+      loadReceivablesData();
     } catch (err) {
       notify.error(err.message || 'Failed to record payment.', 'Error');
     } finally {
@@ -315,243 +405,718 @@ export default function PartyTab({
         </Box>
       </Box>
 
-      {/* Metrics Cards */}
-      <Grid container spacing={{ xs: 1, sm: 2 }}>
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: 'background.paper' }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
-              Total Registered Parties
-            </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'primary.main' }}>
-              {parties.length}
-            </Typography>
-          </Paper>
-        </Grid>
-
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#f0fdf4', borderColor: '#bbf7d0' }}>
-            <Typography variant="caption" sx={{ color: '#15803d', fontWeight: 800, textTransform: 'uppercase' }}>
-              GST Registered Parties
-            </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#16a34a' }}>
-              {parties.filter(p => Boolean(p.gst_number)).length}
-            </Typography>
-          </Paper>
-        </Grid>
-
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fef2f2', borderColor: '#fecaca' }}>
-            <Typography variant="caption" sx={{ color: '#b91c1c', fontWeight: 800, textTransform: 'uppercase' }}>
-              Total Outstanding Due
-            </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#dc2626' }}>
-              ₹{parties.reduce((sum, p) => sum + (parseFloat(p.current_balance || 0) > 0 ? parseFloat(p.current_balance) : 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </Typography>
-          </Paper>
-        </Grid>
-
-        <Grid size={{ xs: 6, sm: 3 }}>
-          <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#eff6ff', borderColor: '#bfdbfe' }}>
-            <Typography variant="caption" sx={{ color: '#1e40af', fontWeight: 800, textTransform: 'uppercase' }}>
-              Parties with Credit Limit
-            </Typography>
-            <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#2563eb' }}>
-              {parties.filter(p => parseFloat(p.credit_limit || 0) > 0).length}
-            </Typography>
-          </Paper>
-        </Grid>
-      </Grid>
-
-      {/* Search Bar */}
-      <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: 'background.paper' }}>
-        <TextField
-          fullWidth
-          size="small"
-          placeholder="Search party by name, contact person, phone, GSTIN, or city..."
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <Search size={16} />
-              </InputAdornment>
-            ),
-            endAdornment: searchTerm ? (
-              <InputAdornment position="end">
-                <IconButton size="small" onClick={() => setSearchTerm('')}>
-                  <X size={14} />
-                </IconButton>
-              </InputAdornment>
-            ) : null
+      {/* Sub-Navigation Tabs */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs
+          value={mainSubTab}
+          onChange={(_, v) => {
+            setMainSubTab(v);
+            if (v === 1 || v === 2) loadReceivablesData();
           }}
-        />
-      </Paper>
+          textColor="primary"
+          indicatorColor="primary"
+          sx={{ minHeight: 42 }}
+        >
+          <Tab
+            label="Parties Directory"
+            icon={<Users size={16} />}
+            iconPosition="start"
+            sx={{ fontWeight: 800, minHeight: 42, textTransform: 'none', fontSize: '0.85rem' }}
+          />
+          <Tab
+            label="Customer Receivables / Udhar"
+            icon={<DollarSign size={16} />}
+            iconPosition="start"
+            sx={{ fontWeight: 800, minHeight: 42, textTransform: 'none', fontSize: '0.85rem' }}
+          />
+          <Tab
+            label="Ageing Analysis"
+            icon={<Clock size={16} />}
+            iconPosition="start"
+            sx={{ fontWeight: 800, minHeight: 42, textTransform: 'none', fontSize: '0.85rem' }}
+          />
+        </Tabs>
+      </Box>
 
-      {/* Parties Table */}
-      <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5, overflowX: 'auto' }}>
-        <Table size="small" sx={{ minWidth: 920 }}>
-          <TableHead sx={{ bgcolor: '#f8fafc' }}>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 800 }}>Party / Business Name</TableCell>
-              <TableCell sx={{ fontWeight: 800 }}>Contact Info</TableCell>
-              <TableCell sx={{ fontWeight: 800 }}>GSTIN / PAN</TableCell>
-              <TableCell sx={{ fontWeight: 800 }}>Billing / Supply State</TableCell>
-              <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Outstanding Due</TableCell>
-              <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Credit Limit</TableCell>
-              <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {filteredParties.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 5, color: 'text.secondary', fontWeight: 600 }}>
-                  {loading ? 'Loading party records...' : 'No parties found matching your search.'}
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredParties.map((party) => (
-                <TableRow key={party.id} hover>
-                  {/* Party Name */}
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Box sx={{ bgcolor: 'primary.light', color: 'primary.dark', p: 0.75, borderRadius: 1.5 }}>
-                        <Building size={16} />
-                      </Box>
-                      <Box>
-                        <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f172a' }}>
-                          {party.name}
-                        </Typography>
-                        {party.contact_person && (
-                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                            Attn: {party.contact_person}
+      {/* TAB 0: PARTIES DIRECTORY */}
+      {mainSubTab === 0 && (
+        <>
+          {/* Metrics Cards */}
+          <Grid container spacing={{ xs: 1, sm: 2 }}>
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: 'background.paper' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
+                  Total Registered Parties
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'primary.main' }}>
+                  {parties.length}
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                <Typography variant="caption" sx={{ color: '#15803d', fontWeight: 800, textTransform: 'uppercase' }}>
+                  GST Registered Parties
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#16a34a' }}>
+                  {parties.filter(p => Boolean(p.gst_number)).length}
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fef2f2', borderColor: '#fecaca' }}>
+                <Typography variant="caption" sx={{ color: '#b91c1c', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Total Outstanding Due
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#dc2626' }}>
+                  ₹{parties.reduce((sum, p) => sum + (parseFloat(p.current_balance || 0) > 0 ? parseFloat(p.current_balance) : 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#eff6ff', borderColor: '#bfdbfe' }}>
+                <Typography variant="caption" sx={{ color: '#1e40af', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Parties with Credit Limit
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#2563eb' }}>
+                  {parties.filter(p => parseFloat(p.credit_limit || 0) > 0).length}
+                </Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+
+          {/* Search Bar */}
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: 'background.paper' }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Search party by name, contact person, phone, GSTIN, or city..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search size={16} />
+                  </InputAdornment>
+                ),
+                endAdornment: searchTerm ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearchTerm('')}>
+                      <X size={14} />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null
+              }}
+            />
+          </Paper>
+
+          {/* Parties Table */}
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5, overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 920 }}>
+              <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 800 }}>Party / Business Name</TableCell>
+                  <TableCell sx={{ fontWeight: 800 }}>Contact Info</TableCell>
+                  <TableCell sx={{ fontWeight: 800 }}>GSTIN / PAN</TableCell>
+                  <TableCell sx={{ fontWeight: 800 }}>Billing / Supply State</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Outstanding Due</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Credit Limit</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredParties.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center" sx={{ py: 5, color: 'text.secondary', fontWeight: 600 }}>
+                      {loading ? 'Loading party records...' : 'No parties found matching your search.'}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredParties.map((party) => (
+                    <TableRow key={party.id} hover>
+                      {/* Party Name */}
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Box sx={{ bgcolor: 'primary.light', color: 'primary.dark', p: 0.75, borderRadius: 1.5 }}>
+                            <Building size={16} />
+                          </Box>
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f172a' }}>
+                              {party.name}
+                            </Typography>
+                            {party.contact_person && (
+                              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                                Attn: {party.contact_person}
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                      </TableCell>
+
+                      {/* Contact Info */}
+                      <TableCell>
+                        {party.phone && (
+                          <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Phone size={12} color="#64748b" /> {party.phone}
                           </Typography>
                         )}
-                      </Box>
-                    </Box>
-                  </TableCell>
+                        {party.email && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Mail size={12} /> {party.email}
+                          </Typography>
+                        )}
+                      </TableCell>
 
-                  {/* Contact Info */}
-                  <TableCell>
-                    {party.phone && (
-                      <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Phone size={12} color="#64748b" /> {party.phone}
-                      </Typography>
-                    )}
-                    {party.email && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Mail size={12} /> {party.email}
-                      </Typography>
-                    )}
-                  </TableCell>
+                      {/* GSTIN / PAN */}
+                      <TableCell>
+                        {party.gst_number ? (
+                          <Chip
+                            size="small"
+                            label={`GST: ${party.gst_number}`}
+                            sx={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.7rem', height: 22 }}
+                          />
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">Unregistered</Typography>
+                        )}
+                        {party.pan_number && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                            PAN: {party.pan_number}
+                          </Typography>
+                        )}
+                      </TableCell>
 
-                  {/* GSTIN / PAN */}
-                  <TableCell>
-                    {party.gst_number ? (
-                      <Chip
-                        size="small"
-                        label={`GST: ${party.gst_number}`}
-                        sx={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.7rem', height: 22 }}
-                      />
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">Unregistered</Typography>
-                    )}
-                    {party.pan_number && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-                        PAN: {party.pan_number}
-                      </Typography>
-                    )}
-                  </TableCell>
+                      {/* Address & Place of Supply */}
+                      <TableCell>
+                        <Typography variant="caption" sx={{ fontWeight: 700, color: '#0369a1', display: 'block' }}>
+                          {party.place_of_supply || '27-Maharashtra'}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 220, display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                          {party.address || party.billing_address || 'No address specified'}
+                        </Typography>
+                      </TableCell>
 
-                  {/* Address & Place of Supply */}
-                  <TableCell>
-                    <Typography variant="caption" sx={{ fontWeight: 700, color: '#0369a1', display: 'block' }}>
-                      {party.place_of_supply || '27-Maharashtra'}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 220, display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                      {party.address || party.billing_address || 'No address specified'}
-                    </Typography>
-                  </TableCell>
+                      {/* Outstanding Due */}
+                      <TableCell align="right">
+                        {parseFloat(party.current_balance || 0) > 0 ? (
+                          <Chip
+                            size="small"
+                            label={`₹${parseFloat(party.current_balance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Due`}
+                            sx={{ bgcolor: '#fef2f2', color: '#dc2626', fontWeight: 800, border: '1px solid #fca5a5', cursor: 'pointer' }}
+                            onClick={() => handleOpenHistory(party, 3)}
+                            title="Click to view Customer Ledger"
+                          />
+                        ) : parseFloat(party.current_balance || 0) < 0 ? (
+                          <Chip
+                            size="small"
+                            label={`₹${Math.abs(parseFloat(party.current_balance)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Cr`}
+                            sx={{ bgcolor: '#f0fdf4', color: '#16a34a', fontWeight: 800, cursor: 'pointer' }}
+                            onClick={() => handleOpenHistory(party, 3)}
+                          />
+                        ) : (
+                          <Typography variant="caption" sx={{ color: '#16a34a', fontWeight: 700 }}>₹0.00 (Settled)</Typography>
+                        )}
+                      </TableCell>
 
-                  {/* Outstanding Due */}
-                  <TableCell align="right">
-                    {parseFloat(party.current_balance || 0) > 0 ? (
-                      <Chip
-                        size="small"
-                        label={`₹${parseFloat(party.current_balance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Due`}
-                        sx={{ bgcolor: '#fef2f2', color: '#dc2626', fontWeight: 800, border: '1px solid #fca5a5', cursor: 'pointer' }}
-                        onClick={() => handleOpenHistory(party, 3)}
-                        title="Click to view Customer Ledger"
-                      />
-                    ) : parseFloat(party.current_balance || 0) < 0 ? (
-                      <Chip
-                        size="small"
-                        label={`₹${Math.abs(parseFloat(party.current_balance)).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Cr`}
-                        sx={{ bgcolor: '#f0fdf4', color: '#16a34a', fontWeight: 800, cursor: 'pointer' }}
-                        onClick={() => handleOpenHistory(party, 3)}
-                      />
-                    ) : (
-                      <Typography variant="caption" sx={{ color: '#16a34a', fontWeight: 700 }}>₹0.00 (Settled)</Typography>
-                    )}
-                  </TableCell>
+                      {/* Credit Limit */}
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>
+                        {parseFloat(party.credit_limit || 0) > 0 ? (
+                          <Chip
+                            size="small"
+                            label={`₹${parseFloat(party.credit_limit).toLocaleString('en-IN')}`}
+                            color="primary"
+                            variant="outlined"
+                            sx={{ fontWeight: 800, fontSize: '0.725rem' }}
+                          />
+                        ) : (
+                          <Typography variant="caption" color="text.secondary">-</Typography>
+                        )}
+                      </TableCell>
 
-                  {/* Credit Limit */}
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    {parseFloat(party.credit_limit || 0) > 0 ? (
-                      <Chip
-                        size="small"
-                        label={`₹${parseFloat(party.credit_limit).toLocaleString('en-IN')}`}
-                        color="primary"
-                        variant="outlined"
-                        sx={{ fontWeight: 800, fontSize: '0.725rem' }}
-                      />
-                    ) : (
-                      <Typography variant="caption" color="text.secondary">-</Typography>
-                    )}
-                  </TableCell>
+                      {/* Actions */}
+                      <TableCell align="right">
+                        <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'flex-end', alignItems: 'center' }}>
+                          {/* Receive Payment Button */}
+                          {parseFloat(party.current_balance || 0) > 0 && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="success"
+                              startIcon={<DollarSign size={13} />}
+                              onClick={() => handleOpenPaymentModal(party)}
+                              sx={{ fontWeight: 800, fontSize: '0.725rem', px: 1, py: 0.3 }}
+                            >
+                              Receive
+                            </Button>
+                          )}
 
-                  {/* Actions */}
-                  <TableCell align="right">
-                    <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'flex-end', alignItems: 'center' }}>
-                      {/* Create Order Button */}
-                      <Button
-                        size="small"
-                        variant="contained"
-                        color="primary"
-                        startIcon={<ShoppingCart size={13} />}
-                        onClick={() => onCreateSalesOrder && onCreateSalesOrder(party)}
-                        sx={{ fontWeight: 800, fontSize: '0.725rem', px: 1.25, py: 0.3 }}
-                      >
-                        Create Order
-                      </Button>
+                          {/* Create Order Button */}
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="primary"
+                            startIcon={<ShoppingCart size={13} />}
+                            onClick={() => onCreateSalesOrder && onCreateSalesOrder(party)}
+                            sx={{ fontWeight: 800, fontSize: '0.725rem', px: 1.25, py: 0.3 }}
+                          >
+                            Create Order
+                          </Button>
 
-                      {/* Order History Button */}
-                      <Tooltip title="View History & Ledger">
-                        <IconButton
-                          size="small"
-                          color="info"
-                          onClick={() => handleOpenHistory(party, 0)}
-                        >
-                          <History size={16} />
-                        </IconButton>
-                      </Tooltip>
+                          {/* Order History Button */}
+                          <Tooltip title="View History & Ledger">
+                            <IconButton
+                              size="small"
+                              color="info"
+                              onClick={() => handleOpenHistory(party, 0)}
+                            >
+                              <History size={16} />
+                            </IconButton>
+                          </Tooltip>
 
-                      {/* Edit Button */}
-                      <Tooltip title="Edit Party">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleOpenEditModal(party)}
-                        >
-                          <Edit2 size={16} />
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                  </TableCell>
+                          {/* Edit Button */}
+                          <Tooltip title="Edit Party">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleOpenEditModal(party)}
+                            >
+                              <Edit2 size={16} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </>
+      )}
+
+      {/* TAB 1: CUSTOMER RECEIVABLES / UDHAR */}
+      {mainSubTab === 1 && (
+        <>
+          {/* Receivables KPIs */}
+          <Grid container spacing={{ xs: 1, sm: 2 }}>
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fef2f2', borderColor: '#fecaca' }}>
+                <Typography variant="caption" sx={{ color: '#b91c1c', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Total Receivables / Udhar
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#dc2626' }}>
+                  ₹{(receivablesSummary?.summary?.total_receivables || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Across {receivablesSummary?.summary?.total_debtors || 0} customer(s)
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fff7ed', borderColor: '#fed7aa' }}>
+                <Typography variant="caption" sx={{ color: '#c2410c', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Overdue Amount
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#ea580c' }}>
+                  ₹{(receivablesSummary?.summary?.total_overdue || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Past credit due date
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#eff6ff', borderColor: '#bfdbfe' }}>
+                <Typography variant="caption" sx={{ color: '#1d4ed8', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Due Today
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#2563eb' }}>
+                  ₹{(receivablesSummary?.summary?.total_due_today || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Maturing today
+                </Typography>
+              </Paper>
+            </Grid>
+
+            <Grid size={{ xs: 6, sm: 3 }}>
+              <Paper variant="outlined" sx={{ p: 2, textAlign: 'center', borderRadius: 2.5, bgcolor: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                <Typography variant="caption" sx={{ color: '#15803d', fontWeight: 800, textTransform: 'uppercase' }}>
+                  Customer Advances
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: '#16a34a' }}>
+                  ₹{(receivablesSummary?.summary?.total_advance_balances || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Pre-paid / unallocated credits
+                </Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+
+          {/* Search Bar for Receivables */}
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: 'background.paper', display: 'flex', gap: 1 }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Search customer receivables by name, phone, or GST..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search size={16} />
+                  </InputAdornment>
+                ),
+                endAdornment: searchTerm ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setSearchTerm('')}>
+                      <X size={14} />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null
+              }}
+            />
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={loadReceivablesData}
+              startIcon={<RefreshCw size={14} className={loadingReceivables ? 'spin' : ''} />}
+              sx={{ fontWeight: 700, flexShrink: 0 }}
+            >
+              Reload
+            </Button>
+          </Paper>
+
+          {/* Receivables Table */}
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5, overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 920 }}>
+              <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 800 }}>Customer Name</TableCell>
+                  <TableCell sx={{ fontWeight: 800 }}>Contact Info</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Total Invoiced</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Total Paid</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Outstanding Udhar</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Overdue Amount</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Credit Limit / Avail.</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Actions</TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              </TableHead>
+              <TableBody>
+                {(() => {
+                  const customers = receivablesSummary?.customers || [];
+                  const filtered = customers.filter(c => {
+                    if (!searchTerm.trim()) return true;
+                    const s = searchTerm.toLowerCase();
+                    return (
+                      (c.name && c.name.toLowerCase().includes(s)) ||
+                      (c.phone && c.phone.toLowerCase().includes(s)) ||
+                      (c.gst_number && c.gst_number.toLowerCase().includes(s))
+                    );
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <TableRow>
+                        <TableCell colSpan={8} align="center" sx={{ py: 5, color: 'text.secondary', fontWeight: 600 }}>
+                          {loadingReceivables ? 'Loading customer receivables...' : 'No customer receivables matching the criteria.'}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  }
+
+                  return filtered.map(c => {
+                    const due = parseFloat(c.current_balance || 0);
+                    const overdue = parseFloat(c.overdue_amount || 0);
+                    const limit = parseFloat(c.credit_limit || 0);
+                    const availableCredit = Math.max(0, limit - due);
+
+                    return (
+                      <TableRow key={c.id} hover>
+                        <TableCell>
+                          <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f172a' }}>
+                            {c.name}
+                          </Typography>
+                          {c.advance_balance > 0 && (
+                            <Chip
+                              size="small"
+                              label={`Advance: ₹${parseFloat(c.advance_balance).toFixed(2)}`}
+                              sx={{ bgcolor: '#f0fdf4', color: '#16a34a', fontWeight: 800, fontSize: '0.65rem', height: 18, mt: 0.25 }}
+                            />
+                          )}
+                        </TableCell>
+
+                        <TableCell>
+                          {c.phone && (
+                            <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Phone size={12} color="#64748b" /> {c.phone}
+                            </Typography>
+                          )}
+                          {c.gst_number && (
+                            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                              {c.gst_number}
+                            </Typography>
+                          )}
+                        </TableCell>
+
+                        <TableCell align="right" sx={{ fontWeight: 700 }}>
+                          ₹{parseFloat(c.total_invoiced_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </TableCell>
+
+                        <TableCell align="right" sx={{ fontWeight: 700, color: '#16a34a' }}>
+                          ₹{parseFloat(c.total_invoice_paid_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <Chip
+                            size="small"
+                            label={`₹${due.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                            sx={{
+                              bgcolor: due > 0 ? '#fef2f2' : '#f0fdf4',
+                              color: due > 0 ? '#dc2626' : '#16a34a',
+                              fontWeight: 800,
+                              border: due > 0 ? '1px solid #fca5a5' : 'none',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => handleOpenHistory(c, 3)}
+                          />
+                        </TableCell>
+
+                        <TableCell align="right">
+                          {overdue > 0 ? (
+                            <Chip
+                              size="small"
+                              label={`₹${overdue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
+                              sx={{ bgcolor: '#fff7ed', color: '#ea580c', fontWeight: 800, border: '1px solid #fdba74' }}
+                            />
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">-</Typography>
+                          )}
+                        </TableCell>
+
+                        <TableCell align="right">
+                          {limit > 0 ? (
+                            <Box>
+                              <Typography variant="caption" sx={{ fontWeight: 800, color: '#1e40af' }}>
+                                Limit: ₹{limit.toLocaleString('en-IN')}
+                              </Typography>
+                              <Typography variant="caption" sx={{ display: 'block', color: availableCredit <= 0 ? '#dc2626' : '#16a34a', fontWeight: 700 }}>
+                                Avail: ₹{availableCredit.toLocaleString('en-IN')}
+                              </Typography>
+                            </Box>
+                          ) : (
+                            <Typography variant="caption" color="text.secondary">No Limit</Typography>
+                          )}
+                        </TableCell>
+
+                        <TableCell align="right">
+                          <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="success"
+                              startIcon={<DollarSign size={13} />}
+                              onClick={() => handleOpenPaymentModal(c)}
+                              sx={{ fontWeight: 800, fontSize: '0.725rem', px: 1.25, py: 0.3 }}
+                            >
+                              Receive Payment
+                            </Button>
+                            <Tooltip title="View Ledger">
+                              <IconButton
+                                size="small"
+                                color="info"
+                                onClick={() => handleOpenHistory(c, 3)}
+                              >
+                                <History size={16} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  });
+                })()}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </>
+      )}
+
+      {/* TAB 2: AGEING ANALYSIS */}
+      {mainSubTab === 2 && (
+        <>
+          {/* Ageing Summary Cards */}
+          {(() => {
+            const summary = ageingReport?.length > 0 ? {
+              b0_30: ageingReport.reduce((s, r) => s + parseFloat(r.bucket_0_30 || 0), 0),
+              b31_60: ageingReport.reduce((s, r) => s + parseFloat(r.bucket_31_60 || 0), 0),
+              b61_90: ageingReport.reduce((s, r) => s + parseFloat(r.bucket_61_90 || 0), 0),
+              b91_120: ageingReport.reduce((s, r) => s + parseFloat(r.bucket_91_120 || 0), 0),
+              b120_plus: ageingReport.reduce((s, r) => s + parseFloat(r.bucket_120_plus || 0), 0),
+              total: ageingReport.reduce((s, r) => s + parseFloat(r.total_due || 0), 0)
+            } : { b0_30: 0, b31_60: 0, b61_90: 0, b91_120: 0, b120_plus: 0, total: 0 };
+
+            return (
+              <Grid container spacing={{ xs: 1, sm: 1.5 }}>
+                <Grid size={{ xs: 6, sm: 2.4 }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderRadius: 2.5, bgcolor: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                    <Typography variant="caption" sx={{ color: '#15803d', fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                      0 - 30 Days (Current)
+                    </Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, mt: 0.5, color: '#16a34a' }}>
+                      ₹{summary.b0_30.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid size={{ xs: 6, sm: 2.4 }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderRadius: 2.5, bgcolor: '#eff6ff', borderColor: '#bfdbfe' }}>
+                    <Typography variant="caption" sx={{ color: '#1d4ed8', fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                      31 - 60 Days
+                    </Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, mt: 0.5, color: '#2563eb' }}>
+                      ₹{summary.b31_60.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid size={{ xs: 6, sm: 2.4 }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fefce8', borderColor: '#fef08a' }}>
+                    <Typography variant="caption" sx={{ color: '#a16207', fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                      61 - 90 Days
+                    </Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, mt: 0.5, color: '#ca8a04' }}>
+                      ₹{summary.b61_90.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid size={{ xs: 6, sm: 2.4 }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fff7ed', borderColor: '#fed7aa' }}>
+                    <Typography variant="caption" sx={{ color: '#c2410c', fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                      91 - 120 Days
+                    </Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, mt: 0.5, color: '#ea580c' }}>
+                      ₹{summary.b91_120.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Typography>
+                  </Paper>
+                </Grid>
+
+                <Grid size={{ xs: 6, sm: 2.4 }}>
+                  <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', borderRadius: 2.5, bgcolor: '#fef2f2', borderColor: '#fecaca' }}>
+                    <Typography variant="caption" sx={{ color: '#b91c1c', fontWeight: 800, textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                      120+ Days (High Risk)
+                    </Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, mt: 0.5, color: '#dc2626' }}>
+                      ₹{summary.b120_plus.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Typography>
+                  </Paper>
+                </Grid>
+              </Grid>
+            );
+          })()}
+
+          {/* Ageing Table */}
+          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2.5, overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 920 }}>
+              <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 800 }}>Customer Name</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Total Outstanding</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right', color: '#16a34a' }}>0 - 30 Days</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right', color: '#2563eb' }}>31 - 60 Days</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right', color: '#ca8a04' }}>61 - 90 Days</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right', color: '#ea580c' }}>91 - 120 Days</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right', color: '#dc2626' }}>120+ Days</TableCell>
+                  <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {ageingReport.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} align="center" sx={{ py: 5, color: 'text.secondary', fontWeight: 600 }}>
+                      {loadingReceivables ? 'Loading customer ageing report...' : 'No outstanding receivables found for ageing analysis.'}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  ageingReport.map(r => (
+                    <TableRow key={r.customer_id} hover>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f172a' }}>
+                          {r.customer_name}
+                        </Typography>
+                        {r.phone && (
+                          <Typography variant="caption" color="text.secondary">
+                            {r.phone}
+                          </Typography>
+                        )}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 900, color: '#dc2626', fontSize: '0.85rem' }}>
+                        ₹{parseFloat(r.total_due || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 700, color: parseFloat(r.bucket_0_30 || 0) > 0 ? '#16a34a' : 'text.secondary' }}>
+                        {parseFloat(r.bucket_0_30 || 0) > 0 ? `₹${parseFloat(r.bucket_0_30).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 700, color: parseFloat(r.bucket_31_60 || 0) > 0 ? '#2563eb' : 'text.secondary' }}>
+                        {parseFloat(r.bucket_31_60 || 0) > 0 ? `₹${parseFloat(r.bucket_31_60).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 700, color: parseFloat(r.bucket_61_90 || 0) > 0 ? '#ca8a04' : 'text.secondary' }}>
+                        {parseFloat(r.bucket_61_90 || 0) > 0 ? `₹${parseFloat(r.bucket_61_90).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 700, color: parseFloat(r.bucket_91_120 || 0) > 0 ? '#ea580c' : 'text.secondary' }}>
+                        {parseFloat(r.bucket_91_120 || 0) > 0 ? `₹${parseFloat(r.bucket_91_120).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </TableCell>
+
+                      <TableCell align="right" sx={{ fontWeight: 800, color: parseFloat(r.bucket_120_plus || 0) > 0 ? '#dc2626' : 'text.secondary' }}>
+                        {parseFloat(r.bucket_120_plus || 0) > 0 ? `₹${parseFloat(r.bucket_120_plus).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '-'}
+                      </TableCell>
+
+                      <TableCell align="right">
+                        <Box sx={{ display: 'flex', gap: 0.75, justifyContent: 'flex-end', alignItems: 'center' }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="success"
+                            startIcon={<DollarSign size={13} />}
+                            onClick={() => {
+                              const foundParty = parties.find(p => p.id === r.customer_id) || { id: r.customer_id, name: r.customer_name };
+                              handleOpenPaymentModal(foundParty);
+                            }}
+                            sx={{ fontWeight: 800, fontSize: '0.725rem', px: 1, py: 0.3 }}
+                          >
+                            Receive
+                          </Button>
+                          <Tooltip title="View Ledger">
+                            <IconButton
+                              size="small"
+                              color="info"
+                              onClick={() => {
+                                const foundParty = parties.find(p => p.id === r.customer_id) || { id: r.customer_id, name: r.customer_name };
+                                handleOpenHistory(foundParty, 3);
+                              }}
+                            >
+                              <History size={16} />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </>
+      )}
 
       {/* Add / Edit Party Modal */}
       <Dialog
@@ -686,7 +1251,7 @@ export default function PartyTab({
             </Grid>
 
             {/* Credit Limit */}
-            <Grid size={{ xs: 12, sm: 4 }}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -701,8 +1266,37 @@ export default function PartyTab({
               />
             </Grid>
 
+            {/* Credit Terms (Days) */}
+            <Grid size={{ xs: 12, sm: 3 }}>
+              <TextField
+                fullWidth
+                size="small"
+                type="number"
+                label="Credit Terms (Days)"
+                placeholder="30"
+                value={creditDays}
+                onChange={e => setCreditDays(e.target.value)}
+                helperText="Default due period"
+              />
+            </Grid>
+
+            {/* Allow Credit Sale */}
+            <Grid size={{ xs: 12, sm: 3 }}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Credit Permission</InputLabel>
+                <Select
+                  value={allowCredit ? 'yes' : 'no'}
+                  label="Credit Permission"
+                  onChange={e => setAllowCredit(e.target.value === 'yes')}
+                >
+                  <MenuItem value="yes">Allow Credit Sales</MenuItem>
+                  <MenuItem value="no">Block Credit Sales</MenuItem>
+                </Select>
+              </FormControl>
+            </Grid>
+
             {/* Opening Balance */}
-            <Grid size={{ xs: 12, sm: 4 }}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -714,7 +1308,7 @@ export default function PartyTab({
                 InputProps={{
                   startAdornment: <InputAdornment position="start">₹</InputAdornment>
                 }}
-                helperText="Initial receivable debit balance"
+                helperText="Receivable opening balance"
               />
             </Grid>
           </Grid>
@@ -1110,71 +1704,193 @@ export default function PartyTab({
         </DialogActions>
       </Dialog>
 
-      {/* Record Payment Dialog */}
+      {/* Record Payment Dialog with Invoice Allocation */}
       <Dialog
         open={paymentModalOpen}
         onClose={() => setPaymentModalOpen(false)}
-        maxWidth="xs"
+        maxWidth="sm"
         fullWidth
         PaperProps={{ sx: { borderRadius: 2.5 } }}
       >
         <DialogTitle sx={{ fontWeight: 800 }}>
-          Record Payment from {selectedPartyForHistory?.name}
+          Receive Payment — {selectedPartyForHistory?.name}
         </DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Typography variant="caption" color="text.secondary">
-              Record a payment received to offset customer debit balance in the ledger.
-            </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', bgcolor: '#f8fafc', p: 1.5, borderRadius: 2, border: '1px solid #e2e8f0' }}>
+              <div>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Current Outstanding</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 900, color: '#dc2626' }}>
+                  ₹{parseFloat(selectedPartyForHistory?.current_balance || 0).toFixed(2)}
+                </Typography>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Advance Balance</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 800, color: '#16a34a' }}>
+                  ₹{parseFloat(selectedPartyForHistory?.advance_balance || 0).toFixed(2)}
+                </Typography>
+              </div>
+            </Box>
 
-            <TextField
-              fullWidth
-              size="small"
-              type="number"
-              label="Amount Received (₹) *"
-              placeholder="0.00"
-              value={paymentAmount}
-              onChange={e => setPaymentAmount(e.target.value)}
-              InputProps={{
-                startAdornment: <InputAdornment position="start">₹</InputAdornment>
-              }}
-              autoFocus
-            />
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Amount Received (₹) *"
+                  placeholder="0.00"
+                  value={paymentAmount}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setPaymentAmount(val);
+                    if (parseFloat(val) > 0 && partyUnpaidInvoices.length > 0) {
+                      handleAutoAllocate(val);
+                    }
+                  }}
+                  InputProps={{
+                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  }}
+                  autoFocus
+                />
+              </Grid>
 
-            <FormControl fullWidth size="small">
-              <InputLabel>Payment Mode</InputLabel>
-              <Select
-                value={paymentMode}
-                label="Payment Mode"
-                onChange={e => setPaymentMode(e.target.value)}
-              >
-                <MenuItem value="cash">Cash</MenuItem>
-                <MenuItem value="upi">UPI / QR Code</MenuItem>
-                <MenuItem value="bank_transfer">Bank Transfer (NEFT/RTGS/IMPS)</MenuItem>
-                <MenuItem value="cheque">Cheque</MenuItem>
-                <MenuItem value="card">Card / POS</MenuItem>
-              </Select>
-            </FormControl>
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Payment Mode</InputLabel>
+                  <Select
+                    value={paymentMode}
+                    label="Payment Mode"
+                    onChange={e => setPaymentMode(e.target.value)}
+                  >
+                    <MenuItem value="cash">Cash</MenuItem>
+                    <MenuItem value="upi">UPI / QR Code</MenuItem>
+                    <MenuItem value="bank_transfer">Bank Transfer (NEFT/RTGS/IMPS)</MenuItem>
+                    <MenuItem value="cheque">Cheque</MenuItem>
+                    <MenuItem value="card">Card / POS</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
 
-            <TextField
-              fullWidth
-              size="small"
-              label="Reference / Cheque / UTR #"
-              placeholder="Transaction ref..."
-              value={paymentRef}
-              onChange={e => setPaymentRef(e.target.value)}
-            />
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Reference / Cheque / UTR #"
+                  placeholder="Transaction ref..."
+                  value={paymentRef}
+                  onChange={e => setPaymentRef(e.target.value)}
+                />
+              </Grid>
 
-            <TextField
-              fullWidth
-              size="small"
-              multiline
-              rows={2}
-              label="Notes / Remarks"
-              placeholder="Optional payment notes..."
-              value={paymentNotes}
-              onChange={e => setPaymentNotes(e.target.value)}
-            />
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Notes / Remarks"
+                  placeholder="Optional payment notes..."
+                  value={paymentNotes}
+                  onChange={e => setPaymentNotes(e.target.value)}
+                />
+              </Grid>
+            </Grid>
+
+            {/* Invoice Allocation Section */}
+            <Box sx={{ mt: 1 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', color: 'text.secondary' }}>
+                  Allocate Against Invoices ({partyUnpaidInvoices.length} Open)
+                </Typography>
+                {partyUnpaidInvoices.length > 0 && parseFloat(paymentAmount) > 0 && (
+                  <Button
+                    size="small"
+                    onClick={() => handleAutoAllocate(paymentAmount)}
+                    sx={{ fontSize: '0.72rem', py: 0, fontWeight: 700 }}
+                  >
+                    Auto-Allocate FIFO
+                  </Button>
+                )}
+              </Box>
+
+              {loadingUnpaidInvoices ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+                  <CircularProgress size={20} />
+                </Box>
+              ) : partyUnpaidInvoices.length === 0 ? (
+                <Paper variant="outlined" sx={{ p: 1.5, textAlign: 'center', bgcolor: '#f8fafc', borderRadius: 2 }}>
+                  <Typography variant="caption" color="text.secondary">
+                    No open invoices found. Payment will offset general ledger balance or credit advance balance.
+                  </Typography>
+                </Paper>
+              ) : (
+                <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 200, borderRadius: 2 }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 800, fontSize: '0.75rem' }}>Invoice #</TableCell>
+                        <TableCell sx={{ fontWeight: 800, fontSize: '0.75rem', textAlign: 'right' }}>Due ₹</TableCell>
+                        <TableCell sx={{ fontWeight: 800, fontSize: '0.75rem', textAlign: 'right' }}>Allocate ₹</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {partyUnpaidInvoices.map(inv => {
+                        const due = parseFloat(inv.remaining_due || 0);
+                        const alloc = invoiceAllocations[inv.id] !== undefined ? invoiceAllocations[inv.id] : '';
+                        return (
+                          <TableRow key={inv.id} hover>
+                            <TableCell sx={{ fontSize: '0.75rem' }}>
+                              <Box sx={{ fontWeight: 700, fontFamily: 'monospace' }}>#{inv.unique_order_number || inv.id}</Box>
+                              <Box sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
+                                {new Date(inv.order_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                                {inv.is_overdue ? <span style={{ color: '#dc2626', fontWeight: 700, marginLeft: 4 }}>• Overdue</span> : ''}
+                              </Box>
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 800, color: '#dc2626', fontSize: '0.8rem' }}>
+                              ₹{due.toFixed(2)}
+                            </TableCell>
+                            <TableCell align="right" sx={{ width: 110 }}>
+                              <TextField
+                                size="small"
+                                type="number"
+                                placeholder="0.00"
+                                value={alloc}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  const num = Math.max(0, Math.min(due, parseFloat(val) || 0));
+                                  setInvoiceAllocations(prev => ({
+                                    ...prev,
+                                    [inv.id]: val === '' ? '' : num
+                                  }));
+                                }}
+                                inputProps={{ min: 0, max: due, style: { textAlign: 'right', padding: '4px 6px', fontSize: '0.8rem', fontWeight: 700 } }}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+
+              {/* Excess calculation notice */}
+              {(() => {
+                const pmt = parseFloat(paymentAmount) || 0;
+                const totAlloc = Object.values(invoiceAllocations).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+                const excess = Math.max(0, pmt - totAlloc);
+                if (pmt > 0) {
+                  return (
+                    <Box sx={{ mt: 1, p: 1, bgcolor: '#f1f5f9', borderRadius: 1.5, fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
+                      <span>Allocated: ₹{totAlloc.toFixed(2)}</span>
+                      <span style={{ color: excess > 0 ? '#15803d' : 'inherit' }}>
+                        {excess > 0 ? `+₹${excess.toFixed(2)} Advance Credit Balance` : `Remaining: ₹${(pmt - totAlloc).toFixed(2)}`}
+                      </span>
+                    </Box>
+                  );
+                }
+                return null;
+              })()}
+            </Box>
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>

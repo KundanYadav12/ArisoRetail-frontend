@@ -62,16 +62,68 @@ const resolveDateRange = (preset, stateFrom, stateTo) => {
   return { from, to };
 };
 
-export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView = false }) {
+export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView = false, isWarehouseManagerView = false }) {
   const { notify, confirmDialog } = useNotify();
   const isSalesman = isSalesmanView || user?.role === 'salesman';
-  const [activeTab, setActiveTab] = useState(isSalesman ? 5 : (initialTab || 0)); // 0 = menu, 1 = categories, 2 = printers, 3 = reports, 4 = item sales, 5 = stock report
+  const isWarehouseManager = isWarehouseManagerView || user?.role === 'warehouse_manager';
 
-  useEffect(() => {
-    if (initialTab !== undefined && initialTab !== null) {
-      setActiveTab(isSalesman ? 5 : initialTab);
+  const DEFAULT_WAREHOUSE_PERMS = React.useMemo(() => [
+    'warehouse_dashboard',
+    'inventory_catalog',
+    'warehouses',
+    'rack_management',
+    'stock_transfer',
+    'stock_receiving',
+    'stock_count',
+    'stock_adjustment',
+    'stock_requests',
+    'stock_ledger',
+    'warehouse_reports',
+    'suppliers'
+  ], []);
+
+  const userPermissions = Array.isArray(user?.permissions) && user.permissions.length > 0
+    ? user.permissions
+    : (user?.role === 'warehouse_manager' ? DEFAULT_WAREHOUSE_PERMS : []);
+
+  const hasUserPermission = React.useCallback((perm) => {
+    if (user?.role === 'admin' || user?.role === 'superadmin' || user?.role === 'super_admin' || user?.role === 'owner') return true;
+    if (!isWarehouseManager) return true;
+    return userPermissions.includes(perm) || userPermissions.includes('all');
+  }, [user, isWarehouseManager, userPermissions]);
+
+  const validTabValues = React.useMemo(() => {
+    if (isWarehouseManager) {
+      const vals = [5];
+      if (hasUserPermission('warehouse_reports')) vals.push(4);
+      if (hasUserPermission('sales_orders')) vals.push(11);
+      if (hasUserPermission('customers')) vals.push(12);
+      if (hasUserPermission('bank_accounts') || hasUserPermission('finance_accounts')) vals.push(13);
+      if (hasUserPermission('expenses')) vals.push(14);
+      if (hasUserPermission('day_end')) vals.push(15);
+      if (hasUserPermission('payment_reconciliation')) vals.push(16);
+      if (hasUserPermission('suppliers')) vals.push(17);
+      return vals;
     }
-  }, [initialTab, isSalesman]);
+    if (isSalesman) {
+      return [5, 11, 12];
+    }
+    return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+  }, [isWarehouseManager, isSalesman, hasUserPermission]);
+
+  const defaultTab = isSalesman || isWarehouseManager ? 5 : (initialTab ?? 0);
+  const [activeTab, setActiveTab] = useState(defaultTab);
+
+  const prevInitialTabRef = React.useRef(initialTab);
+  useEffect(() => {
+    if (initialTab !== undefined && initialTab !== null && initialTab !== prevInitialTabRef.current) {
+      prevInitialTabRef.current = initialTab;
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  const currentTabValue = validTabValues.includes(activeTab) ? activeTab : (validTabValues[0] ?? 0);
+
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [printers, setPrinters] = useState([]);
@@ -101,6 +153,9 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [staffPassword, setStaffPassword] = useState('');
   const [staffRole, setStaffRole] = useState('cashier');
   const [staffActive, setStaffActive] = useState(true);
+  const [staffWarehouseId, setStaffWarehouseId] = useState('');
+  const [staffPermissions, setStaffPermissions] = useState([]);
+  const [availableWarehouses, setAvailableWarehouses] = useState([]);
 
   // --- Item Sales Report (Tab 4) States ---
   const [itemReportData, setItemReportData] = useState([]);
@@ -1091,6 +1146,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         } else {
           setStaffUsers([]);
         }
+        try {
+          const whRes = await apiFetch('/api/inventory/warehouses');
+          if (whRes.ok) {
+            setAvailableWarehouses(await whRes.json());
+          }
+        } catch (_) {}
       } else if (activeTab === 10) {
         const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
 
@@ -1302,6 +1363,8 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setStaffPassword('');
     setStaffRole('cashier');
     setStaffActive(true);
+    setStaffWarehouseId('');
+    setStaffPermissions(DEFAULT_WAREHOUSE_PERMS);
     setStaffDialogOpen(true);
   };
 
@@ -1313,25 +1376,48 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setStaffPassword(''); // Leave empty unless resetting password
     setStaffRole(user.role || 'cashier');
     setStaffActive(Boolean(user.is_active));
+    setStaffWarehouseId(user.assigned_warehouse_id ? String(user.assigned_warehouse_id) : '');
+    let perms = [];
+    if (user.permissions) {
+      try {
+        perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions;
+      } catch {
+        perms = [];
+      }
+    } else if (user.role === 'warehouse_manager') {
+      perms = DEFAULT_WAREHOUSE_PERMS;
+    }
+    setStaffPermissions(Array.isArray(perms) ? perms : []);
     setStaffDialogOpen(true);
   };
 
   const handleSaveStaff = async (e) => {
     e.preventDefault();
-    if (!staffName || !staffUsername) {
-      notify.error('Name and Username are required.', 'Validation Error');
+    if (!staffEmail || !staffEmail.trim()) {
+      notify.error('Login ID is required.', 'Validation Error');
+      return;
+    }
+
+    if (!selectedStaff && (!staffPassword || staffPassword.trim().length < 6)) {
+      notify.error('Password must be at least 6 characters long.', 'Validation Error');
       return;
     }
 
     setLoading(true);
     try {
+      const cleanLoginId = staffEmail.trim();
+      const fallbackName = staffName?.trim() || staffUsername?.trim() || cleanLoginId.split('@')[0];
+      const fallbackUsername = staffUsername?.trim() || (cleanLoginId.includes('@') ? cleanLoginId.split('@')[0] : cleanLoginId.toLowerCase().replace(/\s+/g, '_'));
+
       if (selectedStaff) {
         // Edit Staff User
         const payload = {
-          name: staffName,
-          email: staffEmail,
+          name: fallbackName,
+          email: cleanLoginId,
           role: staffRole,
-          is_active: staffActive ? 1 : 0
+          is_active: staffActive ? 1 : 0,
+          assigned_warehouse_id: staffRole === 'warehouse_manager' && staffWarehouseId ? Number(staffWarehouseId) : null,
+          permissions: staffRole === 'warehouse_manager' ? staffPermissions : null
         };
         if (staffPassword) {
           payload.password = staffPassword;
@@ -1347,26 +1433,22 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         notify.success('Staff user account updated successfully.', 'Staff Updated');
       } else {
         // Add New Staff User
-        if (!staffPassword || staffPassword.length < 6) {
-          notify.error('Password must be at least 6 characters long.', 'Validation Error');
-          setLoading(false);
-          return;
-        }
-
         const res = await apiFetch('/api/auth/users', {
           method: 'POST',
           body: {
-            name: staffName,
-            username: staffUsername,
-            email: staffEmail,
+            name: fallbackName,
+            username: fallbackUsername,
+            email: cleanLoginId,
             password: staffPassword,
-            role: staffRole
+            role: staffRole,
+            assigned_warehouse_id: staffRole === 'warehouse_manager' && staffWarehouseId ? Number(staffWarehouseId) : null,
+            permissions: staffRole === 'warehouse_manager' ? staffPermissions : null
           }
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.message || data.error || 'Failed to create staff user.');
 
-        notify.success(`Staff user "${staffName}" created successfully. Credentials active.`, 'Staff Created');
+        notify.success(`Staff user "${fallbackName}" created successfully. Credentials active.`, 'Staff Created');
       }
 
       setStaffDialogOpen(false);
@@ -2159,7 +2241,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
           }}
         >
           <Tabs
-            value={activeTab}
+            value={currentTabValue}
             onChange={(e, val) => setActiveTab(val)}
             variant="scrollable"
             scrollButtons="auto"
@@ -2187,33 +2269,66 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               }
             }}
           >
-            {isSalesman && (
-              <Tab icon={<Boxes size={18} />} iconPosition="start" label="Inventory & Warehouses" value={5} />
+            {isWarehouseManager && (
+              <>
+                <Tab icon={<Boxes size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Inventory & Warehouses" value={5} onClick={() => setActiveTab(5)} />
+                {hasUserPermission('warehouse_reports') && (
+                  <Tab icon={<Package size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Item Sales Report" value={4} onClick={() => setActiveTab(4)} />
+                )}
+                {hasUserPermission('sales_orders') && (
+                  <Tab icon={<ClipboardList size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Sales Orders" value={11} onClick={() => setActiveTab(11)} />
+                )}
+                {hasUserPermission('customers') && (
+                  <Tab icon={<Users size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Parties" value={12} onClick={() => setActiveTab(12)} />
+                )}
+                {(hasUserPermission('bank_accounts') || hasUserPermission('finance_accounts')) && (
+                  <Tab icon={<Landmark size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Bank & Financial Accounts" value={13} onClick={() => setActiveTab(13)} />
+                )}
+                {hasUserPermission('expenses') && (
+                  <Tab icon={<Receipt size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Expense Management" value={14} onClick={() => setActiveTab(14)} />
+                )}
+                {hasUserPermission('day_end') && (
+                  <Tab icon={<Clock size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Day End & Cash Closing" value={15} onClick={() => setActiveTab(15)} />
+                )}
+                {hasUserPermission('payment_reconciliation') && (
+                  <Tab icon={<ArrowRightLeft size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Payment Reconciliation" value={16} onClick={() => setActiveTab(16)} />
+                )}
+                {hasUserPermission('suppliers') && (
+                  <Tab icon={<BadgeIndianRupee size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Supplier Payables" value={17} onClick={() => setActiveTab(17)} />
+                )}
+              </>
             )}
-            {isSalesman && (
-              <Tab icon={<ClipboardList size={18} />} iconPosition="start" label="Sales Orders" value={11} />
+
+            {isSalesman && !isWarehouseManager && (
+              <>
+                <Tab icon={<Boxes size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Inventory & Warehouses" value={5} onClick={() => setActiveTab(5)} />
+                <Tab icon={<ClipboardList size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Sales Orders" value={11} onClick={() => setActiveTab(11)} />
+                <Tab icon={<Users size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Parties" value={12} onClick={() => setActiveTab(12)} />
+              </>
             )}
-            {isSalesman && (
-              <Tab icon={<Users size={18} />} iconPosition="start" label="Parties" value={12} />
+
+            {!isSalesman && !isWarehouseManager && (
+              <>
+                <Tab icon={<List size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Menu Items" value={0} onClick={() => setActiveTab(0)} />
+                <Tab icon={<Layers size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Categories" value={1} onClick={() => setActiveTab(1)} />
+                <Tab icon={<Wifi size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Printers" value={2} onClick={() => setActiveTab(2)} />
+                <Tab icon={<FileText size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Reports & Business Intelligence" value={3} onClick={() => setActiveTab(3)} />
+                <Tab icon={<Package size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Item Sales Report" value={4} onClick={() => setActiveTab(4)} />
+                <Tab icon={<Boxes size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Inventory & Warehouses" value={5} onClick={() => setActiveTab(5)} />
+                <Tab icon={<FileSpreadsheet size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="GST & Compliance Suite" value={6} onClick={() => setActiveTab(6)} />
+                <Tab icon={<Settings size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Receipt & GST Settings" value={7} onClick={() => setActiveTab(7)} />
+                <Tab icon={<Store size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Retail Profile" value={8} onClick={() => setActiveTab(8)} />
+                <Tab icon={<Users size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Staff & Cashiers" value={9} onClick={() => setActiveTab(9)} />
+                <Tab icon={<History size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Order History" value={10} onClick={() => setActiveTab(10)} />
+                <Tab icon={<ClipboardList size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Sales Orders" value={11} onClick={() => setActiveTab(11)} />
+                <Tab icon={<Users size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Parties" value={12} onClick={() => setActiveTab(12)} />
+                <Tab icon={<Landmark size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Bank & Financial Accounts" value={13} onClick={() => setActiveTab(13)} />
+                <Tab icon={<Receipt size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Expense Management" value={14} onClick={() => setActiveTab(14)} />
+                <Tab icon={<Clock size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Day End & Cash Closing" value={15} onClick={() => setActiveTab(15)} />
+                <Tab icon={<ArrowRightLeft size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Payment Reconciliation" value={16} onClick={() => setActiveTab(16)} />
+                <Tab icon={<BadgeIndianRupee size={18} style={{ pointerEvents: 'none' }} />} iconPosition="start" label="Supplier Payables" value={17} onClick={() => setActiveTab(17)} />
+              </>
             )}
-            {!isSalesman && <Tab icon={<List size={18} />} iconPosition="start" label="Menu Items" value={0} />}
-            {!isSalesman && <Tab icon={<Layers size={18} />} iconPosition="start" label="Categories" value={1} />}
-            {!isSalesman && <Tab icon={<Wifi size={18} />} iconPosition="start" label="Printers" value={2} />}
-            {!isSalesman && <Tab icon={<FileText size={18} />} iconPosition="start" label="Reports & Business Intelligence" value={3} />}
-            {!isSalesman && <Tab icon={<Utensils size={18} />} iconPosition="start" label="Item Sales Report" value={4} />}
-            {!isSalesman && <Tab icon={<Boxes size={18} />} iconPosition="start" label="Inventory & Warehouses" value={5} />}
-            {!isSalesman && <Tab icon={<FileSpreadsheet size={18} />} iconPosition="start" label="GST & Compliance Suite" value={6} />}
-            {!isSalesman && <Tab icon={<Settings size={18} />} iconPosition="start" label="Receipt & GST Settings" value={7} />}
-            {!isSalesman && <Tab icon={<Store size={18} />} iconPosition="start" label="Retail Profile" value={8} />}
-            {!isSalesman && <Tab icon={<Users size={18} />} iconPosition="start" label="Staff & Cashiers" value={9} />}
-            {!isSalesman && <Tab icon={<History size={18} />} iconPosition="start" label="Order History" value={10} />}
-            {!isSalesman && <Tab icon={<ClipboardList size={18} />} iconPosition="start" label="Sales Orders" value={11} />}
-            {!isSalesman && <Tab icon={<Users size={18} />} iconPosition="start" label="Parties" value={12} />}
-            {!isSalesman && <Tab icon={<Landmark size={18} />} iconPosition="start" label="Bank & Financial Accounts" value={13} />}
-            {!isSalesman && <Tab icon={<Receipt size={18} />} iconPosition="start" label="Expense Management" value={14} />}
-            {!isSalesman && <Tab icon={<Clock size={18} />} iconPosition="start" label="Day End & Cash Closing" value={15} />}
-            {!isSalesman && <Tab icon={<ArrowRightLeft size={18} />} iconPosition="start" label="Payment Reconciliation" value={16} />}
-            {!isSalesman && <Tab icon={<BadgeIndianRupee size={18} />} iconPosition="start" label="Supplier Payables" value={17} />}
           </Tabs>
         </Box>
 
@@ -2594,8 +2709,8 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                                   style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover' }}
                                 />
                               ) : (
-                                <Box sx={{ width: 44, height: 44, borderRadius: 2, bgcolor: 'action.selected', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>
-                                  {item.is_veg === 1 ? '🥗' : '🍖'}
+                                <Box sx={{ width: 44, height: 44, borderRadius: 2, bgcolor: 'action.selected', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'text.secondary' }}>
+                                  <Package size={22} />
                                 </Box>
                               )}
                             </TableCell>
@@ -2725,8 +2840,8 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                               style={{ width: 52, height: 52, borderRadius: 10, objectFit: 'cover' }}
                             />
                           ) : (
-                            <Box sx={{ width: 52, height: 52, borderRadius: 2.5, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>
-                              {item.is_veg === 1 ? '🥗' : '🍖'}
+                            <Box sx={{ width: 52, height: 52, borderRadius: 2.5, bgcolor: 'action.hover', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'text.secondary' }}>
+                              <Package size={24} />
                             </Box>
                           )}
                           <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -3307,6 +3422,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
             onOpenStickersModal={handleOpenStickersModal}
             categories={categories}
             menuItems={menuItems}
+            currentUser={user}
           />
         )}
 
@@ -4786,11 +4902,21 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         <TableCell color="text.secondary">{user.email || '-'}</TableCell>
                         <TableCell>
                           <Chip
-                            label={(user.role || 'cashier').toUpperCase()}
+                            label={(user.role || 'cashier').replace('_', ' ').toUpperCase()}
                             size="small"
-                            color={user.role === 'admin' ? 'primary' : user.role === 'manager' ? 'secondary' : user.role === 'salesman' ? 'info' : 'default'}
+                            color={
+                              user.role === 'admin' ? 'primary' :
+                              user.role === 'manager' ? 'secondary' :
+                              user.role === 'salesman' ? 'info' :
+                              user.role === 'warehouse_manager' ? 'warning' : 'default'
+                            }
                             sx={{ fontWeight: 700 }}
                           />
+                          {user.role === 'warehouse_manager' && (
+                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mt: 0.5, fontWeight: 700, fontSize: '0.75rem' }}>
+                              🏬 {user.assigned_warehouse_name ? user.assigned_warehouse_name : 'All Warehouses (Unrestricted)'}
+                            </Typography>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -4829,12 +4955,22 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                       <Box>
                         <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>{user.name}</Typography>
                         <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary' }}>@{user.username}</Typography>
+                        {user.role === 'warehouse_manager' && (
+                          <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontWeight: 700, mt: 0.25 }}>
+                            🏬 {user.assigned_warehouse_name || 'All Warehouses'}
+                          </Typography>
+                        )}
                       </Box>
                       <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
                         <Chip
-                          label={(user.role || 'cashier').toUpperCase()}
+                          label={(user.role || 'cashier').replace('_', ' ').toUpperCase()}
                           size="small"
-                          color={user.role === 'admin' ? 'primary' : user.role === 'manager' ? 'secondary' : user.role === 'salesman' ? 'info' : 'default'}
+                          color={
+                            user.role === 'admin' ? 'primary' :
+                            user.role === 'manager' ? 'secondary' :
+                            user.role === 'salesman' ? 'info' :
+                            user.role === 'warehouse_manager' ? 'warning' : 'default'
+                          }
                           sx={{ fontWeight: 700, fontSize: '10px', height: 22 }}
                         />
                         <Chip
@@ -6747,9 +6883,18 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
       </Dialog>
 
       {/* --- ADD / EDIT STAFF DIALOG --- */}
-      <Dialog open={staffDialogOpen} onClose={() => setStaffDialogOpen(false)} disableRestoreFocus maxWidth="xs" fullWidth>
+      {/* --- ADD / EDIT STAFF DIALOG --- */}
+      <Dialog
+        open={staffDialogOpen}
+        onClose={() => setStaffDialogOpen(false)}
+        disableRestoreFocus
+        maxWidth={staffRole === 'warehouse_manager' ? 'md' : 'xs'}
+        fullWidth
+      >
         <DialogTitle sx={{ fontWeight: 800 }}>
-          {selectedStaff ? 'Edit Staff User Credentials' : 'Add Cashier / Staff User'}
+          {selectedStaff
+            ? (staffRole === 'warehouse_manager' ? 'Edit Warehouse Manager Account & Permissions' : 'Edit Staff User Credentials')
+            : (staffRole === 'warehouse_manager' ? 'Create Warehouse Manager Account' : 'Add Cashier / Staff User')}
         </DialogTitle>
         <form onSubmit={handleSaveStaff}>
           <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -6760,7 +6905,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               value={staffName}
               onChange={e => setStaffName(e.target.value)}
               placeholder="e.g. Rahul Sharma"
-              required
             />
             <TextField
               label="Username"
@@ -6768,18 +6912,17 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               fullWidth
               value={staffUsername}
               onChange={e => setStaffUsername(e.target.value)}
-              placeholder="e.g. cashier1"
+              placeholder="e.g. cashier1 or godown_mgr"
               disabled={Boolean(selectedStaff)}
-              required
             />
             <TextField
               label="Login ID"
-              type="email"
               size="small"
               fullWidth
               value={staffEmail}
               onChange={e => setStaffEmail(e.target.value)}
-              placeholder="rahul@example.com"
+              placeholder="e.g. cashier1 or godown@example.com"
+              required
             />
             <TextField
               label={selectedStaff ? 'Reset Password (Leave blank to keep current)' : 'Password'}
@@ -6796,14 +6939,189 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               <Select
                 value={staffRole}
                 label="Role"
-                onChange={e => setStaffRole(e.target.value)}
+                onChange={e => {
+                  const newRole = e.target.value;
+                  setStaffRole(newRole);
+                  if (newRole === 'warehouse_manager' && staffPermissions.length === 0) {
+                    setStaffPermissions(DEFAULT_WAREHOUSE_PERMS);
+                  }
+                }}
               >
                 <MenuItem value="cashier">Cashier (POS & Shift Control)</MenuItem>
                 <MenuItem value="salesman">Salesman (Sales Orders & Inventory)</MenuItem>
+                <MenuItem value="warehouse_manager">Warehouse Manager (Godown & Stock Operations)</MenuItem>
                 <MenuItem value="manager">Manager (Reports & Refunds)</MenuItem>
                 <MenuItem value="admin">Admin (Full Control)</MenuItem>
               </Select>
             </FormControl>
+
+            {staffRole === 'warehouse_manager' && (
+              <>
+                <Divider sx={{ my: 0.5 }} />
+
+                {/* Warehouse Assignment */}
+                <FormControl fullWidth size="small">
+                  <InputLabel>Assigned Warehouse / Godown</InputLabel>
+                  <Select
+                    value={staffWarehouseId}
+                    label="Assigned Warehouse / Godown"
+                    onChange={e => setStaffWarehouseId(e.target.value)}
+                  >
+                    <MenuItem value="">🏢 All Outlets & Warehouses (Unrestricted)</MenuItem>
+                    {availableWarehouses.map(w => (
+                      <MenuItem key={w.id} value={String(w.id)}>
+                        {w.name} {w.code ? `(${w.code})` : ''} {w.is_default ? '⭐' : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: -1.5 }}>
+                  Restricting to a specific warehouse enforces data isolation, preventing this manager from accessing or moving stock of other godowns.
+                </Typography>
+
+                {/* Permissions Management Box */}
+                <Box sx={{ border: '1px solid #e2e8f0', borderRadius: 2, p: 2, bgcolor: '#f8fafc' }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f172a' }}>
+                        Warehouse Manager Access Control
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Admin controls which modules & tabs this user can access
+                      </Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        onClick={() => setStaffPermissions(DEFAULT_WAREHOUSE_PERMS)}
+                        sx={{ fontSize: '0.72rem', py: 0.25, px: 1, textTransform: 'none', fontWeight: 700 }}
+                      >
+                        Reset Defaults
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="text"
+                        onClick={() => {
+                          const allKeys = [
+                            ...DEFAULT_WAREHOUSE_PERMS,
+                            'pos_billing', 'sales_orders', 'customers', 'purchases',
+                            'bank_accounts', 'expenses', 'day_end', 'payment_reconciliation'
+                          ];
+                          setStaffPermissions(staffPermissions.length === allKeys.length ? [] : allKeys);
+                        }}
+                        sx={{ fontSize: '0.72rem', py: 0.25, px: 1, textTransform: 'none', fontWeight: 700 }}
+                      >
+                        {staffPermissions.length > 0 ? 'Clear All' : 'Select All'}
+                      </Button>
+                    </Box>
+                  </Box>
+
+                  {/* Category 1: Warehouse Operations */}
+                  <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', color: '#0284c7', display: 'block', mb: 1, letterSpacing: 0.5 }}>
+                    Warehouse Operations (Default Enabled)
+                  </Typography>
+                  <Grid container spacing={1} sx={{ mb: 2 }}>
+                    {[
+                      { key: 'warehouse_dashboard', label: 'Warehouse Dashboard', desc: 'KPI metrics, stock valuation, low stock' },
+                      { key: 'inventory_catalog', label: 'Stock Catalog & Levels', desc: 'SKU items, category filters, export data' },
+                      { key: 'warehouses', label: 'Warehouses & Outlets', desc: 'View and manage warehouse locations' },
+                      { key: 'rack_management', label: 'Rack & Bin Management', desc: 'Racks, shelves, bin stock assignment' },
+                      { key: 'stock_transfer', label: 'Stock Transfer', desc: 'Dispatch & create stock movement orders' },
+                      { key: 'stock_receiving', label: 'Stock Receiving & GRN', desc: 'Receive transfers & create Goods Received Notes' },
+                      { key: 'stock_count', label: 'Stock Counting Suite', desc: 'Physical audit sessions & barcode scanning' },
+                      { key: 'stock_adjustment', label: 'Stock Adjustment', desc: 'Quantity adjustments, wastage write-offs' },
+                      { key: 'stock_requests', label: 'Stock Requests', desc: 'Store indenting & replenishment requests' },
+                      { key: 'stock_ledger', label: 'Stock Ledger Audit', desc: 'Perpetual transaction journal & history' },
+                      { key: 'warehouse_reports', label: 'Warehouse Reports', desc: 'Item-wise velocity & inventory analytics' },
+                      { key: 'suppliers', label: 'Suppliers & Vendors', desc: 'Supplier directory & ledger statements' },
+                    ].map(item => (
+                      <Grid item xs={12} sm={6} key={item.key}>
+                        <Paper variant="outlined" sx={{ p: 1, borderRadius: 1.5, bgcolor: staffPermissions.includes(item.key) ? 'rgba(2, 132, 199, 0.05)' : '#fff', borderColor: staffPermissions.includes(item.key) ? '#38bdf8' : '#e2e8f0', transition: 'all 0.15s ease' }}>
+                          <FormControlLabel
+                            sx={{ m: 0, width: '100%', alignItems: 'flex-start' }}
+                            control={
+                              <Checkbox
+                                size="small"
+                                checked={staffPermissions.includes(item.key)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setStaffPermissions(prev => [...prev, item.key]);
+                                  } else {
+                                    setStaffPermissions(prev => prev.filter(k => k !== item.key));
+                                  }
+                                }}
+                                sx={{ p: 0.5, mr: 0.5 }}
+                              />
+                            }
+                            label={
+                              <Box>
+                                <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.8rem', lineHeight: 1.2 }}>
+                                  {item.label}
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem', display: 'block', lineHeight: 1.1 }}>
+                                  {item.desc}
+                                </Typography>
+                              </Box>
+                            }
+                          />
+                        </Paper>
+                      </Grid>
+                    ))}
+                  </Grid>
+
+                  {/* Category 2: Other Business Modules */}
+                  <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', color: '#64748b', display: 'block', mb: 1, letterSpacing: 0.5 }}>
+                    Other Modules (Restricted by Default)
+                  </Typography>
+                  <Grid container spacing={1}>
+                    {[
+                      { key: 'pos_billing', label: 'POS Billing & Cashier', desc: 'Terminal billing, checkout, payments' },
+                      { key: 'sales_orders', label: 'Sales Orders', desc: 'Customer sales orders & quotations' },
+                      { key: 'customers', label: 'Parties & Customers', desc: 'Customer ledger and party directory' },
+                      { key: 'purchases', label: 'Purchases & Bills', desc: 'Purchase orders, bills, and purchase returns' },
+                      { key: 'bank_accounts', label: 'Bank & Finance', desc: 'Bank accounts and inter-account transfers' },
+                      { key: 'expenses', label: 'Expense Management', desc: 'Store petty cash & operational expenses' },
+                      { key: 'day_end', label: 'Day End Closing', desc: 'Daily shift register closing' },
+                      { key: 'payment_reconciliation', label: 'Payment Reconciliation', desc: 'Aggregator & gateway settlements' },
+                    ].map(item => (
+                      <Grid item xs={12} sm={6} key={item.key}>
+                        <Paper variant="outlined" sx={{ p: 1, borderRadius: 1.5, bgcolor: staffPermissions.includes(item.key) ? 'rgba(249, 115, 22, 0.05)' : '#fff', borderColor: staffPermissions.includes(item.key) ? '#f97316' : '#e2e8f0', transition: 'all 0.15s ease' }}>
+                          <FormControlLabel
+                            sx={{ m: 0, width: '100%', alignItems: 'flex-start' }}
+                            control={
+                              <Checkbox
+                                size="small"
+                                color="warning"
+                                checked={staffPermissions.includes(item.key)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setStaffPermissions(prev => [...prev, item.key]);
+                                  } else {
+                                    setStaffPermissions(prev => prev.filter(k => k !== item.key));
+                                  }
+                                }}
+                                sx={{ p: 0.5, mr: 0.5 }}
+                              />
+                            }
+                            label={
+                              <Box>
+                                <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.8rem', lineHeight: 1.2 }}>
+                                  {item.label}
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: 'text.secondary', fontSize: '0.7rem', display: 'block', lineHeight: 1.1 }}>
+                                  {item.desc}
+                                </Typography>
+                              </Box>
+                            }
+                          />
+                        </Paper>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Box>
+              </>
+            )}
 
             {selectedStaff && (
               <FormControlLabel

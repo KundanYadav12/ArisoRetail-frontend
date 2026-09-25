@@ -444,9 +444,17 @@ export default function SalesOrderModal({
   };
 
   const handleChargeAmountChange = (index, value) => {
+    let cleanVal = String(value ?? '');
+    // If user types numbers after default 0 (e.g. '012'), strip leading zero to get '12'
+    if (/^0[0-9]+/.test(cleanVal)) {
+      cleanVal = cleanVal.replace(/^0+/, '') || '0';
+    }
     setAdditionalCharges(prev => {
       const copy = [...prev];
-      copy[index] = { ...copy[index], amount: parseFloat(value) || 0 };
+      copy[index] = {
+        ...copy[index],
+        amount: cleanVal === '' ? '' : (isNaN(Number(cleanVal)) ? 0 : Number(cleanVal))
+      };
       return copy;
     });
   };
@@ -740,29 +748,53 @@ export default function SalesOrderModal({
 
               {/* Order Date */}
               <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  type="date"
-                  label={isEst ? "Estimate Date" : "Order Date"}
-                  value={orderDate}
-                  onChange={e => setOrderDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                />
+                <Box>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                      color: '#475569',
+                      display: 'block',
+                      mb: 0.5
+                    }}
+                  >
+                    {isEst ? "Estimate Date" : "Order Date"}
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    value={orderDate}
+                    onChange={e => setOrderDate(e.target.value)}
+                  />
+                </Box>
               </Grid>
 
               {/* Delivery Date / Expiry Date */}
               <Grid size={{ xs: 6, sm: 3 }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  type="date"
-                  label={isEst ? "Valid Until Date" : "Delivery Date *"}
-                  value={deliveryDate}
-                  onChange={e => setDeliveryDate(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
-                  required={!isEst}
-                />
+                <Box>
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      fontWeight: 700,
+                      fontSize: '0.75rem',
+                      color: '#475569',
+                      display: 'block',
+                      mb: 0.5
+                    }}
+                  >
+                    {isEst ? "Valid Until Date" : "Delivery Date *"}
+                  </Typography>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    type="date"
+                    value={deliveryDate}
+                    onChange={e => setDeliveryDate(e.target.value)}
+                    required={!isEst}
+                  />
+                </Box>
               </Grid>
 
               {/* Billing Address */}
@@ -1089,7 +1121,13 @@ export default function SalesOrderModal({
                         placeholder="Default ₹"
                         type="number"
                         value={newChargeAmount}
-                        onChange={e => setNewChargeAmount(e.target.value)}
+                        onChange={e => {
+                          let val = String(e.target.value ?? '');
+                          if (/^0[0-9]+/.test(val)) val = val.replace(/^0+/, '');
+                          setNewChargeAmount(val);
+                        }}
+                        onFocus={e => e.target.select()}
+                        inputProps={{ min: 0, step: 'any' }}
                         sx={{ width: 100 }}
                       />
                       <Button
@@ -1137,9 +1175,16 @@ export default function SalesOrderModal({
                           type="number"
                           value={ch.amount}
                           onChange={e => handleChargeAmountChange(idx, e.target.value)}
+                          onFocus={e => e.target.select()}
+                          onBlur={() => {
+                            if (ch.amount === '' || isNaN(ch.amount)) {
+                              handleChargeAmountChange(idx, 0);
+                            }
+                          }}
                           InputProps={{
                             startAdornment: <InputAdornment position="start">₹</InputAdornment>
                           }}
+                          inputProps={{ min: 0, step: 'any' }}
                           sx={{ width: 120 }}
                         />
                         <IconButton size="small" color="error" onClick={() => handleRemoveCharge(idx)}>

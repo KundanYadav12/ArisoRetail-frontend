@@ -189,7 +189,7 @@ export default function PurchaseOrderModal({
         {/* Vendor & Warehouse Info */}
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Supplier / Vendor *"
@@ -207,7 +207,7 @@ export default function PurchaseOrderModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Destination Warehouse / Outlet *"
@@ -225,7 +225,7 @@ export default function PurchaseOrderModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={2}>
+            <Grid size={{ xs: 12, sm: 2 }}>
               <TextField
                 label="Order Date *"
                 type="date"
@@ -238,7 +238,7 @@ export default function PurchaseOrderModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={2}>
+            <Grid size={{ xs: 12, sm: 2 }}>
               <TextField
                 label="Expected Delivery"
                 type="date"
@@ -357,7 +357,7 @@ export default function PurchaseOrderModal({
 
         {/* PO Footer Calculations & Notes */}
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={7}>
+          <Grid size={{ xs: 12, sm: 7 }}>
             <TextField
               label="Purchase Terms & Vendor Notes"
               size="small"
@@ -369,7 +369,7 @@ export default function PurchaseOrderModal({
               placeholder="e.g. Payment within 30 days of goods receipt. F.O.R Destination."
             />
           </Grid>
-          <Grid item xs={12} sm={5}>
+          <Grid size={{ xs: 12, sm: 5 }}>
             <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">Taxable Subtotal:</Typography>

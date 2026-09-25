@@ -134,6 +134,11 @@ export async function apiFetch(url, options = {}) {
   if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify(options.body);
+  } else if (typeof options.body === 'string' && !headers['Content-Type'] && !headers['content-type']) {
+    const trimmed = options.body.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      headers['Content-Type'] = 'application/json';
+    }
   }
 
   const fetchOptions = {
@@ -189,8 +194,9 @@ export async function apiFetch(url, options = {}) {
       // Ignore clone/JSON parsing errors
     }
 
-    // If no refresh token is present, return 401 response without destroying cached session
+    // If no refresh token is present, server rejected access token - expire session cleanly
     if (!refreshToken) {
+      handleSessionExpired('TOKEN_EXPIRED');
       return response;
     }
 
@@ -262,13 +268,13 @@ export async function apiFetch(url, options = {}) {
         processQueue(new Error('Silent token refresh failed'), null);
         isRefreshing = false;
 
-        // Only explicitly terminate session if account was logged in elsewhere or permanently deactivated
+        // Explicitly terminate session if refresh token is expired or unauthorized on server
         if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
           handleSessionExpired('LOGGED_IN_ELSEWHERE');
         } else if (rData && rData.code === 'USER_INACTIVE') {
           handleSessionExpired('USER_INACTIVE');
         } else {
-          console.warn('[API Auth] Background token refresh failed, keeping persistent offline session intact.');
+          handleSessionExpired('TOKEN_EXPIRED');
         }
       }
     } catch (refreshErr) {
@@ -340,7 +346,7 @@ export async function fetchMobileMenu(token) {
   }
 
   try {
-    const res = await apiFetch('/api/menu');
+    const res = await apiFetch('/api/menu', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const menuList = await res.json();
       if (Array.isArray(menuList) && menuList.length > 0) {
@@ -379,7 +385,7 @@ export async function fetchMobileCategories(token) {
   }
 
   try {
-    const res = await apiFetch('/api/categories');
+    const res = await apiFetch('/api/categories', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const categories = await res.json();
       if (Array.isArray(categories) && categories.length > 0) {
@@ -416,7 +422,7 @@ export async function fetchRestaurantProfile(token) {
   }
 
   try {
-    const res = await apiFetch('/api/settings/profile');
+    const res = await apiFetch('/api/settings/profile', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const profile = await res.json();
       if (profile) {
@@ -450,7 +456,7 @@ export async function fetchReceiptSettings(token) {
   }
 
   try {
-    const res = await apiFetch('/api/settings/receipt');
+    const res = await apiFetch('/api/settings/receipt', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const settings = await res.json();
       if (settings) {
@@ -484,7 +490,7 @@ export async function fetchPrinters(token) {
   }
 
   try {
-    const res = await apiFetch('/api/printers');
+    const res = await apiFetch('/api/printers', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const printers = await res.json();
       if (Array.isArray(printers) && printers.length > 0) {
@@ -613,3 +619,319 @@ export async function cancelPendingOrder(orderId, cancelReason = 'Cancelled by u
   return await res.json();
 }
 
+// ----------------------------------------------------
+// Held Receipts / Park Sale API & Offline Helpers
+// ----------------------------------------------------
+
+export async function fetchHeldReceipts(params = {}) {
+  const searchParams = new URLSearchParams();
+  if (params.search) searchParams.append('search', params.search);
+  if (params.status) searchParams.append('status', params.status);
+
+  try {
+    const url = `/api/held-receipts${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+    const res = await apiFetch(url);
+    if (!res.ok) {
+      throw new Error('Failed to fetch held receipts from server');
+    }
+    const receipts = await res.json();
+    
+    // Sync to Dexie for offline readiness
+    try {
+      if (Array.isArray(receipts) && db?.held_receipts) {
+        await db.held_receipts.bulkPut(receipts.map(r => ({
+          ...r,
+          id: String(r.id)
+        })));
+      }
+    } catch (cacheErr) {
+      console.warn('[fetchHeldReceipts] Dexie cache warning:', cacheErr);
+    }
+    
+    return receipts;
+  } catch (err) {
+    // Offline or network error: fallback to local Dexie cache
+    console.warn('[fetchHeldReceipts] Fetch failed, falling back to local Dexie:', err);
+    try {
+      if (db?.held_receipts) {
+        let query = db.held_receipts.toCollection();
+        let items = await query.toArray();
+        const activeStatus = params.status || 'held';
+        items = items.filter(r => r.status === activeStatus);
+        if (params.search) {
+          const q = params.search.toLowerCase().trim();
+          items = items.filter(r => 
+            (r.hold_number && r.hold_number.toLowerCase().includes(q)) ||
+            (r.customer_name && r.customer_name.toLowerCase().includes(q)) ||
+            (r.customer_phone && r.customer_phone.toLowerCase().includes(q)) ||
+            (r.notes && r.notes.toLowerCase().includes(q))
+          );
+        }
+        return items.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+      }
+    } catch (localErr) {
+      console.error('[fetchHeldReceipts] Dexie retrieval failed:', localErr);
+    }
+    throw err;
+  }
+}
+
+export async function createHeldReceipt(data) {
+  try {
+    const res = await apiFetch('/api/held-receipts', {
+      method: 'POST',
+      body: data
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to hold receipt');
+    }
+    const result = await res.json();
+    // Cache created receipt locally
+    try {
+      if (db?.held_receipts && result?.held_receipt) {
+        await db.held_receipts.put({
+          ...result.held_receipt,
+          id: String(result.held_receipt.id)
+        });
+      }
+    } catch (dexErr) {
+      console.warn('[createHeldReceipt] Dexie cache warning:', dexErr);
+    }
+    return result;
+  } catch (err) {
+    const isNetworkError = (
+      !navigator.onLine || 
+      err.isOffline ||
+      err.name === 'NetworkError' || 
+      err.name === 'TypeError' ||
+      err.message?.includes('Failed to fetch')
+    );
+
+    if (isNetworkError && db?.held_receipts) {
+      const localId = 'offline_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false }).replace(/:/g, '').slice(0, 4);
+      const randomSeq = String(Math.floor(Math.random() * 900) + 100);
+      const offlineHoldNumber = `HOLD-${timeStr}-${randomSeq}`;
+      
+      const offlineRecord = {
+        id: localId,
+        hold_number: offlineHoldNumber,
+        status: 'held',
+        restaurant_id: data.restaurant_id || 1,
+        branch_id: data.branch_id || null,
+        created_by_user_id: data.created_by_user_id || null,
+        cashier_name: data.cashier_name || 'Cashier',
+        customer_id: data.customer_id || null,
+        customer_name: data.customer_name || 'Walk-in Customer',
+        customer_phone: data.customer_phone || '',
+        customer_address: data.customer_address || '',
+        customer_gst: data.customer_gst || '',
+        item_count: data.item_count || 0,
+        subtotal: data.subtotal || 0,
+        discount_type: data.discount_type || 'fixed',
+        discount_value: data.discount_value || 0,
+        discount_amount: data.discount_amount || 0,
+        tax_type: data.tax_type || 'inclusive',
+        tax_amount: data.tax_amount || 0,
+        total_amount: data.total_amount || 0,
+        cart_data: typeof data.cart_data === 'string' ? JSON.parse(data.cart_data) : data.cart_data,
+        notes: data.notes || '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        is_offline: true
+      };
+
+      await db.held_receipts.put(offlineRecord);
+      return {
+        message: 'Receipt held locally (offline)',
+        held_receipt: offlineRecord,
+        hold_number: offlineHoldNumber,
+        is_offline: true
+      };
+    }
+    throw err;
+  }
+}
+
+export async function updateHeldReceipt(id, data) {
+  try {
+    const res = await apiFetch(`/api/held-receipts/${id}`, {
+      method: 'PUT',
+      body: data
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to update held receipt');
+    }
+    const result = await res.json();
+    try {
+      if (db?.held_receipts && result?.held_receipt) {
+        await db.held_receipts.put({
+          ...result.held_receipt,
+          id: String(result.held_receipt.id)
+        });
+      }
+    } catch (dexErr) {
+      console.warn('[updateHeldReceipt] Dexie cache warning:', dexErr);
+    }
+    return result;
+  } catch (err) {
+    if (db?.held_receipts) {
+      const existing = await db.held_receipts.get(String(id));
+      if (existing) {
+        const updated = {
+          ...existing,
+          ...data,
+          cart_data: typeof data.cart_data === 'string' ? JSON.parse(data.cart_data) : (data.cart_data || existing.cart_data),
+          updated_at: new Date().toISOString()
+        };
+        await db.held_receipts.put(updated);
+        return { message: 'Receipt updated locally', held_receipt: updated };
+      }
+    }
+    throw err;
+  }
+}
+
+export async function resumeHeldReceipt(id) {
+  try {
+    const res = await apiFetch(`/api/held-receipts/${id}/resume`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to resume held receipt');
+    }
+    const result = await res.json();
+    return result;
+  } catch (err) {
+    if (db?.held_receipts) {
+      const existing = await db.held_receipts.get(String(id));
+      if (existing) {
+        existing.status = 'resumed';
+        existing.resumed_at = new Date().toISOString();
+        await db.held_receipts.put(existing);
+        return { message: 'Receipt marked resumed locally', held_receipt: existing };
+      }
+    }
+    throw err;
+  }
+}
+
+export async function completeHeldReceipt(id, saleId = null, invoiceNumber = null) {
+  try {
+    const res = await apiFetch(`/api/held-receipts/${id}/complete`, {
+      method: 'POST',
+      body: { sale_id: saleId, invoice_number: invoiceNumber }
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to complete held receipt');
+    }
+    const result = await res.json();
+    try {
+      if (db?.held_receipts) {
+        await db.held_receipts.delete(String(id));
+      }
+    } catch (dexErr) {
+      console.warn('[completeHeldReceipt] Dexie delete warning:', dexErr);
+    }
+    return result;
+  } catch (err) {
+    if (db?.held_receipts) {
+      try {
+        await db.held_receipts.delete(String(id));
+      } catch (e) {
+        console.warn('Could not remove held receipt from Dexie', e);
+      }
+    }
+    return { success: true };
+  }
+}
+
+export async function cancelHeldReceipt(id, reason = 'Cancelled by cashier') {
+  try {
+    const res = await apiFetch(`/api/held-receipts/${id}/cancel`, {
+      method: 'POST',
+      body: { reason }
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to cancel held receipt');
+    }
+    const result = await res.json();
+    try {
+      if (db?.held_receipts) {
+        await db.held_receipts.delete(String(id));
+      }
+    } catch (dexErr) {
+      console.warn('[cancelHeldReceipt] Dexie delete warning:', dexErr);
+    }
+    return result;
+  } catch (err) {
+    if (db?.held_receipts) {
+      try {
+        await db.held_receipts.delete(String(id));
+      } catch (e) {
+        console.warn('Could not remove held receipt from Dexie', e);
+      }
+    }
+    throw err;
+  }
+}
+
+// ==========================================
+// CUSTOMER RECEIVABLES & CREDIT SALE METHODS
+// ==========================================
+
+export async function fetchReceivablesSummary(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const res = await apiFetch(`/api/receivables/summary${query ? '?' + query : ''}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch receivables summary');
+  }
+  return res.json();
+}
+
+export async function fetchCustomerUnpaidInvoices(customerId) {
+  const res = await apiFetch(`/api/receivables/customers/${customerId}/invoices`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch customer invoices');
+  }
+  return res.json();
+}
+
+export async function recordCustomerPayment(paymentData) {
+  const res = await apiFetch('/api/receivables/payments', {
+    method: 'POST',
+    body: paymentData
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to record customer payment');
+  }
+  return res.json();
+}
+
+export async function fetchCustomerAgeingReport(params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const res = await apiFetch(`/api/receivables/ageing${query ? '?' + query : ''}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch ageing report');
+  }
+  return res.json();
+}
+
+export async function fetchCustomerStatement(customerId, params = {}) {
+  const query = new URLSearchParams(params).toString();
+  const res = await apiFetch(`/api/receivables/customers/${customerId}/statement${query ? '?' + query : ''}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || 'Failed to fetch customer statement');
+  }
+  return res.json();
+}

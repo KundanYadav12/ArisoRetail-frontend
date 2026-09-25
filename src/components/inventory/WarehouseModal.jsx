@@ -88,7 +88,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
       <form onSubmit={handleSubmit}>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={8}>
+            <Grid size={{ xs: 12, sm: 8 }}>
               <TextField
                 label="Warehouse / Branch Name"
                 fullWidth
@@ -99,7 +99,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
                 placeholder="e.g. Kandivali Retail Outlet"
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="Code"
                 fullWidth
@@ -110,7 +110,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Contact Person"
                 fullWidth
@@ -120,7 +120,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
                 placeholder="Manager name"
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Contact Phone"
                 fullWidth
@@ -131,7 +131,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 label="Email"
                 type="email"
@@ -143,7 +143,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 label="Premises / Address"
                 multiline
@@ -156,7 +156,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
               />
             </Grid>
 
-            <Grid item xs={12} sm={5}>
+            <Grid size={{ xs: 12, sm: 5 }}>
               <TextField
                 label="City"
                 fullWidth
@@ -165,7 +165,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
                 onChange={e => setCity(e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="State"
                 fullWidth
@@ -174,7 +174,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
                 onChange={e => setState(e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 label="Pincode"
                 fullWidth
@@ -184,7 +184,7 @@ export default function WarehouseModal({ open, onClose, onSave, warehouse = null
               />
             </Grid>
 
-            <Grid item xs={12} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 1 }}>
+            <Grid size={{ xs: 12 }} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 1 }}>
               <FormControlLabel
                 control={<Switch checked={isDefault} onChange={e => setIsDefault(e.target.checked)} color="primary" />}
                 label={<Typography variant="body2" sx={{ fontWeight: 600 }}>Set as Primary / Default Warehouse</Typography>}

@@ -7,25 +7,28 @@ import {
 } from '@mui/material';
 import {
   Scan, Barcode, Plus, Minus, CheckCircle, AlertTriangle,
-  XCircle, ArrowLeft, RefreshCw, Send, ShieldAlert, Package, MapPin
+  XCircle, ArrowLeft, RefreshCw, Send, ShieldAlert, Package, MapPin, Camera
 } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
+import WebBarcodeScannerModal from '../WebBarcodeScannerModal';
 
 export default function StockCountingScreen({
   onBack,
   warehouses = [],
   defaultWarehouseId = null
 }) {
-  const notify = useNotify();
+  const { notify } = useNotify();
   const scanInputRef = useRef(null);
 
   const [devices, setDevices] = useState([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [internalWarehouses, setInternalWarehouses] = useState(warehouses);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState(defaultWarehouseId || '');
 
   const [barcodeInput, setBarcodeInput] = useState('');
   const [scanning, setScanning] = useState(false);
+  const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
   const [scanResult, setScanResult] = useState(null); // Validated product assignment data
   const [scanError, setScanError] = useState(null);
 
@@ -35,7 +38,37 @@ export default function StockCountingScreen({
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(null);
 
-  // Load devices on mount
+  // Keep live refs for seamless async camera scan callbacks
+  const scanResultRef = useRef(null);
+  const countedQtyRef = useRef(0);
+  scanResultRef.current = scanResult;
+  countedQtyRef.current = countedQty;
+
+  // Sync / fetch warehouses
+  useEffect(() => {
+    if (warehouses && warehouses.length > 0) {
+      setInternalWarehouses(warehouses);
+      if (!selectedWarehouseId) {
+        const def = warehouses.find(w => w.id === defaultWarehouseId) || warehouses.find(w => w.is_default) || warehouses[0];
+        setSelectedWarehouseId(def ? def.id : '');
+      }
+    } else {
+      apiFetch('/api/inventory/warehouses')
+        .then(r => r.json())
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            setInternalWarehouses(data);
+            if (!selectedWarehouseId) {
+              const def = data.find(w => w.id === defaultWarehouseId) || data.find(w => w.is_default) || data[0];
+              setSelectedWarehouseId(def ? def.id : '');
+            }
+          }
+        })
+        .catch(err => console.error('Fetch warehouses error:', err));
+    }
+  }, [warehouses, defaultWarehouseId]);
+
+  // Load devices on mount & when warehouse changes
   useEffect(() => {
     fetchDevices();
   }, [selectedWarehouseId]);
@@ -56,57 +89,95 @@ export default function StockCountingScreen({
   };
 
   const selectedDevice = devices.find(d => String(d.id) === String(selectedDeviceId));
+  const availableWarehouses = internalWarehouses && internalWarehouses.length > 0 ? internalWarehouses : warehouses;
 
   // Focus scan input on ready
   useEffect(() => {
-    if (!scanResult) {
+    if (!scanResult && !cameraScannerOpen) {
       scanInputRef.current?.focus();
     }
-  }, [scanResult, submitSuccess]);
+  }, [scanResult, submitSuccess, cameraScannerOpen]);
 
-  const handleScanSubmit = async (e) => {
-    e?.preventDefault();
-    if (!barcodeInput.trim()) return;
-
-    if (!selectedDevice) {
-      setScanError('Please select a counting device terminal first.');
-      return;
-    }
+  // Unified barcode scan processor for both hardware scanner and camera scanner
+  const processBarcodeScan = async (rawCode) => {
+    const code = String(rawCode || '').trim();
+    if (!code) return { success: false, message: 'No barcode entered' };
 
     try {
       setScanning(true);
       setScanError(null);
       setSubmitSuccess(null);
 
+      const targetWarehouseId = selectedWarehouseId || selectedDevice?.warehouse_id || (availableWarehouses.length > 0 ? availableWarehouses[0].id : null);
+
       const res = await apiFetch('/api/inventory/stock-counting/scan', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          device_code: selectedDevice.device_code,
-          barcode: barcodeInput.trim(),
-          warehouse_id: selectedWarehouseId || selectedDevice.warehouse_id
+          device_code: selectedDevice?.device_code || null,
+          barcode: code,
+          warehouse_id: targetWarehouseId
         })
       });
 
       if (!res.success) {
-        setScanError(res.message || 'No Data / Product Not Assigned to this Device');
-        setScanResult(null);
-        return;
+        const errorMsg = res.message || 'No Data / Product Not Found or Not Assigned to this Device';
+        setScanError(errorMsg);
+        return { success: false, message: errorMsg };
       }
 
-      setScanResult(res);
-      setCountedQty(parseFloat(res.system_stock || 0));
-      setNotes('');
-      setBarcodeInput('');
+      const active = scanResultRef.current;
+      const currentCount = countedQtyRef.current;
+
+      // Convergence: If the same SKU is already active on screen, increment counted quantity
+      if (active && (
+        String(active.product?.id) === String(res.product?.id) ||
+        (active.product?.barcode && active.product?.barcode === res.product?.barcode) ||
+        (active.product?.sku && active.product?.sku === res.product?.sku)
+      )) {
+        const nextQty = parseFloat((currentCount + 1).toFixed(3));
+        setCountedQty(nextQty);
+        countedQtyRef.current = nextQty;
+        setBarcodeInput('');
+        notify?.success(`Incremented: ${res.product.name} (Count: ${nextQty})`);
+        return { success: true, message: `Incremented ${res.product.name} (Count: ${nextQty})` };
+      } else {
+        // New SKU: load product and start counted quantity at 1
+        setScanResult(res);
+        scanResultRef.current = res;
+        setCountedQty(1);
+        countedQtyRef.current = 1;
+        setNotes('');
+        setBarcodeInput('');
+        notify?.success(`Loaded: ${res.product.name} (Count: 1)`);
+        return { success: true, message: `Loaded ${res.product.name} (Count: 1)` };
+      }
     } catch (err) {
-      setScanError(err.message || 'Scan validation failed.');
-      setScanResult(null);
+      const errText = err.message || 'Scan validation failed.';
+      setScanError(errText);
+      return { success: false, message: errText };
     } finally {
       setScanning(false);
     }
   };
 
+  const handleScanSubmit = async (e) => {
+    e?.preventDefault();
+    if (!barcodeInput.trim()) return;
+    await processBarcodeScan(barcodeInput.trim());
+  };
+
+  const handleCameraBarcodeScan = async (scannedCode) => {
+    if (!scannedCode) return { success: false, message: 'No barcode detected' };
+    return await processBarcodeScan(scannedCode);
+  };
+
   const handleCountStep = (delta) => {
-    setCountedQty(prev => Math.max(0, parseFloat((prev + delta).toFixed(3))));
+    setCountedQty(prev => {
+      const updated = Math.max(0, parseFloat((prev + delta).toFixed(3)));
+      countedQtyRef.current = updated;
+      return updated;
+    });
   };
 
   const handleSubmitCount = async () => {
@@ -176,8 +247,8 @@ export default function StockCountingScreen({
 
       {/* Device & Warehouse Selector */}
       <Paper elevation={1} sx={{ p: 2, mb: 3, borderRadius: 2 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} sm={6}>
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+          <Grid size={{ xs: 12, sm: selectedDevice ? 6 : 4 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Active Counting Device</InputLabel>
               <Select
@@ -188,7 +259,9 @@ export default function StockCountingScreen({
                   setScanResult(null);
                   setScanError(null);
                 }}
+                MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
               >
+                <MenuItem value="">None (Camera / Standalone Mode)</MenuItem>
                 {devices.map(d => (
                   <MenuItem key={d.id} value={d.id}>
                     {d.device_name} ({d.device_code}) — {d.warehouse_name || `WH #${d.warehouse_id}`}
@@ -197,7 +270,32 @@ export default function StockCountingScreen({
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={6}>
+
+          {!selectedDevice && (
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <FormControl fullWidth size="small">
+                <InputLabel>Target Warehouse</InputLabel>
+                <Select
+                  value={selectedWarehouseId}
+                  label="Target Warehouse"
+                  onChange={(e) => {
+                    setSelectedWarehouseId(e.target.value);
+                    setScanResult(null);
+                    setScanError(null);
+                  }}
+                  MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
+                >
+                  {availableWarehouses.map(w => (
+                    <MenuItem key={w.id} value={w.id}>
+                      {w.name} ({w.code})
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
+
+          <Grid size={{ xs: 12, sm: selectedDevice ? 6 : 4 }}>
             {selectedDevice ? (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Chip
@@ -206,13 +304,21 @@ export default function StockCountingScreen({
                   color={selectedDevice.status === 'active' ? 'success' : 'error'}
                 />
                 <Typography variant="caption" color="text.secondary">
-                  Terminal: {selectedDevice.device_code}
+                  Terminal: {selectedDevice.device_code} ({selectedDevice.warehouse_name || `WH #${selectedDevice.warehouse_id}`})
                 </Typography>
               </Box>
             ) : (
-              <Typography variant="caption" color="error">
-                No active device registered. Create one in Device Manager.
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Chip
+                  label="Camera / Standalone"
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Standalone mode active. Camera scanner and manual scan ready.
+                </Typography>
+              </Box>
             )}
           </Grid>
         </Grid>
@@ -221,10 +327,22 @@ export default function StockCountingScreen({
       {/* Barcode Scanner Input */}
       <Paper elevation={2} sx={{ p: 2.5, mb: 3, borderRadius: 2, border: '2px solid', borderColor: 'primary.light' }}>
         <form onSubmit={handleScanSubmit}>
-          <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Scan size={18} />
-            Scan Product Barcode
-          </Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5, flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Scan size={18} />
+              Scan Product Barcode
+            </Typography>
+            <Button
+              type="button"
+              variant="outlined"
+              color="primary"
+              startIcon={<Camera size={18} />}
+              onClick={() => setCameraScannerOpen(true)}
+              sx={{ fontWeight: 700, borderRadius: 2 }}
+            >
+              Camera Scan
+            </Button>
+          </Box>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <TextField
               inputRef={scanInputRef}
@@ -241,13 +359,13 @@ export default function StockCountingScreen({
               type="submit"
               variant="contained"
               disabled={scanning || !barcodeInput.trim()}
-              sx={{ minWidth: 100 }}
+              sx={{ minWidth: 100, fontWeight: 700 }}
             >
               {scanning ? <CircularProgress size={20} color="inherit" /> : 'Scan'}
             </Button>
           </Box>
           <Typography variant="caption" color="text.secondary" sx={{ mt: 0.8, display: 'block' }}>
-            Hardware barcode scanners: Pull the trigger to scan. Enter key is auto-submitted.
+            Hardware barcode scanners: Pull the trigger to scan. Enter key is auto-submitted. | Or click <strong>Camera Scan</strong> to scan via device camera/webcam.
           </Typography>
         </form>
       </Paper>
@@ -345,9 +463,13 @@ export default function StockCountingScreen({
 
                 <TextField
                   type="number"
-                  inputProps={{ min: '0', step: 'any', style: { textAlign: 'center', fontSize: '2.2rem', fontWeight: 'bold' } }}
+                  slotProps={{ htmlInput: { min: '0', step: 'any', style: { textAlign: 'center', fontSize: '2.2rem', fontWeight: 'bold' } } }}
                   value={countedQty}
-                  onChange={(e) => setCountedQty(Math.max(0, parseFloat(e.target.value) || 0))}
+                  onChange={(e) => {
+                    const val = Math.max(0, parseFloat(e.target.value) || 0);
+                    setCountedQty(val);
+                    countedQtyRef.current = val;
+                  }}
                   sx={{ width: 180 }}
                 />
 
@@ -451,6 +573,15 @@ export default function StockCountingScreen({
           </CardContent>
         </Card>
       )}
+      {/* WebBarcodeScannerModal - Camera Scanning */}
+      <WebBarcodeScannerModal
+        open={cameraScannerOpen}
+        onClose={() => setCameraScannerOpen(false)}
+        onScan={handleCameraBarcodeScan}
+        continuous={true}
+        title="Stock Counting Camera Scanner"
+        subtitle="Point camera at item barcode to verify and increment counted quantity"
+      />
     </Box>
   );
 }

@@ -165,8 +165,8 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
         {/* Header Locations */}
         <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: '#f8fafc' }}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} sm={4}>
+          <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="Requesting Outlet (Destination)"
                 select
@@ -184,11 +184,11 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={1} sx={{ display: { xs: 'none', sm: 'flex' }, justifyContent: 'center' }}>
+            <Grid size={{ xs: 12, sm: 1 }} sx={{ display: { xs: 'none', sm: 'flex' }, justifyContent: 'center' }}>
               <ArrowRight size={20} color="#64748b" />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="Request To (Source Warehouse)"
                 select
@@ -206,7 +206,7 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 label="Request Date"
                 type="date"

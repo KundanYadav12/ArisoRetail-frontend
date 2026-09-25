@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box, Typography, Button, Paper, Tabs, Tab, Chip,
   Grid, TextField, InputAdornment, IconButton, Table,
@@ -38,16 +38,83 @@ import ProductLocationModal from './ProductLocationModal';
 export default function InventorySuite({
   onOpenStickersModal,
   categories = [],
-  menuItems = []
+  menuItems = [],
+  currentUser = null
 }) {
   const notify = useNotify();
 
-  // Active Sub-Tab: overview, catalog, warehouses, requests, transfers, suppliers, purchases, adjustments, ledger
-  const [subTab, setSubTab] = useState('overview');
+  // Resolve user state from prop or localStorage
+  const activeUser = currentUser || (() => {
+    try {
+      const saved = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  const isWarehouseManager = activeUser?.role === 'warehouse_manager';
+  const userPermissions = Array.isArray(activeUser?.permissions) ? activeUser.permissions : [];
+
+  const hasPerm = useCallback((permKey) => {
+    if (!isWarehouseManager) return true;
+    return userPermissions.includes(permKey) || userPermissions.includes('all');
+  }, [isWarehouseManager, userPermissions]);
 
   // Shared Data States
   const [warehouses, setWarehouses] = useState([]);
-  const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState('all');
+  const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState(() => {
+    if (isWarehouseManager && activeUser?.assigned_warehouse_id) {
+      return String(activeUser.assigned_warehouse_id);
+    }
+    return 'all';
+  });
+
+  // Determine subtabs list with permission keys
+  const availableSubTabs = useMemo(() => [
+    { id: 'overview', label: 'Executive Overview', icon: Boxes, perm: 'warehouse_dashboard' },
+    { id: 'catalog', label: 'Stock Catalog & Levels', icon: FileSpreadsheet, perm: 'inventory_catalog' },
+    { id: 'warehouses', label: `Warehouses (${warehouses.length})`, icon: Building2, perm: 'warehouses' },
+    { id: 'racks', label: 'Racks & Locations', icon: MapPin, perm: 'rack_management' },
+    { id: 'stock_counting', label: 'Stock Counting Suite', icon: Barcode, perm: 'stock_count' },
+    { id: 'requests', label: 'Stock Requests', icon: ClipboardList, perm: 'stock_requests' },
+    { id: 'transfers', label: 'Transfers & Receiving', icon: Truck, perm: (hasPerm('stock_transfer') || hasPerm('stock_receiving')) },
+    { id: 'suppliers', label: 'Suppliers / Vendors', icon: Users, perm: 'suppliers' },
+    { id: 'purchases', label: 'Purchases & Bills', icon: Receipt, perm: (hasPerm('purchases') || hasPerm('stock_receiving')) },
+    { id: 'adjustments', label: 'Stock Adjustments', icon: Sliders, perm: 'stock_adjustment' },
+    { id: 'ledger', label: 'Stock Ledger Audit', icon: FileText, perm: 'stock_ledger' },
+  ].filter(tab => {
+    if (typeof tab.perm === 'boolean') return tab.perm;
+    return hasPerm(tab.perm);
+  }), [warehouses.length, hasPerm]);
+
+  // Active Sub-Tab: initialize to first authorized subtab
+  const [subTab, setSubTab] = useState(() => {
+    if (isWarehouseManager) {
+      if (hasPerm('warehouse_dashboard')) return 'overview';
+      if (hasPerm('inventory_catalog')) return 'catalog';
+      if (hasPerm('warehouses')) return 'warehouses';
+      if (hasPerm('rack_management')) return 'racks';
+      if (hasPerm('stock_count')) return 'stock_counting';
+      if (hasPerm('stock_requests')) return 'requests';
+      if (hasPerm('stock_transfer') || hasPerm('stock_receiving')) return 'transfers';
+      if (hasPerm('stock_adjustment')) return 'adjustments';
+      if (hasPerm('stock_ledger')) return 'ledger';
+      if (hasPerm('suppliers')) return 'suppliers';
+      if (hasPerm('purchases')) return 'purchases';
+    }
+    return 'overview';
+  });
+
+  // Ensure active subTab is permitted
+  useEffect(() => {
+    if (isWarehouseManager && availableSubTabs.length > 0) {
+      const isCurrentAllowed = availableSubTabs.some(t => t.id === subTab);
+      if (!isCurrentAllowed) {
+        setSubTab(availableSubTabs[0].id);
+      }
+    }
+  }, [isWarehouseManager, availableSubTabs, subTab]);
   const [dashboardMetrics, setDashboardMetrics] = useState(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
 
@@ -473,24 +540,38 @@ export default function InventorySuite({
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           {/* Global Warehouse Filter */}
-          <FormControl size="small" sx={{ minWidth: 220 }}>
-            <InputLabel>Active Warehouse / Outlet</InputLabel>
-            <Select
-              value={selectedWarehouseFilter}
-              label="Active Warehouse / Outlet"
-              onChange={e => {
-                setSelectedWarehouseFilter(e.target.value);
-                if (subTab === 'overview') fetchDashboardMetrics(e.target.value);
-              }}
-            >
-              <MenuItem value="all">🏢 All Outlets & Warehouses</MenuItem>
-              {warehouses.map(w => (
-                <MenuItem key={w.id} value={String(w.id)}>
-                  {w.name} {w.is_default ? '⭐ (Main)' : `(${w.code})`}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {isWarehouseManager && activeUser?.assigned_warehouse_id ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: '#f1f5f9', px: 2, py: 0.75, borderRadius: 2, border: '1px solid #cbd5e1' }}>
+              <Building2 size={16} color="#0284c7" />
+              <Box>
+                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontWeight: 600, fontSize: '0.7rem', lineHeight: 1 }}>
+                  Assigned Warehouse Scope
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 800, color: '#0f172a', lineHeight: 1.2 }}>
+                  {activeUser.assigned_warehouse_name || `Godown #${activeUser.assigned_warehouse_id}`} (Locked)
+                </Typography>
+              </Box>
+            </Box>
+          ) : (
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <InputLabel>Active Warehouse / Outlet</InputLabel>
+              <Select
+                value={selectedWarehouseFilter}
+                label="Active Warehouse / Outlet"
+                onChange={e => {
+                  setSelectedWarehouseFilter(e.target.value);
+                  if (subTab === 'overview') fetchDashboardMetrics(e.target.value);
+                }}
+              >
+                <MenuItem value="all">🏢 All Outlets & Warehouses</MenuItem>
+                {warehouses.map(w => (
+                  <MenuItem key={w.id} value={String(w.id)}>
+                    {w.name} {w.is_default ? '⭐ (Main)' : `(${w.code})`}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
 
           <Button
             variant="outlined"
@@ -526,17 +607,18 @@ export default function InventorySuite({
             }
           }}
         >
-          <Tab icon={<Boxes size={16} />} iconPosition="start" label="Executive Overview" value="overview" />
-          <Tab icon={<FileSpreadsheet size={16} />} iconPosition="start" label="Stock Catalog & Levels" value="catalog" />
-          <Tab icon={<Building2 size={16} />} iconPosition="start" label={`Warehouses (${warehouses.length})`} value="warehouses" />
-          <Tab icon={<MapPin size={16} />} iconPosition="start" label="Racks & Locations" value="racks" />
-          <Tab icon={<Barcode size={16} />} iconPosition="start" label="Stock Counting Suite" value="stock_counting" />
-          <Tab icon={<ClipboardList size={16} />} iconPosition="start" label="Stock Requests" value="requests" />
-          <Tab icon={<Truck size={16} />} iconPosition="start" label="Transfers & Receiving" value="transfers" />
-          <Tab icon={<Users size={16} />} iconPosition="start" label="Suppliers / Vendors" value="suppliers" />
-          <Tab icon={<Receipt size={16} />} iconPosition="start" label="Purchases & Bills" value="purchases" />
-          <Tab icon={<Sliders size={16} />} iconPosition="start" label="Stock Adjustments" value="adjustments" />
-          <Tab icon={<FileText size={16} />} iconPosition="start" label="Stock Ledger Audit" value="ledger" />
+          {availableSubTabs.map(tab => {
+            const IconComp = tab.icon;
+            return (
+              <Tab
+                key={tab.id}
+                icon={<IconComp size={16} />}
+                iconPosition="start"
+                label={tab.label}
+                value={tab.id}
+              />
+            );
+          })}
         </Tabs>
       </Paper>
 
@@ -547,7 +629,7 @@ export default function InventorySuite({
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           {/* KPI Summary Cards */}
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, borderLeft: '4px solid #0284c7' }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   Total Inventory Valuation
@@ -561,7 +643,7 @@ export default function InventorySuite({
               </Paper>
             </Grid>
 
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, borderLeft: '4px solid #10b981' }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   Tracked Catalog Items
@@ -575,7 +657,7 @@ export default function InventorySuite({
               </Paper>
             </Grid>
 
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <Paper
                 variant="outlined"
                 onClick={() => { setStockStatusFilter('low_stock'); setSubTab('catalog'); }}
@@ -596,7 +678,7 @@ export default function InventorySuite({
               </Paper>
             </Grid>
 
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid size={{ xs: 12, sm: 6, md: 3 }}>
               <Paper
                 variant="outlined"
                 onClick={() => { setStockStatusFilter('out_of_stock'); setSubTab('catalog'); }}
@@ -620,7 +702,7 @@ export default function InventorySuite({
 
           {/* Workflow Status Bar: Requests, In-Transit, POs */}
           <Grid container spacing={2}>
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -646,7 +728,7 @@ export default function InventorySuite({
               </Paper>
             </Grid>
 
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -672,7 +754,7 @@ export default function InventorySuite({
               </Paper>
             </Grid>
 
-            <Grid item xs={12} md={4}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -800,8 +882,8 @@ export default function InventorySuite({
 
           {/* Filter Bar */}
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
-            <Grid container spacing={1.5} alignItems="center">
-              <Grid item xs={12} sm={4}>
+            <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -823,7 +905,7 @@ export default function InventorySuite({
                 />
               </Grid>
 
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Category</InputLabel>
                   <Select
@@ -839,7 +921,7 @@ export default function InventorySuite({
                 </FormControl>
               </Grid>
 
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Stock Status</InputLabel>
                   <Select
@@ -995,7 +1077,7 @@ export default function InventorySuite({
 
           <Grid container spacing={2}>
             {warehouses.map(w => (
-              <Grid item xs={12} sm={6} md={4} key={w.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={w.id}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <Box>
@@ -1889,8 +1971,8 @@ export default function InventorySuite({
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           {/* Filters Bar */}
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
-            <Grid container spacing={1.5} alignItems="center">
-              <Grid item xs={12} sm={4}>
+            <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Transaction Type</InputLabel>
                   <Select
@@ -1914,7 +1996,7 @@ export default function InventorySuite({
                 </FormControl>
               </Grid>
 
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Warehouse</InputLabel>
                   <Select
@@ -1930,7 +2012,7 @@ export default function InventorySuite({
                 </FormControl>
               </Grid>
 
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <Button
                   variant="outlined"
                   size="small"

@@ -250,7 +250,7 @@ export default function PurchaseBillModal({
         {/* Vendor & Warehouse Info */}
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 label="Vendor Invoice / Bill No. *"
                 size="small"
@@ -262,7 +262,7 @@ export default function PurchaseBillModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 select
                 label="Supplier / Vendor *"
@@ -280,7 +280,7 @@ export default function PurchaseBillModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 select
                 label="Receiving Warehouse *"
@@ -298,7 +298,7 @@ export default function PurchaseBillModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={1.5}>
+            <Grid size={{ xs: 12, sm: 1.5 }}>
               <TextField
                 label="Bill Date *"
                 type="date"
@@ -311,7 +311,7 @@ export default function PurchaseBillModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={1.5}>
+            <Grid size={{ xs: 12, sm: 1.5 }}>
               <TextField
                 label="Due Date"
                 type="date"
@@ -445,13 +445,13 @@ export default function PurchaseBillModal({
 
         {/* Bill Payment & Totals */}
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={7}>
+          <Grid size={{ xs: 12, sm: 7 }}>
             <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
               <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700, display: 'block', mb: 1.5 }}>
                 PAYMENT DETAILS
               </Typography>
               <Grid container spacing={1.5}>
-                <Grid item xs={12} sm={4}>
+                <Grid size={{ xs: 12, sm: 4 }}>
                   <TextField
                     select
                     label="Payment Status"
@@ -466,7 +466,7 @@ export default function PurchaseBillModal({
                     <option value="paid">Fully Paid</option>
                   </TextField>
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid size={{ xs: 12, sm: 4 }}>
                   <TextField
                     label="Amount Paid (₹)"
                     size="small"
@@ -477,7 +477,7 @@ export default function PurchaseBillModal({
                     onChange={e => setPaidAmount(e.target.value)}
                   />
                 </Grid>
-                <Grid item xs={12} sm={4}>
+                <Grid size={{ xs: 12, sm: 4 }}>
                   <TextField
                     select
                     label="Payment Mode"
@@ -494,7 +494,7 @@ export default function PurchaseBillModal({
                     <option value="Cheque">Cheque</option>
                   </TextField>
                 </Grid>
-                <Grid item xs={12}>
+                <Grid size={{ xs: 12 }}>
                   <TextField
                     label="Bill Notes"
                     size="small"
@@ -508,7 +508,7 @@ export default function PurchaseBillModal({
             </Paper>
           </Grid>
 
-          <Grid item xs={12} sm={5}>
+          <Grid size={{ xs: 12, sm: 5 }}>
             <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">Taxable Subtotal:</Typography>

@@ -100,7 +100,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
       <form onSubmit={handleSubmit}>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Supplier / Contact Name"
                 fullWidth
@@ -111,7 +111,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 placeholder="Vendor or representative name"
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Company / Firm Name"
                 fullWidth
@@ -122,7 +122,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Mobile Number"
                 fullWidth
@@ -133,7 +133,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 placeholder="10-digit mobile"
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Email"
                 type="email"
@@ -145,7 +145,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="GSTIN"
                 fullWidth
@@ -155,7 +155,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 placeholder="27AABCM1234F1Z1"
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="PAN Number"
                 fullWidth
@@ -166,7 +166,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 label="Billing / Store Address"
                 multiline
@@ -178,7 +178,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12} sm={5}>
+            <Grid size={{ xs: 12, sm: 5 }}>
               <TextField
                 label="City"
                 fullWidth
@@ -187,7 +187,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 onChange={e => setCity(e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="State"
                 fullWidth
@@ -196,7 +196,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 onChange={e => setState(e.target.value)}
               />
             </Grid>
-            <Grid item xs={12} sm={3}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 label="Pincode"
                 fullWidth
@@ -206,7 +206,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Opening Balance (₹)"
                 type="number"
@@ -218,7 +218,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
                 helperText={supplier ? 'Opening balance is locked after creation' : ''}
               />
             </Grid>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 label="Payment Terms"
                 select
@@ -236,7 +236,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               </TextField>
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 label="Internal Notes"
                 multiline
@@ -249,7 +249,7 @@ export default function SupplierModal({ open, onClose, onSave, supplier = null }
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <FormControlLabel
                 control={<Switch checked={status === 'active'} onChange={e => setStatus(e.target.checked ? 'active' : 'inactive')} color="success" />}
                 label={<Typography variant="body2" sx={{ fontWeight: 600 }}>Active Vendor</Typography>}

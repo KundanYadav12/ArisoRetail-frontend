@@ -16,6 +16,7 @@ export const STICKER_SIZES = {
       shop: '8.5px',
       address: '7px',
       product: '9.5px',
+      variant: '8px',
       price: '9px',
       mrp: '8px',
       date: '7.5px'
@@ -33,6 +34,7 @@ export const STICKER_SIZES = {
       shop: '9px',
       address: '7.5px',
       product: '10px',
+      variant: '8.5px',
       price: '9.5px',
       mrp: '8.5px',
       date: '8px'
@@ -50,6 +52,7 @@ export const STICKER_SIZES = {
       shop: '9.5px',
       address: '8px',
       product: '10.5px',
+      variant: '9px',
       price: '10px',
       mrp: '9px',
       date: '8.5px'
@@ -66,14 +69,18 @@ export const DEFAULT_STICKER_CONFIG = {
   spacingMm: 3, // 3 mm standard gap between stickers
   showShopName: true,
   showProductName: true,
+  showSize: false,
+  showColor: false,
   showMrp: true,
   showSellingPrice: true,
   showMfgDate: true,
   showExpDate: false,
-  showAddress: false,
+  showAddress: true,
   showBarcode: true,
   customShopName: '',
   customAddress: '',
+  customSize: '',
+  customColor: '',
   mrpMultiplier: 1.25, // default suggested MRP calculation (125% of selling price if not specified)
   defaultMfgDate: '', // if empty, uses today
   defaultExpDate: ''
@@ -105,6 +112,185 @@ export function saveStickerConfig(config) {
   } catch (e) {
     console.warn('[StickerGenerator] Failed to save config:', e);
   }
+}
+
+/**
+ * Resolve product sticker prices according to retail fallback rules:
+ * - If product has a valid Sale Price (> 0), print the Sale Price.
+ * - If Sale Price is empty, null, 0, or not available, automatically fallback to MRP from existing product data.
+ * - Do not leave the price blank when MRP is available.
+ */
+export function resolveStickerPrices(item = {}, config = {}) {
+  // 1. Raw MRP extraction from existing product fields
+  let rawMrp = null;
+  const mrpCandidates = [item?.mrp, item?.MRP, item?.maximum_retail_price, item?.mrp_price];
+  for (const c of mrpCandidates) {
+    if (c !== undefined && c !== null && c !== '') {
+      const num = parseFloat(c);
+      if (!isNaN(num) && num > 0) {
+        rawMrp = num;
+        break;
+      }
+    }
+  }
+
+  // 2. Raw Sale Price extraction from existing product fields
+  let rawSalePrice = null;
+  const saleCandidates = [item?.sale_price, item?.salePrice, item?.selling_price, item?.sellingPrice, item?.price];
+  for (const c of saleCandidates) {
+    if (c !== undefined && c !== null && c !== '') {
+      const num = parseFloat(c);
+      if (!isNaN(num) && num > 0) {
+        rawSalePrice = num;
+        break;
+      }
+    }
+  }
+
+  // 3. Fallback logic:
+  // If product has valid Sale Price (> 0), use it.
+  // If Sale Price is empty, null, 0, or not available, automatically use product MRP from existing data.
+  let effectiveSalePrice = 0;
+  if (rawSalePrice !== null && rawSalePrice > 0) {
+    effectiveSalePrice = rawSalePrice;
+  } else if (rawMrp !== null && rawMrp > 0) {
+    effectiveSalePrice = rawMrp;
+  }
+
+  // 4. MRP determination:
+  let effectiveMrp = 0;
+  if (rawMrp !== null && rawMrp > 0) {
+    effectiveMrp = rawMrp;
+  } else if (effectiveSalePrice > 0) {
+    const mult = parseFloat(config?.mrpMultiplier);
+    effectiveMrp = (!isNaN(mult) && mult > 1) ? (effectiveSalePrice * mult) : effectiveSalePrice;
+  }
+
+  return {
+    salePrice: effectiveSalePrice,
+    mrp: effectiveMrp,
+    hasValidSalePrice: rawSalePrice !== null && rawSalePrice > 0,
+    hasValidMrp: rawMrp !== null && rawMrp > 0
+  };
+}
+
+/**
+ * Format store address for stickers:
+ * - Display the address for a maximum of 3 lines.
+ * - If the address exceeds 3 lines, truncate it after the third line and append: ...
+ * Example:
+ * ABC RETAIL STORE
+ * 123 Main Road, Andheri
+ * Mumbai, Maharashtra
+ * ...
+ */
+export function formatStickerAddress(rawAddress, maxLines = 3) {
+  if (!rawAddress || typeof rawAddress !== 'string') return [];
+  const trimmed = rawAddress.trim();
+  if (!trimmed) return [];
+
+  let lines = [];
+  if (trimmed.includes('\n')) {
+    lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  } else if (trimmed.includes(',')) {
+    const parts = trimmed.split(',').map(p => p.trim()).filter(Boolean);
+    let currentLine = '';
+    for (const part of parts) {
+      if (!currentLine) {
+        currentLine = part;
+      } else if ((currentLine + ', ' + part).length <= 28) {
+        currentLine += ', ' + part;
+      } else {
+        lines.push(currentLine);
+        currentLine = part;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  } else if (trimmed.length > 28) {
+    const words = trimmed.split(/\s+/);
+    let currentLine = '';
+    for (const word of words) {
+      if (!currentLine) {
+        currentLine = word;
+      } else if ((currentLine + ' ' + word).length <= 28) {
+        currentLine += ' ' + word;
+      } else {
+        lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  } else {
+    lines = [trimmed];
+  }
+
+  if (lines.length <= maxLines) {
+    return lines;
+  }
+
+  // Address exceeds maxLines (exceeds 3 lines):
+  // Truncate after lines and append '...' as the 3rd line, guaranteeing at most 3 lines
+  return [lines[0], lines[1], '...'];
+}
+
+/**
+ * Extract existing product Size with fallbacks
+ */
+export function resolveItemSize(item, config = {}) {
+  const candidates = [
+    item?.size,
+    item?.product_size,
+    item?.variant_size,
+    item?.item_size,
+    item?.attributes?.size,
+    item?.attributes?.Size,
+    item?.variants?.[0]?.size,
+    item?.variants?.[0]?.Size
+  ];
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '') {
+      return String(c).trim();
+    }
+  }
+  if (config?.customSize && typeof config.customSize === 'string' && config.customSize.trim() !== '') {
+    return config.customSize.trim();
+  }
+  if (config?.defaultSize && typeof config.defaultSize === 'string' && config.defaultSize.trim() !== '') {
+    return config.defaultSize.trim();
+  }
+  return '';
+}
+
+/**
+ * Extract existing product Color with fallbacks
+ */
+export function resolveItemColor(item, config = {}) {
+  const candidates = [
+    item?.color,
+    item?.product_color,
+    item?.variant_color,
+    item?.item_color,
+    item?.attributes?.color,
+    item?.attributes?.Color,
+    item?.variants?.[0]?.color,
+    item?.variants?.[0]?.Color
+  ];
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '') {
+      return String(c).trim();
+    }
+  }
+  if (config?.customColor && typeof config.customColor === 'string' && config.customColor.trim() !== '') {
+    return config.customColor.trim();
+  }
+  if (config?.defaultColor && typeof config.defaultColor === 'string' && config.defaultColor.trim() !== '') {
+    return config.defaultColor.trim();
+  }
+  return '';
 }
 
 /**
@@ -146,6 +332,47 @@ export function generateCode128Svg(code, options = {}) {
 }
 
 /**
+ * Get today's local date as YYYY-MM-DD for HTML5 date inputs
+ */
+export function getTodayIsoDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Format ISO date string (YYYY-MM-DD) into Indian retail sticker format (DD/MM/YYYY)
+ */
+export function formatIsoToDisplayDate(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return '';
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split('-');
+    return `${d}/${m}/${y}`;
+  }
+  return trimmed;
+}
+
+/**
+ * Convert display format (DD/MM/YYYY or DD-MM-YYYY) to ISO (YYYY-MM-DD) for HTML5 date inputs
+ */
+export function parseDisplayToIsoDate(displayStr) {
+  if (!displayStr || typeof displayStr !== 'string') return '';
+  const trimmed = displayStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const match = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (match) {
+    const d = match[1].padStart(2, '0');
+    const m = match[2].padStart(2, '0');
+    const y = match[3];
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+}
+
+/**
  * Build HTML content for a single sticker element
  */
 export function renderSingleStickerHtml(item, config, shopData = {}) {
@@ -153,23 +380,76 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
   const fScale = sizeDef.fontScale;
 
   const shopName = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
-  const address = (config.customAddress || shopData.address || '').trim();
-  const productName = (item.name || item.item_name || 'Retail Item').trim();
+  const rawAddress = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
+  const addressLines = formatStickerAddress(rawAddress, 3);
+  const productName = (item?.name || item?.item_name || 'Retail Item').trim();
 
-  const priceVal = parseFloat(item.price || item.selling_price || 0);
-  const mrpVal = item.mrp ? parseFloat(item.mrp) : (priceVal * (parseFloat(config.mrpMultiplier) || 1.25));
+  const prices = resolveStickerPrices(item, config);
+  const priceVal = prices.salePrice;
+  const mrpVal = prices.mrp;
 
   const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const mfgDate = config.defaultMfgDate || todayStr;
-  const expDate = config.defaultExpDate || '';
+  const rawMfg = config.defaultMfgDate;
+  const mfgDate = rawMfg ? formatIsoToDisplayDate(rawMfg) : todayStr;
+  const expDate = config.defaultExpDate ? formatIsoToDisplayDate(config.defaultExpDate) : '';
 
-  const barcodeValue = (item.barcode || item.sku || ('PRD' + (item.id || '001'))).trim();
+  const barcodeValue = (item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
   const barcodeSvg = config.showBarcode ? generateCode128Svg(barcodeValue, {
     height: sizeDef.defaultBarcodeHeight,
     width: sizeDef.defaultBarcodeWidth,
     displayValue: true,
     fontSize: 8.5
   }) : '';
+
+  let priceHtml = '';
+  if ((config.showMrp || config.showSellingPrice) && (priceVal > 0 || mrpVal > 0)) {
+    if (config.showMrp && config.showSellingPrice) {
+      if (mrpVal > priceVal) {
+        priceHtml = `
+          <span class="price-mrp" style="font-size: ${fScale.mrp};">MRP: ₹${mrpVal.toFixed(2)}</span>
+          <span class="price-selling" style="font-size: ${fScale.price};">Our Price: ₹${priceVal.toFixed(2)}</span>
+        `;
+      } else {
+        const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Price: ';
+        priceHtml = `
+          <span class="price-selling" style="font-size: ${fScale.price};">${label}₹${priceVal.toFixed(2)}</span>
+        `;
+      }
+    } else if (config.showSellingPrice) {
+      const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Our Price: ';
+      priceHtml = `
+        <span class="price-selling" style="font-size: ${fScale.price};">${label}₹${priceVal.toFixed(2)}</span>
+      `;
+    } else {
+      priceHtml = `
+        <span class="price-selling" style="font-size: ${fScale.price};">MRP: ₹${mrpVal.toFixed(2)}</span>
+      `;
+    }
+  }
+
+  const addressHtml = (config.showAddress && addressLines.length > 0) ? `
+    <div class="field-address" style="font-size: ${fScale.address};">
+      ${addressLines.map(line => `<div class="address-line">${line}</div>`).join('')}
+    </div>
+  ` : '';
+
+  const itemSize = resolveItemSize(item, config);
+  const itemColor = resolveItemColor(item, config);
+  const showSize = !!config.showSize && !!itemSize;
+  const showColor = !!config.showColor && !!itemColor;
+  const displaySize = showSize ? (/^size:\s*/i.test(itemSize) ? itemSize : `Size: ${itemSize}`) : '';
+  const displayColor = showColor ? (/^color:\s*/i.test(itemColor) ? itemColor : `Color: ${itemColor}`) : '';
+
+  let variantHtml = '';
+  if (showSize || showColor) {
+    variantHtml = `
+      <div class="field-variant-row" style="font-size: ${fScale.variant || '8px'};">
+        ${showSize ? `<span class="badge-size">${displaySize}</span>` : ''}
+        ${showSize && showColor ? `<span class="badge-sep">•</span>` : ''}
+        ${showColor ? `<span class="badge-color">${displayColor}</span>` : ''}
+      </div>
+    `;
+  }
 
   return `
     <div class="sticker-card sticker-${config.size}" style="width: ${sizeDef.width}mm; height: ${sizeDef.height}mm;">
@@ -178,18 +458,17 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
           <div class="field-shop" style="font-size: ${fScale.shop};">${shopName}</div>
         ` : ''}
 
-        ${config.showAddress && address ? `
-          <div class="field-address" style="font-size: ${fScale.address};">${address}</div>
-        ` : ''}
+        ${addressHtml}
 
         ${config.showProductName && productName ? `
           <div class="field-product" style="font-size: ${fScale.product};">${productName}</div>
         ` : ''}
 
-        ${(config.showMrp || config.showSellingPrice) ? `
+        ${variantHtml}
+
+        ${priceHtml ? `
           <div class="field-price-row">
-            ${config.showMrp ? `<span class="price-mrp" style="font-size: ${fScale.mrp};">MRP: ₹${mrpVal.toFixed(2)}</span>` : ''}
-            ${config.showSellingPrice ? `<span class="price-selling" style="font-size: ${fScale.price};">Our Price: ₹${priceVal.toFixed(2)}</span>` : ''}
+            ${priceHtml}
           </div>
         ` : ''}
 
@@ -329,11 +608,17 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
     .field-address {
       font-weight: 500;
       color: #333333;
+      width: 100%;
+      line-height: 1.15;
+      text-align: center;
+      overflow: hidden;
+      margin: 0.2mm 0;
+    }
+    .address-line {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      width: 100%;
-      line-height: 1.1;
+      max-width: 100%;
     }
     .field-product {
       font-weight: 800;
@@ -345,6 +630,29 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
       -webkit-box-orient: vertical;
       word-break: break-word;
       margin: 0.5mm 0;
+    }
+    .field-variant-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 1.5mm;
+      width: 100%;
+      font-weight: 700;
+      color: #1e293b;
+      line-height: 1.15;
+      margin: 0.2mm 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .badge-size, .badge-color {
+      display: inline-block;
+      white-space: nowrap;
+    }
+    .badge-sep {
+      opacity: 0.5;
+      font-size: 0.9em;
+      margin: 0 0.5mm;
     }
     .field-price-row {
       display: flex;

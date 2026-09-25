@@ -3,7 +3,8 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, Grid, Autocomplete, Table,
   TableHead, TableRow, TableCell, TableBody,
-  IconButton, Typography, Box, Paper, Chip, Alert
+  IconButton, Typography, Box, Paper, Chip, Alert,
+  MenuItem
 } from '@mui/material';
 import { X, Plus, Trash2, Sliders, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
@@ -16,7 +17,8 @@ export default function StockAdjustmentModal({
   onCreated,
   warehouses = []
 }) {
-  const notify = useNotify();
+  const { notify } = useNotify();
+  const [internalWarehouses, setInternalWarehouses] = useState(warehouses);
   const [adjustmentDate, setAdjustmentDate] = useState(() => getISTDateString());
   const [warehouseId, setWarehouseId] = useState('');
   const [reason, setReason] = useState('Physical Count Discrepancy');
@@ -27,15 +29,33 @@ export default function StockAdjustmentModal({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    if (warehouses && warehouses.length > 0) {
+      setInternalWarehouses(warehouses);
+    }
+  }, [warehouses]);
+
+  useEffect(() => {
     if (open) {
       setAdjustmentDate(getISTDateString());
       setReason('Physical Count Discrepancy');
       setNotes('');
       setItems([]);
 
-      if (warehouses.length > 0) {
-        const defaultWh = warehouses.find(w => w.is_default) || warehouses[0];
+      const activeWhList = (warehouses && warehouses.length > 0) ? warehouses : internalWarehouses;
+      if (activeWhList.length > 0) {
+        const defaultWh = activeWhList.find(w => w.is_default) || activeWhList[0];
         setWarehouseId(defaultWh ? String(defaultWh.id) : '');
+      } else {
+        apiFetch('/api/inventory/warehouses')
+          .then(r => r.json())
+          .then(data => {
+            if (Array.isArray(data) && data.length > 0) {
+              setInternalWarehouses(data);
+              const defaultWh = data.find(w => w.is_default) || data[0];
+              setWarehouseId(defaultWh ? String(defaultWh.id) : '');
+            }
+          })
+          .catch(err => console.error(err));
       }
 
       apiFetch('/api/menu')
@@ -184,7 +204,7 @@ export default function StockAdjustmentModal({
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Warehouse / Outlet *"
@@ -193,16 +213,17 @@ export default function StockAdjustmentModal({
                 required
                 value={warehouseId}
                 onChange={e => setWarehouseId(e.target.value)}
-                SelectProps={{ native: true }}
               >
-                <option value="">-- Select Warehouse --</option>
-                {warehouses.map(w => (
-                  <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
+                <MenuItem value="" disabled>-- Select Warehouse --</MenuItem>
+                {((warehouses && warehouses.length > 0) ? warehouses : internalWarehouses).map(w => (
+                  <MenuItem key={w.id} value={String(w.id)}>
+                    {w.name} ({w.code})
+                  </MenuItem>
                 ))}
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Adjustment Reason *"
@@ -211,18 +232,17 @@ export default function StockAdjustmentModal({
                 required
                 value={reason}
                 onChange={e => setReason(e.target.value)}
-                SelectProps={{ native: true }}
               >
-                <option value="Physical Count Discrepancy">Physical Count Discrepancy</option>
-                <option value="Damaged / Broken">Damaged / Broken in Warehouse</option>
-                <option value="Expired Goods">Expired / Past Shelf Life</option>
-                <option value="Theft / Lost">Theft / Unaccounted Loss</option>
-                <option value="Opening Balance Correction">Opening Balance Correction</option>
-                <option value="Other">Other Adjustment</option>
+                <MenuItem value="Physical Count Discrepancy">Physical Count Discrepancy</MenuItem>
+                <MenuItem value="Damaged / Broken">Damaged / Broken in Warehouse</MenuItem>
+                <MenuItem value="Expired Goods">Expired / Past Shelf Life</MenuItem>
+                <MenuItem value="Theft / Lost">Theft / Unaccounted Loss</MenuItem>
+                <MenuItem value="Opening Balance Correction">Opening Balance Correction</MenuItem>
+                <MenuItem value="Other">Other Adjustment</MenuItem>
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 label="Adjustment Date *"
                 type="date"
@@ -303,18 +323,17 @@ export default function StockAdjustmentModal({
                           size="small"
                           value={row.adjustment_type}
                           onChange={e => handleUpdateItem(idx, 'adjustment_type', e.target.value)}
-                          SelectProps={{ native: true }}
                         >
-                          <option value="add">Add (+)</option>
-                          <option value="reduce">Reduce (-)</option>
-                          <option value="set">Set (=)</option>
+                          <MenuItem value="add">Add (+)</MenuItem>
+                          <MenuItem value="reduce">Reduce (-)</MenuItem>
+                          <MenuItem value="set">Set (=)</MenuItem>
                         </TextField>
                       </TableCell>
                       <TableCell align="right" sx={{ width: 120 }}>
                         <TextField
                           size="small"
                           type="number"
-                          inputProps={{ min: 0, step: row.unit === 'kg' ? '0.001' : '1' }}
+                          slotProps={{ htmlInput: { min: 0, step: row.unit === 'kg' ? '0.001' : '1' } }}
                           value={row.quantity}
                           onChange={e => handleUpdateItem(idx, 'quantity', e.target.value)}
                         />

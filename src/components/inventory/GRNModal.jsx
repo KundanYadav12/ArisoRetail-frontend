@@ -202,7 +202,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
             {/* GRN Header Fields */}
             <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   label="GRN Date"
                   type="date"
@@ -213,7 +213,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                   InputLabelProps={{ shrink: true }}
                 />
               </Grid>
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   label="Supplier Invoice No."
                   value={invoiceNumber}
@@ -223,7 +223,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                   placeholder="Supplier's invoice reference"
                 />
               </Grid>
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   label="Vehicle Number"
                   value={vehicleNumber}
@@ -233,7 +233,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                   placeholder="e.g. MH12AB1234"
                 />
               </Grid>
-              <Grid item xs={12} sm={4}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   label="Driver Name"
                   value={driverName}
@@ -242,7 +242,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                   size="small"
                 />
               </Grid>
-              <Grid item xs={12} sm={8}>
+              <Grid size={{ xs: 12, sm: 8 }}>
                 <TextField
                   label="Notes / Remarks"
                   value={notes}
@@ -388,8 +388,8 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
 
             {/* Summary Bar */}
             <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: '#f8fafc' }}>
-              <Grid container spacing={2} alignItems="center">
-                <Grid item>
+              <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+                <Grid>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                     <CheckCircle size={16} color="#10b981" />
                     <Typography variant="body2" sx={{ fontWeight: 700, color: '#10b981' }}>
@@ -397,17 +397,17 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                     </Typography>
                   </Box>
                 </Grid>
-                <Grid item>
+                <Grid>
                   <Typography variant="body2" sx={{ fontWeight: 700, color: '#f59e0b' }}>
                     Rejected: {totalRejected.toFixed(3)}
                   </Typography>
                 </Grid>
-                <Grid item>
+                <Grid>
                   <Typography variant="body2" sx={{ fontWeight: 700, color: '#ef4444' }}>
                     Damaged: {totalDamaged.toFixed(3)}
                   </Typography>
                 </Grid>
-                <Grid item>
+                <Grid>
                   <Typography variant="body2" color="text.secondary">
                     Estimated Stock Increase: <strong>+{totalAccepted.toFixed(3)}</strong>
                   </Typography>

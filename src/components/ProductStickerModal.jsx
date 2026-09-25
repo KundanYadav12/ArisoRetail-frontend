@@ -24,7 +24,14 @@ import {
   loadSavedStickerConfig,
   saveStickerConfig,
   generateCode128Svg,
-  printStickers
+  printStickers,
+  resolveStickerPrices,
+  formatStickerAddress,
+  getTodayIsoDate,
+  formatIsoToDisplayDate,
+  parseDisplayToIsoDate,
+  resolveItemSize,
+  resolveItemColor
 } from '../utils/stickerGenerator';
 
 export default function ProductStickerModal({
@@ -41,8 +48,14 @@ export default function ProductStickerModal({
     const saved = loadSavedStickerConfig();
     return {
       ...saved,
+      defaultMfgDate: saved.defaultMfgDate || getTodayIsoDate(),
+      showAddress: saved.showAddress !== undefined ? saved.showAddress : true,
+      showSize: saved.showSize !== undefined ? saved.showSize : false,
+      showColor: saved.showColor !== undefined ? saved.showColor : false,
       customShopName: saved.customShopName || shopData.restaurant_name || shopData.name || '',
-      customAddress: saved.customAddress || shopData.address || ''
+      customAddress: saved.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '',
+      customSize: saved.customSize || '',
+      customColor: saved.customColor || ''
     };
   });
 
@@ -116,7 +129,9 @@ export default function ProductStickerModal({
     price: 199,
     mrp: 249,
     sku: 'SKU-10024',
-    barcode: '890123456789'
+    barcode: '890123456789',
+    size: 'L',
+    color: 'Navy Blue'
   };
 
   // Flattened items list taking quantities into account
@@ -156,9 +171,9 @@ export default function ProductStickerModal({
     if (!config.showBarcode) return null;
     const code = (currentPreviewItem.barcode || currentPreviewItem.sku || ('PRD' + (currentPreviewItem.id || '101'))).trim();
     return generateCode128Svg(code, {
-      height: currentSizeDef.defaultBarcodeHeight,
-      width: currentSizeDef.defaultBarcodeWidth,
-      displayValue: true,
+      height: 22,
+      width: currentSizeDef.defaultBarcodeWidth || 1.2,
+      displayValue: false,
       fontSize: 8.5
     });
   }, [currentPreviewItem, currentSizeDef, config.showBarcode]);
@@ -214,18 +229,36 @@ export default function ProductStickerModal({
     }
   };
 
-  // Price calculations for preview
-  const previewPrice = parseFloat(currentPreviewItem.price || currentPreviewItem.selling_price || 0);
-  const previewMrp = currentPreviewItem.mrp
-    ? parseFloat(currentPreviewItem.mrp)
-    : (previewPrice * (parseFloat(config.mrpMultiplier) || 1.25));
+  // Price calculations for preview using the Sale Price fallback to MRP rule
+  const previewPrices = useMemo(() => {
+    return resolveStickerPrices(currentPreviewItem, config);
+  }, [currentPreviewItem, config]);
+  const previewPrice = previewPrices.salePrice;
+  const previewMrp = previewPrices.mrp;
 
-  const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const mfgDateDisplay = config.defaultMfgDate || todayStr;
-  const expDateDisplay = config.defaultExpDate || '';
+  const todayIso = getTodayIsoDate();
+  const mfgDateIso = parseDisplayToIsoDate(config.defaultMfgDate) || todayIso;
+  const expDateIso = parseDisplayToIsoDate(config.defaultExpDate) || '';
+
+  const mfgDateDisplay = formatIsoToDisplayDate(mfgDateIso);
+  const expDateDisplay = formatIsoToDisplayDate(expDateIso);
+
+  const previewSize = useMemo(() => {
+    return resolveItemSize(currentPreviewItem, config);
+  }, [currentPreviewItem, config]);
+
+  const previewColor = useMemo(() => {
+    return resolveItemColor(currentPreviewItem, config);
+  }, [currentPreviewItem, config]);
+
+  const itemRawSize = (currentPreviewItem?.size || currentPreviewItem?.product_size || currentPreviewItem?.variant_size || '').toString().trim();
+  const itemRawColor = (currentPreviewItem?.color || currentPreviewItem?.product_color || currentPreviewItem?.variant_color || '').toString().trim();
 
   const shopNameDisplay = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
-  const addressDisplay = (config.customAddress || shopData.address || '').trim();
+  const addressDisplay = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
+  const formattedAddressLines = useMemo(() => {
+    return formatStickerAddress(addressDisplay, 3);
+  }, [addressDisplay]);
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -334,6 +367,8 @@ export default function ProductStickerModal({
                 {[
                   { key: 'showShopName', label: 'Shop Name' },
                   { key: 'showProductName', label: 'Product Name' },
+                  { key: 'showSize', label: 'Size' },
+                  { key: 'showColor', label: 'Color' },
                   { key: 'showMrp', label: 'MRP (Strikethrough)' },
                   { key: 'showSellingPrice', label: 'Selling Price' },
                   { key: 'showMfgDate', label: 'Mfg Date' },
@@ -391,20 +426,68 @@ export default function ProductStickerModal({
                 <div>
                   <label style={styles.smallLabel}>Mfg Date (Default Today):</label>
                   <input
-                    type="text"
-                    value={config.defaultMfgDate}
+                    type="date"
+                    value={mfgDateIso}
                     onChange={(e) => handleConfigChange('defaultMfgDate', e.target.value)}
-                    placeholder={todayStr}
-                    style={styles.textInput}
+                    onClick={(e) => {
+                      try {
+                        if (typeof e.target.showPicker === 'function') e.target.showPicker();
+                      } catch (err) {}
+                    }}
+                    style={{ ...styles.textInput, cursor: 'pointer' }}
                   />
                 </div>
                 <div>
                   <label style={styles.smallLabel}>Exp Date / Best Before:</label>
                   <input
-                    type="text"
-                    value={config.defaultExpDate}
+                    type="date"
+                    value={expDateIso}
                     onChange={(e) => handleConfigChange('defaultExpDate', e.target.value)}
-                    placeholder="e.g. 19/12/2026"
+                    onClick={(e) => {
+                      try {
+                        if (typeof e.target.showPicker === 'function') e.target.showPicker();
+                      } catch (err) {}
+                    }}
+                    style={{ ...styles.textInput, cursor: 'pointer' }}
+                  />
+                </div>
+              </div>
+
+              {/* Size & Color Fields with Checkboxes */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                <div>
+                  <label style={{ ...styles.smallLabel, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!config.showSize}
+                      onChange={(e) => handleConfigChange('showSize', e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span>Size {itemRawSize ? `(${itemRawSize})` : ''}:</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={config.customSize || ''}
+                    onChange={(e) => handleConfigChange('customSize', e.target.value)}
+                    placeholder={itemRawSize || 'e.g. M, L, XL, 42'}
+                    style={styles.textInput}
+                  />
+                </div>
+                <div>
+                  <label style={{ ...styles.smallLabel, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!config.showColor}
+                      onChange={(e) => handleConfigChange('showColor', e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span>Color {itemRawColor ? `(${itemRawColor})` : ''}:</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={config.customColor || ''}
+                    onChange={(e) => handleConfigChange('customColor', e.target.value)}
+                    placeholder={itemRawColor || 'e.g. Blue, Black, Red'}
                     style={styles.textInput}
                   />
                 </div>
@@ -424,6 +507,7 @@ export default function ProductStickerModal({
                   const itKey = it.id || idx;
                   const qty = itemQuantities[itKey] || 1;
                   const isCurrentPreview = previewItemIndex === idx;
+                  const itPrices = resolveStickerPrices(it, config);
                   return (
                     <div
                       key={itKey}
@@ -438,7 +522,9 @@ export default function ProductStickerModal({
                           {it.name}
                         </div>
                         <div style={{ fontSize: '11px', color: '#64748B' }}>
-                          ₹{parseFloat(it.price || 0).toFixed(2)} • SKU: {it.sku || it.barcode || 'N/A'}
+                          ₹{itPrices.salePrice.toFixed(2)} • SKU: {it.sku || it.barcode || 'N/A'}
+                          {resolveItemSize(it, config) ? ` • Size: ${resolveItemSize(it, config)}` : ''}
+                          {resolveItemColor(it, config) ? ` • Color: ${resolveItemColor(it, config)}` : ''}
                         </div>
                       </div>
                       <div style={styles.qtyControl} onClick={(e) => e.stopPropagation()}>
@@ -546,33 +632,73 @@ export default function ProductStickerModal({
                       {config.showShopName && shopNameDisplay && (
                         <div style={styles.previewShopName}>{shopNameDisplay}</div>
                       )}
-                      {config.showAddress && addressDisplay && (
-                        <div style={styles.previewAddress}>{addressDisplay}</div>
+                      {config.showAddress && formattedAddressLines.length > 0 && (
+                        <div style={styles.previewAddressBlock}>
+                          {formattedAddressLines.map((line, idx) => (
+                            <div key={idx} style={styles.previewAddressLine}>{line}</div>
+                          ))}
+                        </div>
                       )}
                       {config.showProductName && (
                         <div style={styles.previewProductName}>{currentPreviewItem.name}</div>
                       )}
-                      {(config.showMrp || config.showSellingPrice) && (
+                      {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                        <div style={styles.previewVariantRow}>
+                          {config.showSize && previewSize && (
+                            <span style={styles.previewVariantBadge}>
+                              {/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}
+                            </span>
+                          )}
+                          {config.showSize && previewSize && config.showColor && previewColor && (
+                            <span style={{ opacity: 0.4 }}>•</span>
+                          )}
+                          {config.showColor && previewColor && (
+                            <span style={styles.previewVariantBadge}>
+                              {/^color:\s*/i.test(previewColor) ? previewColor : `Color: ${previewColor}`}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {(config.showMrp || config.showSellingPrice) && (previewPrice > 0 || previewMrp > 0) && (
                         <div style={styles.previewPriceRow}>
-                          {config.showMrp && (
-                            <span style={styles.previewMrp}>MRP: ₹{previewMrp.toFixed(2)}</span>
-                          )}
-                          {config.showSellingPrice && (
-                            <span style={styles.previewPrice}>Our Price: ₹{previewPrice.toFixed(2)}</span>
+                          {config.showMrp && config.showSellingPrice ? (
+                            previewMrp > previewPrice ? (
+                              <>
+                                <span style={styles.previewMrp}>MRP: ₹{previewMrp.toFixed(2)}</span>
+                                <span style={styles.previewPrice}>Our Price: ₹{previewPrice.toFixed(2)}</span>
+                              </>
+                            ) : (
+                              <span style={styles.previewPrice}>
+                                {previewPrices.hasValidMrp && !previewPrices.hasValidSalePrice ? 'MRP: ' : 'Price: '}₹{previewPrice.toFixed(2)}
+                              </span>
+                            )
+                          ) : config.showSellingPrice ? (
+                            <span style={styles.previewPrice}>
+                              {previewPrices.hasValidMrp && !previewPrices.hasValidSalePrice ? 'MRP: ' : 'Our Price: '}₹{previewPrice.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span style={styles.previewPrice}>MRP: ₹{previewMrp.toFixed(2)}</span>
                           )}
                         </div>
                       )}
-                      {(config.showMfgDate || (config.showExpDate && expDateDisplay)) && (
+                      {(config.showMfgDate || config.showExpDate) && (
                         <div style={styles.previewDateRow}>
-                          {config.showMfgDate && <span>Mfg: {mfgDateDisplay}</span>}
-                          {config.showExpDate && expDateDisplay && <span>Exp: {expDateDisplay}</span>}
+                          {config.showMfgDate && <span>Mfg: {mfgDateDisplay || todayStr}</span>}
+                          {config.showExpDate && <span>Exp: {expDateDisplay || 'DD/MM/YYYY'}</span>}
                         </div>
                       )}
-                      {config.showBarcode && previewBarcodeSvg && (
-                        <div
-                          style={styles.previewBarcode}
-                          dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
-                        />
+                      {config.showBarcode && (
+                        <div style={styles.previewBarcodeContainer}>
+                          {previewBarcodeSvg && (
+                            <div
+                              style={styles.previewBarcode}
+                              dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
+                            />
+                          )}
+                          <div style={styles.previewBarcodeText}>
+                            {(currentPreviewItem.barcode || currentPreviewItem.sku || ('PRD' + (currentPreviewItem.id || '101'))).trim()}
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -605,18 +731,55 @@ export default function ProductStickerModal({
                         >
                           <div style={{ ...styles.stickerInnerMockup, padding: '4px' }}>
                             {config.showShopName && <div style={{ fontSize: '8px', fontWeight: '900' }}>{shopNameDisplay}</div>}
-                            {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
-                            {(config.showMrp || config.showSellingPrice) && (
-                              <div style={{ fontSize: '8px', display: 'flex', gap: '4px' }}>
-                                {config.showMrp && <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{previewMrp.toFixed(0)}</span>}
-                                {config.showSellingPrice && <span style={{ fontWeight: '800' }}>₹{previewPrice.toFixed(0)}</span>}
+                            {config.showAddress && formattedAddressLines.length > 0 && (
+                              <div style={{ width: '100%', textAlign: 'center', lineHeight: 1.15, margin: '1px 0' }}>
+                                {formattedAddressLines.map((line, idx) => (
+                                  <div key={idx} style={{ fontSize: '6.5px', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {line}
+                                  </div>
+                                ))}
                               </div>
                             )}
-                            {config.showBarcode && previewBarcodeSvg && (
-                              <div
-                                style={{ maxHeight: '22px', overflow: 'hidden', transform: 'scale(0.85)', transformOrigin: 'top center' }}
-                                dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
-                              />
+                            {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
+                            {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                              <div style={{ fontSize: '7.5px', fontWeight: '700', color: '#1e293b', display: 'flex', gap: '3px', justifyContent: 'center', alignItems: 'center', lineHeight: 1.1, margin: '0.5px 0' }}>
+                                {config.showSize && previewSize && (
+                                  <span>{/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}</span>
+                                )}
+                                {config.showSize && previewSize && config.showColor && previewColor && (
+                                  <span style={{ opacity: 0.4 }}>•</span>
+                                )}
+                                {config.showColor && previewColor && (
+                                  <span>{/^color:\s*/i.test(previewColor) ? previewColor : `Color: ${previewColor}`}</span>
+                                )}
+                              </div>
+                            )}
+                            {(config.showMrp || config.showSellingPrice) && (previewPrice > 0 || previewMrp > 0) && (
+                              <div style={{ fontSize: '8px', display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                {config.showMrp && previewMrp > previewPrice && (
+                                  <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{previewMrp.toFixed(0)}</span>
+                                )}
+                                <span style={{ fontWeight: '800' }}>₹{previewPrice.toFixed(0)}</span>
+                              </div>
+                            )}
+                            {(config.showMfgDate || config.showExpDate) && (
+                              <div style={{ fontSize: '7px', display: 'flex', gap: '4px', justifyContent: 'center', fontWeight: '600', color: '#334155', lineHeight: 1.1, margin: '1px 0' }}>
+                                {config.showMfgDate && <span>Mfg: {mfgDateDisplay || todayStr}</span>}
+                                {config.showExpDate && <span>Exp: {expDateDisplay || 'DD/MM/YYYY'}</span>}
+                              </div>
+                            )}
+                            {config.showBarcode && (
+                              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '1px' }}>
+                                {previewBarcodeSvg && (
+                                  <div
+                                    style={{ maxHeight: '18px', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}
+                                    dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
+                                  />
+                                )}
+                                <div style={{ fontSize: '7px', fontFamily: 'monospace', fontWeight: '800', color: '#000000', letterSpacing: '0.5px', marginTop: '0.5px', textAlign: 'center', lineHeight: 1 }}>
+                                  {(currentPreviewItem.barcode || currentPreviewItem.sku || ('PRD' + (currentPreviewItem.id || '101'))).trim()}
+                                </div>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -633,18 +796,55 @@ export default function ProductStickerModal({
                           >
                             <div style={{ ...styles.stickerInnerMockup, padding: '4px' }}>
                               {config.showShopName && <div style={{ fontSize: '8px', fontWeight: '900' }}>{shopNameDisplay}</div>}
-                              {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
-                              {(config.showMrp || config.showSellingPrice) && (
-                                <div style={{ fontSize: '8px', display: 'flex', gap: '4px' }}>
-                                  {config.showMrp && <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{previewMrp.toFixed(0)}</span>}
-                                  {config.showSellingPrice && <span style={{ fontWeight: '800' }}>₹{previewPrice.toFixed(0)}</span>}
+                              {config.showAddress && formattedAddressLines.length > 0 && (
+                                <div style={{ width: '100%', textAlign: 'center', lineHeight: 1.15, margin: '1px 0' }}>
+                                  {formattedAddressLines.map((line, idx) => (
+                                    <div key={idx} style={{ fontSize: '6.5px', color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {line}
+                                    </div>
+                                  ))}
                                 </div>
                               )}
-                              {config.showBarcode && previewBarcodeSvg && (
-                                <div
-                                  style={{ maxHeight: '22px', overflow: 'hidden', transform: 'scale(0.85)', transformOrigin: 'top center' }}
-                                  dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
-                                />
+                              {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
+                              {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                                <div style={{ fontSize: '7.5px', fontWeight: '700', color: '#1e293b', display: 'flex', gap: '3px', justifyContent: 'center', alignItems: 'center', lineHeight: 1.1, margin: '0.5px 0' }}>
+                                  {config.showSize && previewSize && (
+                                    <span>{/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}</span>
+                                  )}
+                                  {config.showSize && previewSize && config.showColor && previewColor && (
+                                    <span style={{ opacity: 0.4 }}>•</span>
+                                  )}
+                                  {config.showColor && previewColor && (
+                                    <span>{/^color:\s*/i.test(previewColor) ? previewColor : `Color: ${previewColor}`}</span>
+                                  )}
+                                </div>
+                              )}
+                              {(config.showMrp || config.showSellingPrice) && (previewPrice > 0 || previewMrp > 0) && (
+                                <div style={{ fontSize: '8px', display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                  {config.showMrp && previewMrp > previewPrice && (
+                                    <span style={{ textDecoration: 'line-through', opacity: 0.7 }}>₹{previewMrp.toFixed(0)}</span>
+                                  )}
+                                  <span style={{ fontWeight: '800' }}>₹{previewPrice.toFixed(0)}</span>
+                                </div>
+                              )}
+                              {(config.showMfgDate || config.showExpDate) && (
+                                <div style={{ fontSize: '7px', display: 'flex', gap: '4px', justifyContent: 'center', fontWeight: '600', color: '#334155', lineHeight: 1.1, margin: '1px 0' }}>
+                                  {config.showMfgDate && <span>Mfg: {mfgDateDisplay || todayStr}</span>}
+                                  {config.showExpDate && <span>Exp: {expDateDisplay || 'DD/MM/YYYY'}</span>}
+                                </div>
+                              )}
+                              {config.showBarcode && (
+                                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '1px' }}>
+                                  {previewBarcodeSvg && (
+                                    <div
+                                      style={{ maxHeight: '18px', overflow: 'hidden', display: 'flex', justifyContent: 'center' }}
+                                      dangerouslySetInnerHTML={{ __html: previewBarcodeSvg }}
+                                    />
+                                  )}
+                                  <div style={{ fontSize: '7px', fontFamily: 'monospace', fontWeight: '800', color: '#000000', letterSpacing: '0.5px', marginTop: '0.5px', textAlign: 'center', lineHeight: 1 }}>
+                                    {(currentPreviewItem.barcode || currentPreviewItem.sku || ('PRD' + (currentPreviewItem.id || '101'))).trim()}
+                                  </div>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -691,7 +891,7 @@ export default function ProductStickerModal({
             <button
               type="button"
               style={styles.btnGhost}
-              onClick={() => setConfig({ ...DEFAULT_STICKER_CONFIG })}
+              onClick={() => setConfig({ ...DEFAULT_STICKER_CONFIG, defaultMfgDate: getTodayIsoDate() })}
             >
               Reset
             </button>
@@ -1042,7 +1242,7 @@ const styles = {
   stickerInnerMockup: {
     width: '100%',
     height: '100%',
-    padding: '8px',
+    padding: '6px 8px 4px 8px',
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'space-between',
@@ -1066,6 +1266,21 @@ const styles = {
     fontSize: '8px',
     color: '#475569',
     lineHeight: 1.1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    maxWidth: '100%'
+  },
+  previewAddressBlock: {
+    width: '100%',
+    textAlign: 'center',
+    lineHeight: 1.15,
+    margin: '1px 0'
+  },
+  previewAddressLine: {
+    fontSize: '7.5px',
+    color: '#475569',
+    lineHeight: 1.15,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -1099,6 +1314,21 @@ const styles = {
     fontWeight: '900',
     color: '#000000'
   },
+  previewVariantRow: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '8.5px',
+    fontWeight: '700',
+    color: '#1E293B',
+    lineHeight: 1.1,
+    margin: '1px 0'
+  },
+  previewVariantBadge: {
+    display: 'inline-block',
+    whiteSpace: 'nowrap'
+  },
   previewDateRow: {
     display: 'flex',
     justifyContent: 'center',
@@ -1107,11 +1337,29 @@ const styles = {
     fontWeight: '600',
     color: '#334155'
   },
+  previewBarcodeContainer: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: '1px'
+  },
   previewBarcode: {
     width: '100%',
     display: 'flex',
     justifyContent: 'center',
     overflow: 'hidden'
+  },
+  previewBarcodeText: {
+    fontSize: '9px',
+    fontWeight: '800',
+    fontFamily: 'monospace',
+    color: '#000000',
+    letterSpacing: '0.8px',
+    marginTop: '1px',
+    textAlign: 'center',
+    lineHeight: 1.1
   },
   scannerInfoChip: {
     marginTop: '12px',

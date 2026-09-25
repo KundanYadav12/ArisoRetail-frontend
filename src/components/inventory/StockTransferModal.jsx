@@ -240,8 +240,8 @@ export default function StockTransferModal({
       <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
         {/* Source & Destination Selection */}
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} sm={3}>
+          <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+            <Grid size={{ xs: 12, sm: 3 }}>
               <TextField
                 label="Transfer Date"
                 type="date"
@@ -254,7 +254,7 @@ export default function StockTransferModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Source Warehouse (From)"
@@ -273,11 +273,11 @@ export default function StockTransferModal({
               </TextField>
             </Grid>
 
-            <Grid item xs={12} sm={1} sx={{ display: 'flex', justifyContent: 'center' }}>
+            <Grid size={{ xs: 12, sm: 1 }} sx={{ display: 'flex', justifyContent: 'center' }}>
               <ArrowRight size={20} color="#64748b" />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 select
                 label="Destination Warehouse (To)"
@@ -433,7 +433,7 @@ export default function StockTransferModal({
 
         {/* Transfer Notes / Transporter Info */}
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={8}>
+          <Grid size={{ xs: 12, sm: 8 }}>
             <TextField
               label="Transfer Notes / Transporter Details / Vehicle No."
               size="small"
@@ -445,7 +445,7 @@ export default function StockTransferModal({
               placeholder="e.g. Dispatched via Express Logistics Van MH-04-AB-1234, Driver Contact: 9876543210"
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
+          <Grid size={{ xs: 12, sm: 4 }}>
             <Paper elevation={0} sx={{ p: 1.5, bgcolor: '#f1f5f9', borderRadius: 2, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
               <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 600 }}>TRANSFER SUMMARY</Typography>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>

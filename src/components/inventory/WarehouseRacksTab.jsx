@@ -19,7 +19,7 @@ export default function WarehouseRacksTab({
   warehouses = [],
   defaultWarehouseId = null
 }) {
-  const notify = useNotify();
+  const { notify } = useNotify();
 
   const [racks, setRacks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -50,7 +50,10 @@ export default function WarehouseRacksTab({
         ? `/api/inventory/racks?warehouse_id=${selectedWarehouseId}`
         : '/api/inventory/racks';
       const res = await apiFetch(url);
-      if (Array.isArray(res)) setRacks(res);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setRacks(data);
+      }
     } catch (err) {
       console.error('Fetch racks error:', err);
     } finally {
@@ -68,11 +71,14 @@ export default function WarehouseRacksTab({
     }
     try {
       const res = await apiFetch(`/api/inventory/racks/${id}`, { method: 'DELETE' });
-      if (res.error) throw new Error(res.error);
-      notify?.('Rack deleted successfully', 'success');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to delete rack');
+      }
+      notify.success('Rack deleted successfully');
       fetchRacks();
     } catch (err) {
-      notify?.(err.message || 'Failed to delete rack', 'error');
+      notify.error(err.message || 'Failed to delete rack');
     }
   };
 
@@ -81,7 +87,10 @@ export default function WarehouseRacksTab({
     try {
       setLoadingInspect(true);
       const res = await apiFetch(`/api/inventory/racks/${rack.id}/products`);
-      if (Array.isArray(res)) setInspectProducts(res);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) setInspectProducts(data);
+      }
     } catch (err) {
       console.error('Inspect rack error:', err);
     } finally {
@@ -97,7 +106,10 @@ export default function WarehouseRacksTab({
         ? `/api/inventory/stock-tally?warehouse_id=${selectedWarehouseId}`
         : '/api/inventory/stock-tally';
       const res = await apiFetch(url);
-      setTallyData(res);
+      if (res.ok) {
+        const data = await res.json();
+        setTallyData(data);
+      }
     } catch (err) {
       console.error('Tally error:', err);
     } finally {
@@ -164,8 +176,8 @@ export default function WarehouseRacksTab({
 
       {/* Filters Bar */}
       <Paper elevation={1} sx={{ p: 2, mb: 3, borderRadius: 2 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} sm={6} md={5}>
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+          <Grid size={{ xs: 12, sm: 6, md: 5 }}>
             <TextField
               fullWidth
               size="small"
@@ -181,13 +193,14 @@ export default function WarehouseRacksTab({
               }}
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={4}>
+          <Grid size={{ xs: 12, sm: 6, md: 4 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Filter by Warehouse</InputLabel>
               <Select
                 value={selectedWarehouseId}
                 label="Filter by Warehouse"
                 onChange={(e) => setSelectedWarehouseId(e.target.value)}
+                MenuProps={{ PaperProps: { sx: { maxHeight: 280 } } }}
               >
                 <MenuItem value="all">All Warehouses</MenuItem>
                 {warehouses.map(w => (
@@ -196,7 +209,7 @@ export default function WarehouseRacksTab({
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={12} md={3}>
+          <Grid size={{ xs: 12, sm: 12, md: 3 }}>
             <Button
               fullWidth
               variant="outlined"

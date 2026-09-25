@@ -7,7 +7,7 @@ export default function KeyboardHelpModal({ isOpen, onClose }) {
   const shortcutList = [
     { key: 'F2 / Ctrl+F', label: 'Focus Product Search' },
     { key: 'F3', label: 'Focus Shopping Cart' },
-    { key: 'F4', label: 'Customer Search & Selection' },
+    { key: 'F4', label: 'Held Receipts / Parked Sales' },
     { key: 'F5', label: 'Manual Weight Input Modal' },
     { key: 'F6', label: 'Read Weight from Bluetooth Scale' },
     { key: 'F7', label: 'Apply Discount' },

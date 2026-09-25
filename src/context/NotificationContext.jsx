@@ -61,6 +61,10 @@ export function NotificationProvider({ children }) {
     });
   };
 
+  // Attach properties to notify so both `const { notify } = useNotify()` and `const notify = useNotify()` work
+  notify.notify = notify;
+  notify.confirmDialog = confirmDialog;
+
   // Handle ESC key for confirm dialog
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -73,7 +77,7 @@ export function NotificationProvider({ children }) {
   }, [confirmState]);
 
   return (
-    <NotificationContext.Provider value={{ notify, confirmDialog }}>
+    <NotificationContext.Provider value={notify}>
       {children}
 
       {/* PORTAL FOR TOAST NOTIFICATIONS */}

@@ -289,8 +289,8 @@ export default function StockCountingSuite({
         <Box>
           {/* Filters Bar */}
           <Paper elevation={1} sx={{ p: 2, mb: 3, borderRadius: 2 }}>
-            <Grid container spacing={2} alignItems="center">
-              <Grid item xs={12} sm={4}>
+            <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+              <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -306,7 +306,7 @@ export default function StockCountingSuite({
                   }}
                 />
               </Grid>
-              <Grid item xs={12} sm={3}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Warehouse</InputLabel>
                   <Select
@@ -321,7 +321,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} sm={3}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Status</InputLabel>
                   <Select
@@ -337,7 +337,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} sm={2}>
+              <Grid size={{ xs: 12, sm: 2 }}>
                 <Button
                   fullWidth
                   variant="outlined"
@@ -523,7 +523,7 @@ export default function StockCountingSuite({
           ) : (
             <Grid container spacing={2}>
               {devices.map(d => (
-                <Grid item xs={12} sm={6} md={4} key={d.id}>
+                <Grid size={{ xs: 12, sm: 6, md: 4 }} key={d.id}>
                   <Card elevation={2} sx={{ borderRadius: 2 }}>
                     <CardContent>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1.5 }}>
@@ -745,7 +745,7 @@ export default function StockCountingSuite({
         <form onSubmit={handleSaveDevice}>
           <DialogContent dividers>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -756,7 +756,7 @@ export default function StockCountingSuite({
                   helperText="Unique terminal code (e.g. HHT-01)"
                 />
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -767,7 +767,7 @@ export default function StockCountingSuite({
                   onChange={(e) => setDeviceFormData(prev => ({ ...prev, device_name: e.target.value }))}
                 />
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small" required>
                   <InputLabel>Warehouse</InputLabel>
                   <Select
@@ -781,7 +781,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -807,7 +807,7 @@ export default function StockCountingSuite({
         <form onSubmit={handleAssignSubmit}>
           <DialogContent dividers>
             <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <FormControl fullWidth size="small" required>
                   <InputLabel>Device Terminal</InputLabel>
                   <Select
@@ -827,7 +827,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} sm={6}>
+              <Grid size={{ xs: 12, sm: 6 }}>
                 <FormControl fullWidth size="small" required>
                   <InputLabel>Warehouse</InputLabel>
                   <Select
@@ -841,7 +841,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Target Rack (Optional)</InputLabel>
                   <Select
@@ -858,7 +858,7 @@ export default function StockCountingSuite({
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12}>
+              <Grid size={{ xs: 12 }}>
                 <Autocomplete
                   multiple
                   options={menuItems}

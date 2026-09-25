@@ -17,7 +17,7 @@ export default function RackTransferModal({
   initialSourceRackId = null,
   initialProductId = null
 }) {
-  const notify = useNotify();
+  const { notify } = useNotify();
   const [loading, setLoading] = useState(false);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [error, setError] = useState(null);
@@ -51,12 +51,15 @@ export default function RackTransferModal({
     const fetchRacks = async () => {
       try {
         const res = await apiFetch(`/api/inventory/racks?warehouse_id=${warehouseId}`);
-        if (Array.isArray(res)) {
-          setRacks(res);
-          if (initialSourceRackId && res.some(r => String(r.id) === String(initialSourceRackId))) {
-            setSourceRackId(String(initialSourceRackId));
-          } else if (res.length > 0) {
-            setSourceRackId(String(res[0].id));
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setRacks(data);
+            if (initialSourceRackId && data.some(r => String(r.id) === String(initialSourceRackId))) {
+              setSourceRackId(String(initialSourceRackId));
+            } else if (data.length > 0) {
+              setSourceRackId(String(data[0].id));
+            }
           }
         }
       } catch (err) {
@@ -77,14 +80,17 @@ export default function RackTransferModal({
       try {
         setLoadingProducts(true);
         const res = await apiFetch(`/api/inventory/racks/${sourceRackId}/products`);
-        if (Array.isArray(res)) {
-          setRackProducts(res);
-          if (initialProductId && res.some(p => String(p.menu_item_id) === String(initialProductId))) {
-            setMenuItemId(String(initialProductId));
-          } else if (res.length > 0) {
-            setMenuItemId(String(res[0].menu_item_id));
-          } else {
-            setMenuItemId('');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setRackProducts(data);
+            if (initialProductId && data.some(p => String(p.menu_item_id) === String(initialProductId))) {
+              setMenuItemId(String(initialProductId));
+            } else if (data.length > 0) {
+              setMenuItemId(String(data[0].menu_item_id));
+            } else {
+              setMenuItemId('');
+            }
           }
         }
       } catch (err) {
@@ -138,6 +144,7 @@ export default function RackTransferModal({
       setLoading(true);
       const res = await apiFetch('/api/inventory/racks/transfer', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           warehouse_id: parseInt(warehouseId, 10),
           source_rack_id: parseInt(sourceRackId, 10),
@@ -148,9 +155,12 @@ export default function RackTransferModal({
         })
       });
 
-      if (res.error) throw new Error(res.error);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Transfer failed.');
+      }
 
-      notify?.(`Moved ${qty} unit(s) successfully! Total warehouse stock unchanged.`, 'success');
+      notify.success(`Moved ${qty} unit(s) successfully! Total warehouse stock unchanged.`);
       onSuccess?.();
       onClose();
     } catch (err) {
@@ -190,13 +200,14 @@ export default function RackTransferModal({
           )}
 
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <FormControl fullWidth size="small" required>
                 <InputLabel>Warehouse</InputLabel>
                 <Select
                   value={warehouseId}
                   label="Warehouse"
                   onChange={(e) => setWarehouseId(e.target.value)}
+                  MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
                 >
                   {warehouses.map(w => (
                     <MenuItem key={w.id} value={String(w.id)}>
@@ -207,13 +218,14 @@ export default function RackTransferModal({
               </FormControl>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <FormControl fullWidth size="small" required>
                 <InputLabel>Source Rack</InputLabel>
                 <Select
                   value={sourceRackId}
                   label="Source Rack"
                   onChange={(e) => setSourceRackId(e.target.value)}
+                  MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
                 >
                   {racks.map(r => (
                     <MenuItem key={r.id} value={String(r.id)}>
@@ -224,13 +236,14 @@ export default function RackTransferModal({
               </FormControl>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <FormControl fullWidth size="small" required>
                 <InputLabel>Destination Rack</InputLabel>
                 <Select
                   value={destinationRackId}
                   label="Destination Rack"
                   onChange={(e) => setDestinationRackId(e.target.value)}
+                  MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
                 >
                   {racks
                     .filter(r => String(r.id) !== String(sourceRackId))
@@ -243,7 +256,7 @@ export default function RackTransferModal({
               </FormControl>
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               {loadingProducts ? (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
                   <CircularProgress size={16} />
@@ -262,6 +275,7 @@ export default function RackTransferModal({
                     value={menuItemId}
                     label="Product to Move"
                     onChange={(e) => setMenuItemId(e.target.value)}
+                    MenuProps={{ PaperProps: { sx: { maxHeight: 260 } } }}
                   >
                     {rackProducts.map(p => (
                       <MenuItem key={p.menu_item_id} value={String(p.menu_item_id)}>
@@ -273,13 +287,13 @@ export default function RackTransferModal({
               )}
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 fullWidth
                 size="small"
                 required
                 type="number"
-                inputProps={{ min: '0.001', step: 'any', max: maxAvailableStock }}
+                slotProps={{ htmlInput: { min: '0.001', step: 'any', max: maxAvailableStock } }}
                 label="Transfer Quantity"
                 value={quantity}
                 onChange={(e) => setQuantity(e.target.value)}
@@ -287,7 +301,7 @@ export default function RackTransferModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <Box sx={{ p: 1.5, bgcolor: 'background.default', borderRadius: 1.5, border: '1px solid', borderColor: 'divider' }}>
                 <Typography variant="caption" color="text.secondary" display="block">
                   Audit Verification:
@@ -298,7 +312,7 @@ export default function RackTransferModal({
               </Box>
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 fullWidth
                 size="small"

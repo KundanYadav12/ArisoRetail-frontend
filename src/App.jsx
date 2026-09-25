@@ -54,6 +54,7 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.role === 'super_admin' || parsed.role === 'superadmin') return 'superadmin';
+        if (parsed.role === 'warehouse_manager') return 'warehouse';
       }
     } catch (e) {}
     return 'pos';
@@ -91,6 +92,23 @@ export default function App() {
     };
   }, [token]);
 
+  const handleLogout = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {
+      console.warn('Logout warning:', e);
+    } finally {
+      localStorage.removeItem('ARISO_RETAIL_TOKEN');
+      localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
+      localStorage.removeItem('ARISO_RETAIL_USER');
+      localStorage.removeItem('pos_token');
+      localStorage.removeItem('pos_refresh_token');
+      localStorage.removeItem('pos_user');
+      setUser(null);
+      setToken('');
+    }
+  };
+
   useEffect(() => {
     const syncSessionAndCatalog = async () => {
       const savedToken = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
@@ -103,6 +121,8 @@ export default function App() {
         const parsedUser = JSON.parse(savedUser);
         if (parsedUser.role === 'super_admin' || parsedUser.role === 'superadmin') {
           setCurrentView('superadmin');
+        } else if (parsedUser.role === 'warehouse_manager') {
+          setCurrentView(prev => prev === 'pos' ? 'warehouse' : prev);
         }
 
         // Validate session with backend server in background if online
@@ -117,6 +137,9 @@ export default function App() {
             }
             // Background preload / sync catalog
             SyncService.downloadLatestCatalog(savedToken).catch(() => {});
+          } else if (res && (res.status === 401 || res.status === 403)) {
+            console.warn('[Session Sync] Server returned status', res.status, '- session is expired or invalid. Resetting to login.');
+            handleLogout();
           } else {
             console.warn('[Session Sync] Server status:', res?.status, '- maintaining persistent session.');
           }
@@ -134,8 +157,10 @@ export default function App() {
       const reason = e?.detail?.reason;
       if (reason === 'LOGGED_IN_ELSEWHERE') {
         alert('You have been logged out because your account was logged in from another device.');
-        handleLogout();
+      } else if (reason === 'USER_INACTIVE') {
+        alert('Your account is currently inactive. Please contact the administrator.');
       }
+      handleLogout();
     };
 
     const handleTokenRefreshed = (e) => {
@@ -242,22 +267,6 @@ export default function App() {
     setThemeMode(prev => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  const handleLogout = async () => {
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-    } catch (e) {
-      console.warn('Logout warning:', e);
-    } finally {
-      localStorage.removeItem('ARISO_RETAIL_TOKEN');
-      localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
-      localStorage.removeItem('ARISO_RETAIL_USER');
-      localStorage.removeItem('pos_token');
-      localStorage.removeItem('pos_refresh_token');
-      localStorage.removeItem('pos_user');
-      setUser(null);
-      setToken('');
-    }
-  };
 
   const handleFocusModeChange = (isFocus) => {
     setPosFocusMode(isFocus);
@@ -278,6 +287,8 @@ export default function App() {
   const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'superadmin';
   const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
   const isSalesman = user?.role === 'salesman';
+  const isWarehouseManager = user?.role === 'warehouse_manager';
+  const hasPosPermission = !isWarehouseManager || (Array.isArray(user?.permissions) && (user.permissions.includes('pos_billing') || user.permissions.includes('all')));
 
   return (
     <LanguageProvider>
@@ -341,14 +352,26 @@ export default function App() {
                 {/* Desktop inline tabs */}
                 {!isMobile && (
                   <Box sx={{ display: 'flex', gap: { xs: 1, xl: 2.5 } }}>
-                    <Button
-                      variant={currentView === 'pos' ? 'contained' : 'text'}
-                      onClick={() => setCurrentView('pos')}
-                      startIcon={<ShoppingCartOutlinedIcon fontSize="small" />}
-                      sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                    >
-                      POS Screen
-                    </Button>
+                    {isWarehouseManager && (
+                      <Button
+                        variant={currentView === 'warehouse' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('warehouse')}
+                        startIcon={<Inventory2OutlinedIcon fontSize="small" />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        Warehouse Suite
+                      </Button>
+                    )}
+                    {(!isWarehouseManager || hasPosPermission) && (
+                      <Button
+                        variant={currentView === 'pos' ? 'contained' : 'text'}
+                        onClick={() => setCurrentView('pos')}
+                        startIcon={<ShoppingCartOutlinedIcon fontSize="small" />}
+                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
+                      >
+                        POS Screen
+                      </Button>
+                    )}
                     {isSalesman && (
                       <Button
                         variant={currentView === 'inventory' ? 'contained' : 'text'}
@@ -359,7 +382,7 @@ export default function App() {
                         Stock Inventory
                       </Button>
                     )}
-                    {!isSalesman && (
+                    {!isSalesman && !isWarehouseManager && (
                       <Button
                         variant={currentView === 'cashier' ? 'contained' : 'text'}
                         onClick={() => setCurrentView('cashier')}
@@ -442,13 +465,24 @@ export default function App() {
                       }
                     }}
                   >
-                    <MenuItem
-                      onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
-                      selected={currentView === 'pos'}
-                      sx={{ fontWeight: currentView === 'pos' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                    >
-                      <ShoppingCartOutlinedIcon fontSize="small" /> POS Screen
-                    </MenuItem>
+                    {isWarehouseManager && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('warehouse'); setAnchorElNav(null); }}
+                        selected={currentView === 'warehouse'}
+                        sx={{ fontWeight: currentView === 'warehouse' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <Inventory2OutlinedIcon fontSize="small" /> Warehouse Suite
+                      </MenuItem>
+                    )}
+                    {(!isWarehouseManager || hasPosPermission) && (
+                      <MenuItem
+                        onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
+                        selected={currentView === 'pos'}
+                        sx={{ fontWeight: currentView === 'pos' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
+                      >
+                        <ShoppingCartOutlinedIcon fontSize="small" /> POS Screen
+                      </MenuItem>
+                    )}
                     {isSalesman && (
                       <MenuItem
                         onClick={() => { setCurrentView('inventory'); setAnchorElNav(null); }}
@@ -458,7 +492,7 @@ export default function App() {
                         <Inventory2OutlinedIcon fontSize="small" /> Stock Inventory
                       </MenuItem>
                     )}
-                    {(user?.feature_superbill || isSuperAdmin) && !isSalesman && (
+                    {(user?.feature_superbill || isSuperAdmin) && !isSalesman && !isWarehouseManager && (
                       <>
                         <MenuItem
                           onClick={() => { setCurrentView('superbill_billing'); setAnchorElNav(null); }}
@@ -476,7 +510,7 @@ export default function App() {
                         </MenuItem>
                       </>
                     )}
-                    {!isSalesman && (
+                    {!isSalesman && !isWarehouseManager && (
                       <MenuItem
                         onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
                         selected={currentView === 'cashier'}
@@ -578,8 +612,13 @@ export default function App() {
                   <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'right' }}>
                     <Typography variant="body2" sx={{ fontWeight: 700, fontSize: { xs: '0.875rem', xl: '1.2rem' } }}>{user?.name || 'User'}</Typography>
                     <Typography variant="caption" color="primary" sx={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: { xs: '0.75rem', xl: '1rem' } }}>
-                      {user?.role || 'Staff'}
+                      {user?.role === 'warehouse_manager' ? 'Warehouse Manager' : (user?.role || 'Staff')}
                     </Typography>
+                    {user?.assigned_warehouse_name && (
+                      <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.7rem', fontWeight: 600 }}>
+                        🏬 {user.assigned_warehouse_name}
+                      </Typography>
+                    )}
                   </Box>
 
 
@@ -654,7 +693,12 @@ export default function App() {
                 <AdminPanel user={user} token={token} initialTab={5} isSalesmanView={true} />
               </Box>
             )}
-            {currentView === 'admin' && (
+            {(currentView === 'warehouse' || (isWarehouseManager && currentView === 'admin')) && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <AdminPanel user={user} token={token} initialTab={5} isWarehouseManagerView={true} />
+              </Box>
+            )}
+            {currentView === 'admin' && !isWarehouseManager && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <AdminPanel user={user} token={token} />
               </Box>

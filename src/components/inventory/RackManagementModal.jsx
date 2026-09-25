@@ -16,7 +16,7 @@ export default function RackManagementModal({
   warehouses = [],
   defaultWarehouseId = ''
 }) {
-  const notify = useNotify();
+  const { notify } = useNotify();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -86,12 +86,16 @@ export default function RackManagementModal({
 
       const res = await apiFetch(url, {
         method,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
       });
 
-      if (res.error) throw new Error(res.error);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to save rack.');
+      }
 
-      notify?.(rack ? 'Rack updated successfully' : 'Rack created successfully', 'success');
+      notify.success(rack ? 'Rack updated successfully' : 'Rack created successfully');
       onSuccess?.();
       onClose();
     } catch (err) {
@@ -131,7 +135,7 @@ export default function RackManagementModal({
           )}
 
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <FormControl fullWidth size="small" required>
                 <InputLabel>Warehouse</InputLabel>
                 <Select
@@ -149,7 +153,7 @@ export default function RackManagementModal({
               </FormControl>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -162,7 +166,7 @@ export default function RackManagementModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -174,7 +178,7 @@ export default function RackManagementModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -185,7 +189,7 @@ export default function RackManagementModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -196,7 +200,7 @@ export default function RackManagementModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={4}>
+            <Grid size={{ xs: 12, sm: 4 }}>
               <TextField
                 fullWidth
                 size="small"
@@ -207,7 +211,7 @@ export default function RackManagementModal({
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <FormControl fullWidth size="small">
                 <InputLabel>Status</InputLabel>
                 <Select
@@ -221,7 +225,7 @@ export default function RackManagementModal({
               </FormControl>
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <TextField
                 fullWidth
                 size="small"

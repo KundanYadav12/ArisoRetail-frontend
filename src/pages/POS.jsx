@@ -33,9 +33,11 @@ import {
   Trash2,
   Edit3,
   ArrowRight,
-  Tag
+  Tag,
+  PauseCircle
 } from 'lucide-react';
 import ProductStickerModal from '../components/ProductStickerModal';
+import HeldReceiptsModal from '../components/HeldReceiptsModal';
 import { useLanguage } from '../locales/LanguageContext';
 import {
   apiFetch,
@@ -48,7 +50,13 @@ import {
   fetchCustomers,
   fetchPendingOrders,
   confirmPendingOrder,
-  cancelPendingOrder
+  cancelPendingOrder,
+  fetchHeldReceipts,
+  createHeldReceipt,
+  updateHeldReceipt,
+  resumeHeldReceipt,
+  completeHeldReceipt,
+  cancelHeldReceipt
 } from '../utils/api';
 import { db } from '../utils/offlineDb';
 import { SyncService } from '../utils/syncService';
@@ -205,6 +213,13 @@ export default function POS({
   const [confirmingOrderId, setConfirmingOrderId] = useState(null);
   const [cancellingOrderId, setCancellingOrderId] = useState(null);
 
+  // Held Receipts / Parked Sales
+  const [heldReceipts, setHeldReceipts] = useState([]);
+  const [heldReceiptsModalOpen, setHeldReceiptsModalOpen] = useState(false);
+  const [loadingHeldReceipts, setLoadingHeldReceipts] = useState(false);
+  const [activeHoldId, setActiveHoldId] = useState(null);
+  const [holdingReceipt, setHoldingReceipt] = useState(false);
+
   // Modals & Overlay Visibility
   const [weightModalVisible, setWeightModalVisible] = useState(false);
   const [selectedWeightProduct, setSelectedWeightProduct] = useState(null);
@@ -292,6 +307,10 @@ export default function POS({
   const setPaymentMode = sharedSetPaymentMode !== undefined ? sharedSetPaymentMode : localSetPaymentMode;
 
   const [cashReceived, setCashReceived] = useState('');
+  const [selectedCustomerData, setSelectedCustomerData] = useState(null);
+  const [creditPartialPaidAmount, setCreditPartialPaidAmount] = useState('');
+  const [creditPartialPaidMode, setCreditPartialPaidMode] = useState('cash');
+  const [creditDueDate, setCreditDueDate] = useState('');
   const [printersList, setPrintersList] = useState([]);
   const [printStatusToast, setPrintStatusToast] = useState(null);
 
@@ -453,6 +472,7 @@ export default function POS({
     loadData();
     loadCustomers();
     loadPendingOrders();
+    loadHeldReceipts();
     autoFocusSearch();
 
     const handleWindowFocus = () => {
@@ -663,6 +683,7 @@ export default function POS({
 
   const handleSelectCustomer = (c) => {
     setSelectedCustomerId(c.id);
+    setSelectedCustomerData(c);
     setCustomerName(c.name || '');
     setCustomerPhone(c.phone || '');
     setCustomerAddress(c.address || '');
@@ -670,6 +691,14 @@ export default function POS({
     setCustomerGst(c.gst_number || '');
     setCustomerSearchQuery(`${c.store_name ? c.store_name + ' - ' : ''}${c.name} (${c.phone || 'No phone'})`);
     setCustomerDropdownOpen(false);
+
+    if (c.credit_days > 0) {
+      const d = new Date();
+      d.setDate(d.getDate() + parseInt(c.credit_days));
+      setCreditDueDate(d.toISOString().slice(0, 10));
+    } else {
+      setCreditDueDate('');
+    }
 
     // Auto-resolve tax type (Intra vs Inter state) based on GSTIN or State
     if (c.gst_number || c.state_code || c.state) {
@@ -685,6 +714,9 @@ export default function POS({
 
   const handleClearCustomer = () => {
     setSelectedCustomerId(null);
+    setSelectedCustomerData(null);
+    setCreditPartialPaidAmount('');
+    setCreditDueDate('');
     setCustomerName('');
     setCustomerPhone('');
     setCustomerAddress('');
@@ -705,6 +737,21 @@ export default function POS({
       console.warn('[POS] Could not load pending orders:', e.message);
     } finally {
       setLoadingPendingOrders(false);
+    }
+  }, []);
+
+  // Held Receipts / Parked Sales Loader
+  const loadHeldReceipts = useCallback(async () => {
+    setLoadingHeldReceipts(true);
+    try {
+      const data = await fetchHeldReceipts({ status: 'held' });
+      if (Array.isArray(data)) {
+        setHeldReceipts(data);
+      }
+    } catch (e) {
+      console.warn('[POS] Could not load held receipts:', e.message);
+    } finally {
+      setLoadingHeldReceipts(false);
     }
   }, []);
 
@@ -755,6 +802,7 @@ export default function POS({
     setSelectedCartIndex(0);
     setDiscountValue('0');
     handleClearCustomer();
+    setActiveHoldId(null);
     setCashReceived('');
     setCheckoutVisible(false);
     setWeightModalVisible(false);
@@ -1319,6 +1367,14 @@ export default function POS({
     }
 
     const effectivePaymentMode = overridePaymentMode || paymentMode || 'cash';
+
+    if (effectivePaymentMode === 'credit' || effectivePaymentMode === 'due' || effectivePaymentMode === 'udhar') {
+      if (!selectedCustomerId) {
+        alert('Please select a customer for Credit/Udhar sale.');
+        return;
+      }
+    }
+
     let effectiveCashReceived = numericCashReceived;
     if (effectivePaymentMode === 'cash' && targetStatus !== 'pending' && (effectiveCashReceived <= 0 || effectiveCashReceived < grandTotal)) {
       effectiveCashReceived = grandTotal;
@@ -1328,6 +1384,25 @@ export default function POS({
     setSubmittingSale(true);
 
     const isPendingOrder = targetStatus === 'pending';
+    const isCreditSale = (effectivePaymentMode === 'credit' || effectivePaymentMode === 'due' || effectivePaymentMode === 'udhar');
+    const immediatePaid = isCreditSale
+      ? Math.max(0, Math.min(grandTotal, parseFloat(creditPartialPaidAmount || 0)))
+      : (effectivePaymentMode === 'cash' ? effectiveCashReceived : grandTotal);
+    const remainingCredit = Math.max(0, grandTotal - immediatePaid);
+
+    let paymentDetails = null;
+    if (isCreditSale) {
+      if (immediatePaid > 0) {
+        paymentDetails = [
+          { mode: creditPartialPaidMode || 'cash', amount: immediatePaid },
+          { mode: 'credit', amount: remainingCredit }
+        ];
+      } else {
+        paymentDetails = [
+          { mode: 'credit', amount: grandTotal }
+        ];
+      }
+    }
 
     const orderPayload = {
       items: cartWithTax.map((i) => ({
@@ -1363,6 +1438,9 @@ export default function POS({
       tax_invoice_type: docTax.taxInvoiceType,
       total_amount: docTax.grandTotal.toFixed(2),
       payment_mode: effectivePaymentMode,
+      payment_details: paymentDetails,
+      paid_amount: isCreditSale ? immediatePaid : grandTotal,
+      due_date: isCreditSale ? (creditDueDate || null) : null,
       status: targetStatus,
       cashier_name: user?.name || 'Desktop Cashier',
       customer_id: selectedCustomerId || null,
@@ -1425,9 +1503,20 @@ export default function POS({
       }
 
       // Step 3: Clear Cart, Reset Customer & UI for next sale
+      if (activeHoldId) {
+        try {
+          await completeHeldReceipt(activeHoldId, orderRes?.id || null, invoiceNo);
+          setActiveHoldId(null);
+          loadHeldReceipts();
+        } catch (completeErr) {
+          console.warn('[completeHeldReceipt error]', completeErr);
+        }
+      }
       setCart([]);
       setDiscountValue('0');
       handleClearCustomer();
+      setCreditPartialPaidAmount('');
+      setCreditDueDate('');
       loadCustomers();
       setCheckoutVisible(false);
       setCashReceived('');
@@ -1438,6 +1527,162 @@ export default function POS({
     } finally {
       setSubmittingSale(false);
       autoFocusSearch();
+    }
+  };
+
+  // Hold / Park Active Receipt Handler
+  const handleHoldReceipt = async (explicitNotes = null) => {
+    if (cart.length === 0) {
+      alert('Cart is empty! Add products before holding a receipt.');
+      return;
+    }
+    if (holdingReceipt) return;
+
+    setHoldingReceipt(true);
+    try {
+      const holdPayload = {
+        customer_id: selectedCustomerId || null,
+        customer_name: customerName || storeName || 'Walk-in Customer',
+        customer_phone: customerPhone || '',
+        customer_address: customerAddress || '',
+        customer_gst: customerGst || '',
+        item_count: cart.reduce((sum, item) => sum + (parseFloat(item.quantity) || 1), 0),
+        subtotal: docTax.subtotal || 0,
+        discount_type: discountType || 'percentage',
+        discount_value: discountValue || '0',
+        discount_amount: docTax.discountAmount || 0,
+        tax_type: docTax.taxType || taxType,
+        tax_amount: docTax.totalTax || 0,
+        total_amount: docTax.grandTotal || 0,
+        cart_data: cart,
+        notes: explicitNotes !== null ? explicitNotes : '',
+        cashier_name: user?.name || 'Cashier'
+      };
+
+      let result;
+      if (activeHoldId) {
+        result = await updateHeldReceipt(activeHoldId, holdPayload);
+      } else {
+        result = await createHeldReceipt(holdPayload);
+      }
+
+      const holdNumber = result?.hold_number || result?.held_receipt?.hold_number || 'PARKED';
+
+      setPrintStatusToast({
+        type: 'success',
+        message: `Sale parked as #${holdNumber}! Cart cleared for next customer.`
+      });
+      setTimeout(() => setPrintStatusToast(null), 3500);
+
+      handleClearCart();
+      setActiveHoldId(null);
+      await loadHeldReceipts();
+    } catch (err) {
+      console.error('[handleHoldReceipt error]', err);
+      alert('Failed to hold receipt: ' + (err.message || 'Unknown error'));
+    } finally {
+      setHoldingReceipt(false);
+      autoFocusSearch();
+    }
+  };
+
+  // Resume Parked / Held Receipt Handler
+  const handleResumeReceipt = async (heldReceipt, mode = 'normal') => {
+    if (!heldReceipt) return;
+
+    try {
+      // If cashier chose to hold current sale before resuming
+      if (mode === 'hold_current' && cart.length > 0) {
+        const holdCurrentPayload = {
+          customer_id: selectedCustomerId || null,
+          customer_name: customerName || storeName || 'Walk-in Customer',
+          customer_phone: customerPhone || '',
+          customer_address: customerAddress || '',
+          customer_gst: customerGst || '',
+          item_count: cart.reduce((sum, item) => sum + (parseFloat(item.quantity) || 1), 0),
+          subtotal: docTax.subtotal || 0,
+          discount_type: discountType || 'percentage',
+          discount_value: discountValue || '0',
+          discount_amount: docTax.discountAmount || 0,
+          tax_type: docTax.taxType || taxType,
+          tax_amount: docTax.totalTax || 0,
+          total_amount: docTax.grandTotal || 0,
+          cart_data: cart,
+          notes: '',
+          cashier_name: user?.name || 'Cashier'
+        };
+        if (activeHoldId) {
+          await updateHeldReceipt(activeHoldId, holdCurrentPayload);
+        } else {
+          await createHeldReceipt(holdCurrentPayload);
+        }
+      }
+
+      // Restore cart items
+      let restoredCart = [];
+      try {
+        const raw = heldReceipt.cart_data;
+        restoredCart = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []);
+      } catch (parseErr) {
+        console.error('Failed to parse held cart data:', parseErr);
+        restoredCart = [];
+      }
+
+      setCart(restoredCart);
+      setSelectedCartIndex(0);
+
+      // Restore customer information
+      setCustomerName(heldReceipt.customer_name === 'Walk-in Customer' ? '' : (heldReceipt.customer_name || ''));
+      setCustomerPhone(heldReceipt.customer_phone || '');
+      setCustomerAddress(heldReceipt.customer_address || '');
+      setCustomerGst(heldReceipt.customer_gst || '');
+      setSelectedCustomerId(heldReceipt.customer_id || null);
+
+      // Restore pricing & discounts
+      setDiscountType(heldReceipt.discount_type || 'percentage');
+      setDiscountValue(String(heldReceipt.discount_value || '0'));
+      if (heldReceipt.tax_type) {
+        setTaxType(heldReceipt.tax_type);
+      }
+
+      // Track active hold ID
+      setActiveHoldId(heldReceipt.id);
+
+      // Notify backend / offline db
+      await resumeHeldReceipt(heldReceipt.id).catch(e => console.warn('resume notify warn:', e));
+
+      setPrintStatusToast({
+        type: 'success',
+        message: `Resumed Hold #${heldReceipt.hold_number} (${heldReceipt.customer_name || 'Walk-in Customer'})`
+      });
+      setTimeout(() => setPrintStatusToast(null), 3500);
+
+      setHeldReceiptsModalOpen(false);
+      await loadHeldReceipts();
+    } catch (err) {
+      console.error('[handleResumeReceipt error]', err);
+      alert('Failed to resume held receipt: ' + (err.message || 'Unknown error'));
+    } finally {
+      autoFocusSearch();
+    }
+  };
+
+  // Cancel / Discard Parked Receipt Handler
+  const handleCancelReceipt = async (receiptId) => {
+    try {
+      await cancelHeldReceipt(receiptId);
+      if (activeHoldId === receiptId) {
+        setActiveHoldId(null);
+      }
+      setPrintStatusToast({
+        type: 'info',
+        message: 'Held receipt discarded.'
+      });
+      setTimeout(() => setPrintStatusToast(null), 3500);
+      await loadHeldReceipts();
+    } catch (err) {
+      console.error('[handleCancelReceipt error]', err);
+      alert('Failed to cancel held receipt: ' + (err.message || 'Unknown error'));
     }
   };
 
@@ -1454,6 +1699,8 @@ export default function POS({
       tax_amount: parseFloat(orderPayload.tax_amount || 0).toFixed(2),
       total_amount: parseFloat(orderPayload.total_amount || 0).toFixed(2),
       payment_mode: effectivePaymentMode,
+      paid_amount: orderPayload.paid_amount,
+      due_date: orderPayload.due_date,
       cashier_name: orderPayload.cashier_name,
       customer_name: orderPayload.customer_name,
       created_at: new Date().toISOString(),
@@ -1584,6 +1831,7 @@ export default function POS({
                          keyboardHelpVisible ||
                          languageModalVisible ||
                          barcodeScannerOpen ||
+                         heldReceiptsModalOpen ||
                          Boolean(quickEditProduct);
 
   // Keyboard Shortcuts Registration
@@ -1607,6 +1855,15 @@ export default function POS({
       e?.preventDefault();
       if (cart.length > 0) setSelectedCartIndex(0);
     },
+    'F4': (e) => {
+      e?.preventDefault();
+      if (heldReceiptsModalOpen) {
+        setHeldReceiptsModalOpen(false);
+      } else {
+        loadHeldReceipts();
+        setHeldReceiptsModalOpen(true);
+      }
+    },
     'F5': (e) => {
       e?.preventDefault();
       const selected = filteredProducts[selectedProductIndex];
@@ -1627,6 +1884,12 @@ export default function POS({
           pricePerBaseUnit: parseFloat(selected.price || 0),
           calculatedTotal: 1.250 * parseFloat(selected.price || 0)
         });
+      }
+    },
+    'F7': (e) => {
+      e?.preventDefault();
+      if (cart.length > 0 && !holdingReceipt) {
+        handleHoldReceipt();
       }
     },
     'F8': (e) => {
@@ -1688,6 +1951,10 @@ export default function POS({
     },
     'Esc': (e) => {
       e?.preventDefault();
+      if (heldReceiptsModalOpen) {
+        setHeldReceiptsModalOpen(false);
+        return;
+      }
       handleClearCart();
     },
     'Delete': (e) => {
@@ -1716,9 +1983,53 @@ export default function POS({
     },
     '?': (e) => setKeyboardHelpVisible((prev) => !prev),
     'Ctrl+/': (e) => setKeyboardHelpVisible((prev) => !prev),
-  }, [cart, selectedCartIndex, searchQuery, isAnyModalOpen, filteredProducts, selectedProductIndex, grandTotal, paymentMode, cashReceived, submittingSale, checkoutVisible, handleClearCart]);
+  }, [cart, selectedCartIndex, searchQuery, isAnyModalOpen, filteredProducts, selectedProductIndex, grandTotal, paymentMode, cashReceived, submittingSale, checkoutVisible, heldReceiptsModalOpen, handleClearCart]);
 
   const currentLangObj = supportedLanguages.find(l => l.code === language) || supportedLanguages[0];
+
+  const isWarehouseManager = (user?.role || propUser?.role) === 'warehouse_manager';
+  const hasPosPermission = !isWarehouseManager || (
+    Array.isArray(user?.permissions || propUser?.permissions) && (
+      (user?.permissions || propUser?.permissions).includes('pos_billing') ||
+      (user?.permissions || propUser?.permissions).includes('all')
+    )
+  );
+
+  if (isWarehouseManager && !hasPosPermission) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: '60vh', padding: '2rem', textAlign: 'center' }}>
+        <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #F87171', borderRadius: '16px', padding: '2.5rem', maxWidth: '520px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', boxShadow: '0 10px 25px rgba(0,0,0,0.06)' }}>
+          <AlertTriangle size={52} color="#DC2626" />
+          <h2 style={{ margin: 0, color: '#991B1B', fontWeight: 800 }}>Warehouse Manager Terminal Notice</h2>
+          <p style={{ margin: 0, color: '#7F1D1D', fontSize: '14px', lineHeight: '1.6' }}>
+            Your account is assigned to <b>Warehouse & Godown Operations</b>. POS billing, checkout, and payment collection functions are restricted by default.
+          </p>
+          <p style={{ margin: 0, color: '#991B1B', fontSize: '13px' }}>
+            Please use the <b>Warehouse Suite</b> for stock management, receiving, and transfers.
+          </p>
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('warehouse')}
+              style={{
+                backgroundColor: '#DC2626',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '10px 22px',
+                fontWeight: 700,
+                fontSize: '14px',
+                cursor: 'pointer',
+                marginTop: '10px'
+              }}
+            >
+              Go to Warehouse Suite
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ ...styles.container, backgroundColor: colors.bgApp, color: colors.textPrimary }}>
@@ -1929,6 +2240,32 @@ export default function POS({
               title="View and Confirm Pending Sales Orders"
             >
               <ClipboardList size={14} /> Pending Orders ({pendingOrders.length})
+            </button>
+
+            {/* Held Receipts / Parked Sales Button (F4) */}
+            <button
+              type="button"
+              id="pos-top-held-receipts-btn"
+              className="pos-control-pill"
+              style={{
+                ...styles.controlPill,
+                backgroundColor: heldReceipts.length > 0 ? (isDark ? '#7C2D12' : '#FFEDD5') : colors.bgInput,
+                color: heldReceipts.length > 0 ? (isDark ? '#FDBA74' : '#C2410C') : colors.textPrimary,
+                borderColor: heldReceipts.length > 0 ? '#F97316' : colors.borderColor,
+                fontWeight: '700',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: heldReceipts.length > 0 ? '0 1px 3px rgba(249, 115, 22, 0.3)' : 'none'
+              }}
+              onClick={() => {
+                loadHeldReceipts();
+                setHeldReceiptsModalOpen(true);
+              }}
+              title="View and Resume Held Receipts (F4)"
+            >
+              <PauseCircle size={14} /> Held Receipts ({heldReceipts.length})
             </button>
 
             {/* Focus Mode Button */}
@@ -2424,6 +2761,41 @@ export default function POS({
             <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
           </div>
 
+          {activeHoldId && (
+            <div style={{
+              backgroundColor: isDark ? 'rgba(16, 185, 129, 0.15)' : '#ECFDF5',
+              color: colors.accentEmerald,
+              border: `1px solid ${isDark ? '#059669' : '#A7F3D0'}`,
+              borderRadius: '8px',
+              padding: '6px 12px',
+              margin: '0 12px 8px 12px',
+              fontSize: '12px',
+              fontWeight: '700',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <PauseCircle size={14} /> Resumed Parked Sale
+              </span>
+              <button
+                type="button"
+                onClick={() => handleHoldReceipt()}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.accentEmerald,
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  textDecoration: 'underline',
+                  cursor: 'pointer'
+                }}
+              >
+                Park Again (F7)
+              </button>
+            </div>
+          )}
+
           {/* CART ITEMS TABLE */}
           <div style={styles.cartTableContainer} className="pos-cart-table-container">
             {cart.length === 0 ? (
@@ -2598,9 +2970,50 @@ export default function POS({
               <span style={{ color: colors.accentEmerald, fontWeight: '900', fontSize: '26px' }}>₹{grandTotal.toFixed(2)}</span>
             </div>
 
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+              <button
+                type="button"
+                id="pos-hold-receipt-btn"
+                style={{
+                  ...styles.holdReceiptBtn,
+                  opacity: cart.length === 0 ? 0.5 : 1,
+                  cursor: cart.length === 0 ? 'not-allowed' : 'pointer',
+                  backgroundColor: isDark ? 'rgba(249, 115, 22, 0.15)' : '#FFF7ED',
+                  color: colors.accentOrange,
+                  borderColor: isDark ? '#C2410C' : '#FDBA74',
+                }}
+                disabled={cart.length === 0 || holdingReceipt}
+                onClick={() => handleHoldReceipt()}
+                title="Hold / Park Current Receipt (F7)"
+              >
+                <PauseCircle size={15} />
+                <span>{activeHoldId ? 'Hold Again' : 'Hold Receipt'} (F7)</span>
+              </button>
+
+              <button
+                type="button"
+                id="pos-held-receipts-btn"
+                style={{
+                  ...styles.heldReceiptsBtn,
+                  backgroundColor: heldReceipts.length > 0 ? (isDark ? '#1E3A5F' : '#EFF6FF') : colors.bgInput,
+                  color: heldReceipts.length > 0 ? colors.accentSky : colors.textSecondary,
+                  borderColor: heldReceipts.length > 0 ? colors.accentSky : colors.borderColor,
+                }}
+                onClick={() => {
+                  loadHeldReceipts();
+                  setHeldReceiptsModalOpen(true);
+                }}
+                title="View and Resume Held Receipts (F4)"
+              >
+                <Clock size={15} />
+                <span>Held Receipts ({heldReceipts.length})</span>
+              </button>
+            </div>
+
             <div style={styles.checkoutActionGrid}>
               <button
                 style={styles.paymentShortcutBtn}
+                disabled={cart.length === 0}
                 onClick={() => {
                   setCashReceived(grandTotal.toFixed(2));
                   setCheckoutVisible(true);
@@ -2817,6 +3230,44 @@ export default function POS({
                 <span style={{ color: colors.accentEmerald, fontWeight: '900', fontSize: '24px' }}>₹{grandTotal.toFixed(2)}</span>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.holdReceiptBtn,
+                    opacity: cart.length === 0 ? 0.5 : 1,
+                    backgroundColor: isDark ? 'rgba(249, 115, 22, 0.15)' : '#FFF7ED',
+                    color: colors.accentOrange,
+                    borderColor: isDark ? '#C2410C' : '#FDBA74',
+                  }}
+                  disabled={cart.length === 0 || holdingReceipt}
+                  onClick={() => {
+                    setMobileCartSheetOpen(false);
+                    handleHoldReceipt();
+                  }}
+                >
+                  <PauseCircle size={15} />
+                  <span>{activeHoldId ? 'Hold Again' : 'Hold Receipt'}</span>
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.heldReceiptsBtn,
+                    backgroundColor: heldReceipts.length > 0 ? (isDark ? '#1E3A5F' : '#EFF6FF') : colors.bgInput,
+                    color: heldReceipts.length > 0 ? colors.accentSky : colors.textSecondary,
+                    borderColor: heldReceipts.length > 0 ? colors.accentSky : colors.borderColor,
+                  }}
+                  onClick={() => {
+                    setMobileCartSheetOpen(false);
+                    loadHeldReceipts();
+                    setHeldReceiptsModalOpen(true);
+                  }}
+                >
+                  <Clock size={15} />
+                  <span>Held ({heldReceipts.length})</span>
+                </button>
+              </div>
+
               <button
                 style={styles.paymentShortcutBtn}
                 disabled={cart.length === 0}
@@ -2943,6 +3394,17 @@ export default function POS({
         continuous={true}
         title="POS Camera Barcode Scanner"
         subtitle="Point camera at item barcode to continuously add items to cart"
+      />
+
+      <HeldReceiptsModal
+        isOpen={heldReceiptsModalOpen}
+        onClose={() => setHeldReceiptsModalOpen(false)}
+        heldReceipts={heldReceipts}
+        onResume={handleResumeReceipt}
+        onCancelReceipt={handleCancelReceipt}
+        currentCart={cart}
+        isDark={isDark}
+        loading={loadingHeldReceipts}
       />
 
       {/* QUICK EDIT MODAL */}
@@ -3135,6 +3597,37 @@ export default function POS({
                   </span>
                 ) : null)}
               </div>
+
+              {selectedCustomerId && selectedCustomerData && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  backgroundColor: isDark ? 'rgba(30, 58, 138, 0.25)' : '#EFF6FF',
+                  border: `1px solid ${isDark ? '#1E40AF' : '#BFDBFE'}`,
+                  borderRadius: '8px',
+                  padding: '6px 10px',
+                  marginBottom: '8px',
+                  fontSize: '11px',
+                  gap: '8px',
+                  flexWrap: 'wrap'
+                }}>
+                  <span style={{ color: colors.textPrimary, fontWeight: '700' }}>
+                    Outstanding: <b style={{ color: '#EF4444' }}>₹{parseFloat(selectedCustomerData.current_balance || 0).toFixed(2)}</b>
+                  </span>
+                  <span style={{ color: colors.textSecondary }}>
+                    Credit Limit: <b style={{ color: colors.textPrimary }}>{parseFloat(selectedCustomerData.credit_limit || 0) > 0 ? `₹${parseFloat(selectedCustomerData.credit_limit).toFixed(2)}` : 'No Limit'}</b>
+                  </span>
+                  <span style={{ color: colors.textSecondary }}>
+                    Available: <b style={{ color: '#10B981' }}>{parseFloat(selectedCustomerData.credit_limit || 0) > 0 ? `₹${Math.max(0, parseFloat(selectedCustomerData.credit_limit) - parseFloat(selectedCustomerData.current_balance || 0)).toFixed(2)}` : 'Unlimited'}</b>
+                  </span>
+                  {selectedCustomerData.allow_credit === 0 && (
+                    <span style={{ color: '#DC2626', fontWeight: '800', backgroundColor: '#FEE2E2', padding: '1px 6px', borderRadius: '4px' }}>
+                      Credit Disabled
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Autocomplete / Search Input for Existing Customers */}
               <div style={{ position: 'relative', marginBottom: '8px' }}>
@@ -3366,34 +3859,59 @@ export default function POS({
             </div>
 
             <label style={{ ...styles.label, color: colors.textSecondary }}>{t('selectPayment')}</label>
-            <div style={styles.payGrid}>
+            <div style={{ ...styles.payGrid, gridTemplateColumns: 'repeat(auto-fit, minmax(105px, 1fr))' }}>
               <button
+                type="button"
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'cash' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('cash', 'print_receipt_only')}
+                onClick={() => setPaymentMode('cash')}
                 disabled={submittingSale}
               >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Banknote size={16} /> {t('cashPay')} (F9)</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Banknote size={16} /> Cash (F9)</span>
               </button>
               <button
-                style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'upi' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('upi', 'print_receipt_only')}
-                disabled={submittingSale}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Smartphone size={16} /> {t('upiPay')} (F10)</span>
-              </button>
-              <button
+                type="button"
                 style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'card' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('card', 'print_receipt_only')}
+                onClick={() => setPaymentMode('card')}
                 disabled={submittingSale}
               >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><CreditCard size={16} /> {t('cardPay')} (F11)</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><CreditCard size={16} /> Card (F11)</span>
               </button>
               <button
-                style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'due' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
-                onClick={() => !submittingSale && handleCompleteSale('due', 'print_receipt_only')}
+                type="button"
+                style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'upi' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
+                onClick={() => setPaymentMode('upi')}
                 disabled={submittingSale}
               >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><FileText size={16} /> {t('duePay')}</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><Smartphone size={16} /> UPI (F10)</span>
+              </button>
+              <button
+                type="button"
+                style={{ ...styles.payBtn, backgroundColor: colors.bgInput, borderColor: colors.borderColor, color: colors.textPrimary, ...(paymentMode === 'bank' ? styles.payActive : {}), opacity: submittingSale ? 0.7 : 1 }}
+                onClick={() => setPaymentMode('bank')}
+                disabled={submittingSale}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><FileText size={16} /> Bank</span>
+              </button>
+              <button
+                type="button"
+                id="pos-credit-udhar-pay-btn"
+                style={{
+                  ...styles.payBtn,
+                  backgroundColor: (paymentMode === 'credit' || paymentMode === 'due') ? 'rgba(234, 88, 12, 0.15)' : colors.bgInput,
+                  borderColor: (paymentMode === 'credit' || paymentMode === 'due') ? '#EA580C' : colors.borderColor,
+                  color: (paymentMode === 'credit' || paymentMode === 'due') ? '#EA580C' : colors.textPrimary,
+                  fontWeight: (paymentMode === 'credit' || paymentMode === 'due') ? '900' : '700',
+                  opacity: submittingSale ? 0.7 : 1
+                }}
+                onClick={() => {
+                  setPaymentMode('credit');
+                  if (!selectedCustomerId) {
+                    alert('Please select a customer for Credit/Udhar sale.');
+                  }
+                }}
+                disabled={submittingSale}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}><ClipboardList size={16} /> Credit / Udhar</span>
               </button>
             </div>
 
@@ -3413,6 +3931,112 @@ export default function POS({
                     ₹{changeToReturn.toFixed(2)}
                   </span>
                 </div>
+              </div>
+            )}
+
+            {(paymentMode === 'credit' || paymentMode === 'due') && (
+              <div style={{ ...styles.cashBox, backgroundColor: colors.bgInput, borderColor: colors.borderColor }}>
+                {!selectedCustomerId ? (
+                  <div style={{ backgroundColor: 'rgba(239, 68, 68, 0.1)', border: '1px solid #EF4444', borderRadius: '8px', padding: '10px' }}>
+                    <div style={{ color: '#EF4444', fontWeight: '800', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <AlertTriangle size={16} /> Customer Required for Credit / Udhar
+                    </div>
+                    <div style={{ color: colors.textSecondary, fontSize: '12px', marginTop: '4px' }}>
+                      Please select an existing customer or enter customer details above. Anonymous credit sales are not permitted.
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', paddingBottom: '6px', borderBottom: `1px solid ${colors.borderColor}` }}>
+                      <span style={{ fontSize: '12px', fontWeight: '800', color: colors.textPrimary, textTransform: 'uppercase' }}>
+                        Udhar / Credit Settlement
+                      </span>
+                      <span style={{ fontSize: '11px', color: colors.accentOrange, fontWeight: '700' }}>
+                        Customer #{selectedCustomerId}
+                      </span>
+                    </div>
+
+                    {/* Partial Payment Input */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>
+                          Down Payment / Paid Now:
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max={grandTotal}
+                          placeholder="₹0.00 (Full Udhar)"
+                          value={creditPartialPaidAmount}
+                          onChange={(e) => setCreditPartialPaidAmount(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '6px 8px',
+                            borderRadius: '6px',
+                            border: `1px solid ${colors.borderColor}`,
+                            backgroundColor: colors.bgCard,
+                            color: colors.textPrimary,
+                            fontSize: '13px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>
+                          Down Payment Mode:
+                        </label>
+                        <select
+                          value={creditPartialPaidMode}
+                          onChange={(e) => setCreditPartialPaidMode(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '6px 8px',
+                            borderRadius: '6px',
+                            border: `1px solid ${colors.borderColor}`,
+                            backgroundColor: colors.bgCard,
+                            color: colors.textPrimary,
+                            fontSize: '13px',
+                            boxSizing: 'border-box'
+                          }}
+                        >
+                          <option value="cash">Cash</option>
+                          <option value="upi">UPI</option>
+                          <option value="card">Card</option>
+                          <option value="bank">Bank / Transfer</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '8px', alignItems: 'center' }}>
+                      <div style={{ padding: '6px 10px', backgroundColor: colors.bgCard, borderRadius: '6px', border: `1px solid ${colors.borderColor}` }}>
+                        <div style={{ fontSize: '10px', color: colors.textSecondary, fontWeight: '700' }}>Credit / Udhar Due:</div>
+                        <div style={{ fontSize: '17px', fontWeight: '900', color: colors.accentOrange }}>
+                          ₹{Math.max(0, grandTotal - (parseFloat(creditPartialPaidAmount) || 0)).toFixed(2)}
+                        </div>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>
+                          Due Date:
+                        </label>
+                        <input
+                          type="date"
+                          value={creditDueDate}
+                          onChange={(e) => setCreditDueDate(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '5px 8px',
+                            borderRadius: '6px',
+                            border: `1px solid ${colors.borderColor}`,
+                            backgroundColor: colors.bgCard,
+                            color: colors.textPrimary,
+                            fontSize: '12px',
+                            boxSizing: 'border-box'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -4260,6 +4884,31 @@ const styles = {
     fontWeight: '900',
     fontSize: '15px',
     cursor: 'pointer',
+  },
+  holdReceiptBtn: {
+    border: '1px solid',
+    borderRadius: '8px',
+    padding: '9px 10px',
+    fontWeight: '800',
+    fontSize: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    transition: 'all 0.15s ease',
+  },
+  heldReceiptsBtn: {
+    border: '1px solid',
+    borderRadius: '8px',
+    padding: '9px 10px',
+    fontWeight: '800',
+    fontSize: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
   },
   floatingMobileCartBar: {
     position: 'absolute',

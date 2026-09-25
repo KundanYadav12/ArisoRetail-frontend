@@ -302,7 +302,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
         <DialogContent sx={{ p: 2.5, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           {/* Summary KPI Strip */}
           <Grid container spacing={2}>
-            <Grid item xs={6} sm={2.4}>
+            <Grid size={{ xs: 6, sm: 2.4 }}>
               <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   Opening Balance
@@ -312,7 +312,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={6} sm={2.4}>
+            <Grid size={{ xs: 6, sm: 2.4 }}>
               <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   Total Invoiced (Debit)
@@ -322,7 +322,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={6} sm={2.4}>
+            <Grid size={{ xs: 6, sm: 2.4 }}>
               <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2 }}>
                 <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                   Total Settled (Credit)
@@ -332,7 +332,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={6} sm={2.4}>
+            <Grid size={{ xs: 6, sm: 2.4 }}>
               <Paper
                 variant="outlined"
                 sx={{
@@ -350,7 +350,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={12} sm={2.4}>
+            <Grid size={{ xs: 12, sm: 2.4 }}>
               <Paper
                 variant="outlined"
                 sx={{ p: 1.5, borderRadius: 2, bgcolor: '#f0fdf4', borderColor: '#86efac' }}
@@ -367,8 +367,8 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
 
           {/* Filter Toolbar */}
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: '#f8fafc' }}>
-            <Grid container spacing={1.5} alignItems="center">
-              <Grid item xs={12} sm={3}>
+            <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <TextField
                   label="From Date"
                   type="date"
@@ -379,7 +379,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                   InputLabelProps={{ shrink: true }}
                 />
               </Grid>
-              <Grid item xs={12} sm={3}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <TextField
                   label="To Date"
                   type="date"
@@ -390,7 +390,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                   InputLabelProps={{ shrink: true }}
                 />
               </Grid>
-              <Grid item xs={12} sm={3}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Transaction Type</InputLabel>
                   <Select
@@ -407,7 +407,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                   </Select>
                 </FormControl>
               </Grid>
-              <Grid item xs={12} sm={3}>
+              <Grid size={{ xs: 12, sm: 3 }}>
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <Button
                     size="small"

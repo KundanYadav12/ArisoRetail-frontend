@@ -208,27 +208,40 @@ export default function WebBarcodeScannerModal({
     lastScannedTimeRef.current[cleanCode] = now;
 
     if (onScan) {
-      const result = onScan(cleanCode);
-      // Result can return { success: true/false, message: string }
-      if (result && result.success !== undefined) {
-        if (result.success) {
-          playSuccessSound();
-        } else {
+      Promise.resolve(onScan(cleanCode))
+        .then((result) => {
+          if (result && result.success !== undefined) {
+            if (result.success) {
+              playSuccessSound();
+            } else {
+              playNotFoundSound();
+            }
+            setRecentScan({
+              code: cleanCode,
+              message: result.message || (result.success ? `Scanned: ${cleanCode}` : `Item Not Found: ${cleanCode}`),
+              success: result.success
+            });
+          } else {
+            playSuccessSound();
+            setRecentScan({
+              code: cleanCode,
+              message: `Scanned: ${cleanCode}`,
+              success: true
+            });
+          }
+          if (!continuous) {
+            onClose();
+          }
+        })
+        .catch((err) => {
           playNotFoundSound();
-        }
-        setRecentScan({
-          code: cleanCode,
-          message: result.message || (result.success ? `Scanned: ${cleanCode}` : `Item Not Found: ${cleanCode}`),
-          success: result.success
+          setRecentScan({
+            code: cleanCode,
+            message: err?.message || `Scan error: ${cleanCode}`,
+            success: false
+          });
         });
-      } else {
-        playSuccessSound();
-        setRecentScan({
-          code: cleanCode,
-          message: `Scanned: ${cleanCode}`,
-          success: true
-        });
-      }
+      return;
     }
 
     if (!continuous) {

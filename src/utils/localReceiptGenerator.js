@@ -397,6 +397,28 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
             </div>
             
             <div class="double-divider"></div>
+
+            <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700; margin-top: 2px;">
+              <span>Payment Mode:</span>
+              <span class="bold">${(['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase())) ? 'CREDIT / UDHAR' : (order.payment_mode || 'CASH').toUpperCase()}</span>
+            </div>
+            ${(['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase()) || (order.paid_amount !== undefined && parseFloat(order.paid_amount) < parseFloat(order.total_amount || 0))) ? `
+              <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700;">
+                <span>Amount Paid:</span>
+                <span>₹${parseFloat(order.paid_amount || 0).toFixed(2)}</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 800;">
+                <span>Outstanding / Due:</span>
+                <span>₹${Math.max(0, parseFloat(order.total_amount || 0) - parseFloat(order.paid_amount || 0)).toFixed(2)}</span>
+              </div>
+              ${order.due_date ? `
+                <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700;">
+                  <span>Due Date:</span>
+                  <span>${order.due_date}</span>
+                </div>
+              ` : ''}
+              <div class="divider"></div>
+            ` : ''}
           </div>
           
           <!-- Custom Messages & Footer -->
@@ -563,6 +585,24 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
   }
   cmds += CMD_BOLD_OFF;
   cmds += doubleDivider;
+
+  // Payment Mode & Credit / Udhar breakdown
+  const isCreditMode = ['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase());
+  const pModeLabel = isCreditMode ? 'CREDIT / UDHAR' : (order.payment_mode || 'CASH').toUpperCase();
+  cmds += `Payment Mode:`.padEnd(cols - pModeLabel.length, ' ') + pModeLabel + '\n';
+
+  if (isCreditMode || (order.paid_amount !== undefined && parseFloat(order.paid_amount) < parseFloat(order.total_amount || 0))) {
+    const paidVal = parseFloat(order.paid_amount || 0).toFixed(2);
+    const dueVal = Math.max(0, parseFloat(order.total_amount || 0) - parseFloat(order.paid_amount || 0)).toFixed(2);
+    cmds += `Amount Paid:`.padEnd(cols - 12, ' ') + `Rs.${paidVal}`.padStart(12, ' ') + '\n';
+    cmds += CMD_BOLD_ON;
+    cmds += `Outstanding:`.padEnd(cols - 12, ' ') + `Rs.${dueVal}`.padStart(12, ' ') + '\n';
+    cmds += CMD_BOLD_OFF;
+    if (order.due_date) {
+      cmds += `Due Date:`.padEnd(cols - 12, ' ') + String(order.due_date).padStart(12, ' ') + '\n';
+    }
+    cmds += divider;
+  }
 
   // Footer Messages Center Aligned
   cmds += CMD_ALIGN_CENTER;
