@@ -258,7 +258,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
         onClose={onClose}
         maxWidth="lg"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 3, maxHeight: '95vh' } }}
+        slotProps={{ paper: { sx: { borderRadius: 3, maxHeight: '95vh' } } }}
       >
         <DialogTitle sx={{ pb: 1, borderBottom: '1px solid #e2e8f0' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -376,7 +376,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                   value={dateFrom}
                   onChange={e => setDateFrom(e.target.value)}
                   fullWidth
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{ inputLabel: { shrink: true } }}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 3 }}>
@@ -387,7 +387,7 @@ export default function SupplierLedgerModal({ open, onClose, supplier: propSuppl
                   value={dateTo}
                   onChange={e => setDateTo(e.target.value)}
                   fullWidth
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{ inputLabel: { shrink: true } }}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 3 }}>

@@ -264,8 +264,8 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{
-        sx: { borderRadius: 3, maxHeight: '92vh' }
+      slotProps={{
+        paper: { sx: { borderRadius: 3, maxHeight: '92vh' } }
       }}
     >
       <DialogTitle sx={{ pb: 1, borderBottom: '1px solid #e2e8f0' }}>
@@ -314,7 +314,7 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
           <>
             {/* Supplier Stats Banner */}
             <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: '#f8fafc', borderColor: '#cbd5e1' }}>
-              <Grid container spacing={2} alignItems="center">
+              <Grid container spacing={2} sx={{ alignItems: 'center' }}>
                 <Grid item xs={12} sm={4}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
                     Supplier
@@ -370,7 +370,7 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
                     onChange={e => setPaymentDate(e.target.value)}
                     fullWidth
                     size="small"
-                    InputLabelProps={{ shrink: true }}
+                    slotProps={{ inputLabel: { shrink: true } }}
                   />
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
@@ -382,7 +382,7 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
                     fullWidth
                     size="small"
                     required
-                    inputProps={{ min: 0.01, step: 0.01 }}
+                    slotProps={{ htmlInput: { min: 0.01, step: 0.01 } }}
                   />
                 </Grid>
                 <Grid item xs={12} sm={6} md={3}>
@@ -536,11 +536,13 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
                                 value={allocations[b.id] !== undefined ? allocations[b.id] : ''}
                                 onChange={e => handleAllocationChange(b.id, e.target.value, b.outstanding_amount)}
                                 placeholder="0.00"
-                                inputProps={{
-                                  min: 0,
-                                  max: b.outstanding_amount,
-                                  step: 0.01,
-                                  style: { textAlign: 'right', fontWeight: 700, padding: '4px 8px' }
+                                slotProps={{
+                                  htmlInput: {
+                                    min: 0,
+                                    max: b.outstanding_amount,
+                                    step: 0.01,
+                                    style: { textAlign: 'right', fontWeight: 700, padding: '4px 8px' }
+                                  }
                                 }}
                                 sx={{ width: 120 }}
                               />
@@ -564,7 +566,7 @@ export default function SupplierPaymentModal({ open, onClose, supplier: initialS
                 borderColor: isAllocationOverPayment ? '#ef4444' : (advanceAmount > 0 ? '#10b981' : '#cbd5e1')
               }}
             >
-              <Grid container spacing={2} alignItems="center">
+              <Grid container spacing={2} sx={{ alignItems: 'center' }}>
                 <Grid item xs={6} sm={3}>
                   <Typography variant="caption" color="text.secondary">Total Payment</Typography>
                   <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>

@@ -5,17 +5,87 @@ import {
   TableHead, TableRow, TableCell, TableBody,
   IconButton, Typography, Box, Paper, Chip, Alert
 } from '@mui/material';
-import { X, Plus, Trash2, FileText, ShoppingCart } from 'lucide-react';
+import { X, Plus, PlusCircle, Trash2, FileText, ShoppingCart, UserPlus, PackagePlus } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
 import { getISTDateString } from '../../utils/dateUtils';
+import SupplierModal from './SupplierModal';
+import WarehouseModal from './WarehouseModal';
+import MenuItemModal from '../MenuItemModal';
+
+const CustomDropdownPaper = React.forwardRef(function CustomDropdownPaper(props, ref) {
+  const { children, onAddNew, addNewLabel, ...other } = props;
+  return (
+    <Paper
+      ref={ref}
+      {...other}
+      sx={{
+        ...other?.sx,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.08)',
+        border: '1px solid #cbd5e1',
+        borderRadius: 2
+      }}
+    >
+      <Box sx={{ flex: '1 1 auto', overflowY: 'auto', maxHeight: 250, '& .MuiAutocomplete-listbox': { maxHeight: 'none' } }}>
+        {children}
+      </Box>
+      {onAddNew && (
+        <Box
+          sx={{
+            p: 1,
+            borderTop: '1px solid #e2e8f0',
+            bgcolor: '#ffffff',
+            flexShrink: 0
+          }}
+        >
+          <Button
+            fullWidth
+            variant="contained"
+            startIcon={<PlusCircle size={18} />}
+            onMouseDown={(e) => {
+              e.preventDefault();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddNew();
+            }}
+            sx={{
+              fontWeight: 600,
+              fontSize: '0.875rem',
+              color: '#ffffff',
+              bgcolor: '#1e40af', // Deep navy/royal blue matching screenshot
+              justifyContent: 'center',
+              py: 0.9,
+              px: 2,
+              borderRadius: '6px',
+              textTransform: 'none',
+              boxShadow: 'none',
+              '&:hover': {
+                bgcolor: '#1d4ed8',
+                boxShadow: '0 2px 6px rgba(30, 64, 175, 0.25)'
+              }
+            }}
+          >
+            {addNewLabel || 'Add New'}
+          </Button>
+        </Box>
+      )}
+    </Paper>
+  );
+});
 
 export default function PurchaseOrderModal({
   open,
   onClose,
   onCreated,
+  onWarehouseCreated,
+  onSupplierCreated,
   warehouses = [],
-  suppliers = []
+  suppliers = [],
+  categories = []
 }) {
   const notify = useNotify();
   const [orderDate, setOrderDate] = useState(() => getISTDateString());
@@ -28,6 +98,29 @@ export default function PurchaseOrderModal({
   const [availableProducts, setAvailableProducts] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
+  const [localSuppliers, setLocalSuppliers] = useState(suppliers || []);
+  const [supplierModalOpen, setSupplierModalOpen] = useState(false);
+  const [supplierSearchInput, setSupplierSearchInput] = useState('');
+
+  const [localWarehouses, setLocalWarehouses] = useState(warehouses || []);
+  const [warehouseModalOpen, setWarehouseModalOpen] = useState(false);
+  const [warehouseSearchInput, setWarehouseSearchInput] = useState('');
+
+  const [addItemModalOpen, setAddItemModalOpen] = useState(false);
+  const [productSearchInput, setProductSearchInput] = useState('');
+
+  useEffect(() => {
+    if (suppliers && suppliers.length > 0) {
+      setLocalSuppliers(suppliers);
+    }
+  }, [suppliers]);
+
+  useEffect(() => {
+    if (warehouses && warehouses.length > 0) {
+      setLocalWarehouses(warehouses);
+    }
+  }, [warehouses]);
+
   useEffect(() => {
     if (open) {
       setOrderDate(getISTDateString());
@@ -35,12 +128,19 @@ export default function PurchaseOrderModal({
       setNotes('');
       setDiscountAmount(0);
       setItems([]);
+      setProductSearchInput('');
+      setSupplierSearchInput('');
+      setWarehouseSearchInput('');
 
-      if (warehouses.length > 0) {
-        const defaultWh = warehouses.find(w => w.is_default) || warehouses[0];
+      const activeWarehouses = warehouses && warehouses.length > 0 ? warehouses : localWarehouses;
+      if (activeWarehouses.length > 0) {
+        const defaultWh = activeWarehouses.find(w => w.is_default) || activeWarehouses[0];
         setWarehouseId(defaultWh ? String(defaultWh.id) : '');
       }
-      if (suppliers.length > 0) {
+      if (localSuppliers.length > 0) {
+        setSupplierId(String(localSuppliers[0].id));
+      } else if (suppliers.length > 0) {
+        setLocalSuppliers(suppliers);
         setSupplierId(String(suppliers[0].id));
       }
 
@@ -52,6 +152,55 @@ export default function PurchaseOrderModal({
         .catch(err => console.error(err));
     }
   }, [open, warehouses, suppliers]);
+
+  const handleSaveNewSupplier = async (supplierData) => {
+    const res = await apiFetch('/api/inventory/suppliers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(supplierData)
+    });
+    const resData = await res.json();
+    if (!res.ok) throw new Error(resData.error || 'Failed to save supplier');
+    notify.success('New supplier created successfully.', 'Supplier Created');
+
+    const newSupplier = resData.supplier;
+    if (newSupplier) {
+      setLocalSuppliers(prev => [newSupplier, ...prev]);
+      setSupplierId(String(newSupplier.id));
+      setSupplierSearchInput('');
+      if (onSupplierCreated) onSupplierCreated(newSupplier);
+    }
+  };
+
+  const handleSaveNewWarehouse = async (warehouseData) => {
+    const res = await apiFetch('/api/inventory/warehouses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(warehouseData)
+    });
+    const resData = await res.json();
+    if (!res.ok) throw new Error(resData.error || 'Failed to save warehouse');
+    notify.success('New warehouse created successfully.', 'Warehouse Created');
+
+    const newWarehouse = resData.warehouse;
+    if (newWarehouse) {
+      setLocalWarehouses(prev => [newWarehouse, ...prev]);
+      setWarehouseId(String(newWarehouse.id));
+      setWarehouseSearchInput('');
+      if (onWarehouseCreated) onWarehouseCreated(newWarehouse);
+    }
+  };
+
+  const handleProductCreated = (newProduct) => {
+    if (newProduct) {
+      setAvailableProducts(prev => {
+        const exists = prev.some(p => p.id === newProduct.id);
+        return exists ? prev : [newProduct, ...prev];
+      });
+      handleAddItem(newProduct);
+      setProductSearchInput('');
+    }
+  };
 
   const handleAddItem = (product) => {
     if (!product) return;
@@ -171,7 +320,8 @@ export default function PurchaseOrderModal({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
+    <>
+      <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <ShoppingCart size={22} color="#0284c7" />
@@ -190,51 +340,118 @@ export default function PurchaseOrderModal({
         <Paper elevation={0} sx={{ p: 2, bgcolor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 2 }}>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField
-                select
-                label="Supplier / Vendor *"
-                size="small"
-                fullWidth
-                required
-                value={supplierId}
-                onChange={e => setSupplierId(e.target.value)}
-                SelectProps={{ native: true }}
-              >
-                <option value="">-- Select Supplier --</option>
-                {suppliers.map(s => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.company_name || s.mobile})</option>
-                ))}
-              </TextField>
+              <Autocomplete
+                options={localSuppliers}
+                value={localSuppliers.find(s => String(s.id) === String(supplierId)) || null}
+                onChange={(e, val) => {
+                  setSupplierId(val ? String(val.id) : '');
+                }}
+                onInputChange={(e, val) => setSupplierSearchInput(val)}
+                getOptionKey={opt => (opt && opt.id ? `supplier-${opt.id}` : `supplier-${Math.random()}`)}
+                getOptionLabel={opt => {
+                  if (!opt) return '';
+                  return `${opt.name}${opt.company_name ? ` (${opt.company_name})` : (opt.mobile ? ` (${opt.mobile})` : '')}`;
+                }}
+                renderOption={(props, option) => {
+                  const { key, ...rest } = props;
+                  return (
+                    <li key={option.id ? `supplier-opt-${option.id}` : key} {...rest} style={{ padding: '9px 14px' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                          {option.name}
+                        </Typography>
+                        {option.mobile && (
+                          <Typography variant="caption" sx={{ color: '#475569', fontWeight: 600, bgcolor: '#f1f5f9', px: 1, py: 0.25, borderRadius: 1 }}>
+                            [{option.mobile}]
+                          </Typography>
+                        )}
+                        {!option.mobile && option.company_name && (
+                          <Typography variant="caption" sx={{ color: '#475569', fontWeight: 600, bgcolor: '#f1f5f9', px: 1, py: 0.25, borderRadius: 1 }}>
+                            [{option.company_name}]
+                          </Typography>
+                        )}
+                      </Box>
+                    </li>
+                  );
+                }}
+                slots={{ paper: CustomDropdownPaper }}
+                slotProps={{
+                  paper: {
+                    onAddNew: () => setSupplierModalOpen(true),
+                    addNewLabel: 'Add New'
+                  }
+                }}
+                renderInput={params => (
+                  <TextField
+                    {...params}
+                    label="Party / Supplier Name"
+                    size="small"
+                    required={!supplierId}
+                    placeholder="Choose Party..."
+                  />
+                )}
+              />
             </Grid>
 
             <Grid size={{ xs: 12, sm: 4 }}>
-              <TextField
-                select
-                label="Destination Warehouse / Outlet *"
-                size="small"
-                fullWidth
-                required
-                value={warehouseId}
-                onChange={e => setWarehouseId(e.target.value)}
-                SelectProps={{ native: true }}
-              >
-                <option value="">-- Select Destination --</option>
-                {warehouses.map(w => (
-                  <option key={w.id} value={w.id}>{w.name} ({w.code})</option>
-                ))}
-              </TextField>
+              <Autocomplete
+                options={localWarehouses}
+                value={localWarehouses.find(w => String(w.id) === String(warehouseId)) || null}
+                onChange={(e, val) => {
+                  setWarehouseId(val ? String(val.id) : '');
+                }}
+                onInputChange={(e, val) => setWarehouseSearchInput(val)}
+                getOptionKey={opt => (opt && opt.id ? `warehouse-${opt.id}` : `warehouse-${Math.random()}`)}
+                getOptionLabel={opt => {
+                  if (!opt) return '';
+                  return `${opt.name}${opt.code ? ` (${opt.code})` : ''}`;
+                }}
+                renderOption={(props, option) => {
+                  const { key, ...rest } = props;
+                  return (
+                    <li key={option.id ? `wh-opt-${option.id}` : key} {...rest} style={{ padding: '9px 14px' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: '#1e293b' }}>
+                          {option.name}
+                        </Typography>
+                        {option.code && (
+                          <Typography variant="caption" sx={{ color: '#475569', fontWeight: 600, bgcolor: '#f1f5f9', px: 1, py: 0.25, borderRadius: 1 }}>
+                            [{option.code}]
+                          </Typography>
+                        )}
+                      </Box>
+                    </li>
+                  );
+                }}
+                slots={{ paper: CustomDropdownPaper }}
+                slotProps={{
+                  paper: {
+                    onAddNew: () => setWarehouseModalOpen(true),
+                    addNewLabel: 'Add New'
+                  }
+                }}
+                renderInput={params => (
+                  <TextField
+                    {...params}
+                    label="Destination Warehouse / Outlet"
+                    size="small"
+                    required={!warehouseId}
+                    placeholder="Choose Destination..."
+                  />
+                )}
+              />
             </Grid>
 
             <Grid size={{ xs: 12, sm: 2 }}>
               <TextField
-                label="Order Date *"
+                label="Order Date"
                 type="date"
                 size="small"
                 fullWidth
                 required
                 value={orderDate}
                 onChange={e => setOrderDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
 
@@ -246,7 +463,7 @@ export default function PurchaseOrderModal({
                 fullWidth
                 value={deliveryDate}
                 onChange={e => setDeliveryDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
           </Grid>
@@ -255,23 +472,42 @@ export default function PurchaseOrderModal({
         {/* Product Autocomplete */}
         <Autocomplete
           options={availableProducts}
+          inputValue={productSearchInput}
+          onInputChange={(e, val) => setProductSearchInput(val)}
           getOptionKey={opt => typeof opt === 'string' ? opt : (opt.id ? `product-${opt.id}` : `${opt.name}-${opt.sku || opt.barcode || ''}`)}
-          getOptionLabel={opt => `${opt.name} (${opt.sku || opt.barcode || opt.unit})`}
-          onChange={(e, val) => handleAddItem(val)}
+          getOptionLabel={opt => opt ? `${opt.name} (${opt.sku || opt.barcode || opt.unit || 'pcs'})` : ''}
+          onChange={(e, val) => {
+            if (val) {
+              handleAddItem(val);
+              setProductSearchInput('');
+            }
+          }}
           renderOption={(props, option) => {
             const { key, ...rest } = props;
             return (
               <li key={option.id ? `product-opt-${option.id}` : key} {...rest}>
-                {option.name} ({option.sku || option.barcode || option.unit})
+                <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{option.name}</Typography>
+                  <Typography variant="caption" sx={{ color: '#64748b' }}>
+                    SKU: {option.sku || 'N/A'} • Rate: ₹{option.purchase_price || option.price || 0} • GST: {option.gst_rate || 0}%
+                  </Typography>
+                </Box>
               </li>
             );
+          }}
+          slots={{ paper: CustomDropdownPaper }}
+          slotProps={{
+            paper: {
+              onAddNew: () => setAddItemModalOpen(true),
+              addNewLabel: productSearchInput.trim() ? `Add New "${productSearchInput.trim()}"` : 'Add New'
+            }
           }}
           renderInput={params => (
             <TextField
               {...params}
               label="Add Product to Purchase Order"
               size="small"
-              placeholder="Search by item name, SKU, or barcode..."
+              placeholder="Search or choose product to add..."
             />
           )}
           clearOnBlur
@@ -424,5 +660,31 @@ export default function PurchaseOrderModal({
         </Box>
       </DialogActions>
     </Dialog>
+
+    {/* Nested Modal: Add New Supplier */}
+    <SupplierModal
+      open={supplierModalOpen}
+      onClose={() => setSupplierModalOpen(false)}
+      onSave={handleSaveNewSupplier}
+      supplier={supplierSearchInput.trim() ? { name: supplierSearchInput.trim() } : null}
+    />
+
+    {/* Nested Modal: Add New Warehouse */}
+    <WarehouseModal
+      open={warehouseModalOpen}
+      onClose={() => setWarehouseModalOpen(false)}
+      onSave={handleSaveNewWarehouse}
+      warehouse={warehouseSearchInput.trim() ? { name: warehouseSearchInput.trim() } : null}
+    />
+
+    {/* Nested Modal: Add New Product / Menu Item */}
+    <MenuItemModal
+      open={addItemModalOpen}
+      onClose={() => setAddItemModalOpen(false)}
+      onSuccess={handleProductCreated}
+      initialName={productSearchInput.trim()}
+      categories={categories}
+    />
+    </>
   );
 }

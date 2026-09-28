@@ -177,7 +177,7 @@ export default function SuperBillAddItemModal({ open, categories = [], onClose, 
               onChange={(e) => setPrice(e.target.value)}
               required
               fullWidth
-              InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+              slotProps={{ input: { startAdornment: <InputAdornment position="start">₹</InputAdornment> } }}
             />
             <TextField
               label="Purchase Price (₹)"
@@ -185,7 +185,7 @@ export default function SuperBillAddItemModal({ open, categories = [], onClose, 
               value={purchasePrice}
               onChange={(e) => setPurchasePrice(e.target.value)}
               fullWidth
-              InputProps={{ startAdornment: <InputAdornment position="start">₹</InputAdornment> }}
+              slotProps={{ input: { startAdornment: <InputAdornment position="start">₹</InputAdornment> } }}
             />
           </Box>
 

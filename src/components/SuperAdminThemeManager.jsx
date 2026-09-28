@@ -301,14 +301,14 @@ export default function SuperAdminThemeManager({ token, onThemeUpdated }) {
       </Grid>
 
       {/* Action Buttons Footer */}
-      <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center', bgcolor: '#f8fafc' }}>
+      <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 3, display: 'flex', flexDirection: { xs: 'column-reverse', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'stretch', sm: 'center' }, gap: 1.5, bgcolor: '#f8fafc' }}>
         <Button
           variant="outlined"
           color="error"
           disabled={resetting || saving}
           onClick={handleResetTheme}
           startIcon={resetting ? <CircularProgress size={16} color="inherit" /> : <RotateCcw size={16} />}
-          sx={{ fontWeight: 800, textTransform: 'none' }}
+          sx={{ fontWeight: 800, textTransform: 'none', width: { xs: '100%', sm: 'auto' } }}
         >
           Reset to Default Theme
         </Button>
@@ -318,7 +318,7 @@ export default function SuperAdminThemeManager({ token, onThemeUpdated }) {
           disabled={saving || resetting}
           onClick={handleSaveTheme}
           startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-          sx={{ bgcolor: primaryColor, '&:hover': { bgcolor: primaryColor }, fontWeight: 800, textTransform: 'none', px: 3, py: 1 }}
+          sx={{ bgcolor: primaryColor, '&:hover': { bgcolor: primaryColor }, fontWeight: 800, textTransform: 'none', px: 3, py: 1, width: { xs: '100%', sm: 'auto' } }}
         >
           {saving ? 'Saving Theme...' : 'Save & Apply Theme Globally'}
         </Button>

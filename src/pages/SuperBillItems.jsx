@@ -62,9 +62,11 @@ export default function SuperBillItems({ token: propToken }) {
             placeholder="Search Item Name or Code / Barcode..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            InputProps={{
-              startAdornment: <InputAdornment position="start">🔍</InputAdornment>,
-              sx: { borderRadius: 3, bgcolor: '#ffffff' }
+            slotProps={{
+              input: {
+                startAdornment: <InputAdornment position="start">🔍</InputAdornment>,
+                sx: { borderRadius: 3, bgcolor: '#ffffff' }
+              }
             }}
           />
         </Box>

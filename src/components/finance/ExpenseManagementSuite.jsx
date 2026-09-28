@@ -813,7 +813,7 @@ export default function ExpenseManagementSuite() {
 
       {/* 2. Top Metric Cards */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <Card sx={{ borderRadius: 2, boxShadow: '0 2px 10px rgba(0,0,0,0.05)', borderLeft: '4px solid #ef4444' }}>
             <CardContent sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
@@ -832,7 +832,7 @@ export default function ExpenseManagementSuite() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <Card sx={{ borderRadius: 2, boxShadow: '0 2px 10px rgba(0,0,0,0.05)', borderLeft: '4px solid #10b981' }}>
             <CardContent sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
@@ -856,7 +856,7 @@ export default function ExpenseManagementSuite() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <Card sx={{ borderRadius: 2, boxShadow: '0 2px 10px rgba(0,0,0,0.05)', borderLeft: '4px solid #6366f1' }}>
             <CardContent sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
@@ -875,7 +875,7 @@ export default function ExpenseManagementSuite() {
           </Card>
         </Grid>
 
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <Card sx={{ borderRadius: 2, boxShadow: '0 2px 10px rgba(0,0,0,0.05)', borderLeft: '4px solid #f59e0b' }}>
             <CardContent sx={{ p: 2 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
@@ -930,8 +930,8 @@ export default function ExpenseManagementSuite() {
         <Box>
           {/* Filters Bar */}
           <Paper sx={{ p: 2, mb: 2.5, borderRadius: 2 }}>
-            <Grid container spacing={2} alignItems="center">
-              <Grid item xs={12} sm={6} md={3}>
+            <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+              <Grid size={{ xs: 12, sm: 6, md: 3 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -953,7 +953,7 @@ export default function ExpenseManagementSuite() {
                 />
               </Grid>
 
-              <Grid item xs={6} sm={3} md={2}>
+              <Grid size={{ xs: 6, sm: 3, md: 2 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Category</InputLabel>
                   <Select
@@ -972,7 +972,7 @@ export default function ExpenseManagementSuite() {
                 </FormControl>
               </Grid>
 
-              <Grid item xs={6} sm={3} md={2}>
+              <Grid size={{ xs: 6, sm: 3, md: 2 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Payment Mode</InputLabel>
                   <Select
@@ -993,7 +993,7 @@ export default function ExpenseManagementSuite() {
                 </FormControl>
               </Grid>
 
-              <Grid item xs={6} sm={3} md={1.5}>
+              <Grid size={{ xs: 6, sm: 3, md: 1.5 }}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Status</InputLabel>
                   <Select
@@ -1011,7 +1011,7 @@ export default function ExpenseManagementSuite() {
                 </FormControl>
               </Grid>
 
-              <Grid item xs={6} sm={3} md={1.75}>
+              <Grid size={{ xs: 6, sm: 3, md: 1.75 }}>
                 <TextField
                   fullWidth
                   size="small"
@@ -1026,7 +1026,7 @@ export default function ExpenseManagementSuite() {
                 />
               </Grid>
 
-              <Grid item xs={6} sm={3} md={1.75}>
+              <Grid size={{ xs: 6, sm: 3, md: 1.75 }}>
                 <TextField
                   fullWidth
                   size="small"

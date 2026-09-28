@@ -204,7 +204,7 @@ export default function PurchaseReturnModal({
                 required
                 value={supplierId}
                 onChange={e => setSupplierId(e.target.value)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">-- Select Supplier --</option>
                 {suppliers.map(s => (
@@ -222,7 +222,7 @@ export default function PurchaseReturnModal({
                 required
                 value={warehouseId}
                 onChange={e => setWarehouseId(e.target.value)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">-- Select Warehouse --</option>
                 {warehouses.map(w => (
@@ -240,7 +240,7 @@ export default function PurchaseReturnModal({
                 required
                 value={returnDate}
                 onChange={e => setReturnDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
 

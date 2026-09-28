@@ -446,7 +446,7 @@ export default function SupplierPayablesDashboard() {
           </Box>
 
           {/* Search, Sort, Limit Toolbar */}
-          <Grid container spacing={1.5} alignItems="center">
+          <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
             <Grid item xs={12} sm={5} md={5}>
               <TextField
                 size="small"
@@ -454,12 +454,14 @@ export default function SupplierPayablesDashboard() {
                 value={search}
                 onChange={handleSearchChange}
                 fullWidth
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Search size={16} color="#94a3b8" />
-                    </InputAdornment>
-                  )
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={16} color="#94a3b8" />
+                      </InputAdornment>
+                    )
+                  }
                 }}
               />
             </Grid>

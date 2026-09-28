@@ -355,9 +355,11 @@ export default function SuperBillBilling({
                 handleBarcodeScan(search);
               }
             }}
-            InputProps={{
-              startAdornment: <InputAdornment position="start">🔍</InputAdornment>,
-              sx: { borderRadius: 3, bgcolor: '#ffffff' }
+            slotProps={{
+              input: {
+                startAdornment: <InputAdornment position="start">🔍</InputAdornment>,
+                sx: { borderRadius: 3, bgcolor: '#ffffff' }
+              }
             }}
           />
         </Box>

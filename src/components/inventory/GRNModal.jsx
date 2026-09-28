@@ -3,7 +3,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, Grid, Table, TableHead, TableRow,
   TableCell, TableBody, Typography, Box, Paper, Chip,
-  Alert, CircularProgress, Divider, IconButton
+  Alert, CircularProgress, Divider, IconButton, TableContainer
 } from '@mui/material';
 import { X, PackageCheck, AlertTriangle, CheckCircle } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
@@ -174,7 +174,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
       onClose={onClose}
       maxWidth="xl"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 3, maxHeight: '95vh' } }}
+      slotProps={{ paper: { sx: { borderRadius: 3, maxHeight: '95vh' } } }}
     >
       <DialogTitle sx={{ pb: 1, borderBottom: '1px solid #e2e8f0' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -210,7 +210,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                   onChange={e => setGrnDate(e.target.value)}
                   fullWidth
                   size="small"
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{ inputLabel: { shrink: true } }}
                 />
               </Grid>
               <Grid size={{ xs: 12, sm: 4 }}>
@@ -376,7 +376,7 @@ export default function GRNModal({ open, onClose, onCreated, purchaseOrder }) {
                             updated[i] = { ...updated[i], expiry_date: e.target.value };
                             setRows(updated);
                           }}
-                          InputLabelProps={{ shrink: true }}
+                          slotProps={{ inputLabel: { shrink: true } }}
                           sx={{ width: 110 }}
                         />
                       </TableCell>

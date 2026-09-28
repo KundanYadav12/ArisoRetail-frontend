@@ -23,13 +23,21 @@ export function getBaseUrl() {
     if (custom && custom.trim()) {
       return custom.trim().replace(/\/+$/, '');
     }
+
+    // Dynamic origin detection for web production (e.g., https://retail.arisotechnologies.com)
+    if (window.location.protocol && window.location.protocol.startsWith('http') && window.location.hostname) {
+      return `${window.location.origin}/api`;
+    }
   }
   
-  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL !== '/api') {
-    return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
+    const envUrl = String(import.meta.env.VITE_API_URL).trim();
+    if (envUrl.startsWith('http://') || envUrl.startsWith('https://')) {
+      return envUrl.replace(/\/+$/, '');
+    }
   }
   
-  return 'https://arisoretail.duckdns.org/api';
+  return 'https://retail.arisotechnologies.com/api';
 }
 
 export function setCustomBaseUrl(url) {
@@ -146,9 +154,10 @@ export async function apiFetch(url, options = {}) {
     headers
   };
 
-  // Attach 4.5s timeout controller if no custom signal provided to prevent hanging requests when network is dead
-  const controller = typeof AbortController !== 'undefined' && !options.signal ? new AbortController() : null;
-  const timeoutId = controller ? setTimeout(() => controller.abort(), 4500) : null;
+  // Attach timeout controller if no custom signal provided to prevent hanging requests when network is dead
+  const timeoutMs = options.timeout !== undefined ? options.timeout : (fullUrl.includes('/printers') ? 10000 : 4500);
+  const controller = typeof AbortController !== 'undefined' && !options.signal && timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   if (controller) {
     fetchOptions.signal = controller.signal;
   }

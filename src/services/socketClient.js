@@ -7,7 +7,7 @@ export const getSocket = () => {
   if (!socket) {
     let socketUrl = getBaseUrl().replace(/\/api\/?$/, '');
     if (!socketUrl || socketUrl.startsWith('file:') || socketUrl === '') {
-      socketUrl = 'https://arisoretail.duckdns.org';
+      socketUrl = 'https://retail.arisotechnologies.com';
     }
     socket = io(socketUrl, {
       transports: ['websocket', 'polling'],

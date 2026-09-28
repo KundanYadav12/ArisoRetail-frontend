@@ -251,7 +251,7 @@ export default function StockAdjustmentModal({
                 required
                 value={adjustmentDate}
                 onChange={e => setAdjustmentDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
           </Grid>

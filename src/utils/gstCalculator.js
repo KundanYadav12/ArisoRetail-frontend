@@ -156,18 +156,6 @@ export const calculateLineItemTax = ({
 
   let taxableAmount = 0;
   let totalTax = 0;
-
-  if (isTaxExempt || effectiveGstRate <= 0) {
-    taxableAmount = amountAfterDiscount;
-    totalTax = 0;
-  } else if (gstMode === 'included') {
-    taxableAmount = round2(amountAfterDiscount / (1 + (effectiveGstRate / 100)));
-    totalTax = round2(amountAfterDiscount - taxableAmount);
-  } else {
-    taxableAmount = amountAfterDiscount;
-    totalTax = round2(taxableAmount * (effectiveGstRate / 100));
-  }
-
   let cgstRate = 0;
   let cgstAmount = 0;
   let sgstRate = 0;
@@ -175,17 +163,47 @@ export const calculateLineItemTax = ({
   let igstRate = 0;
   let igstAmount = 0;
 
-  if (totalTax > 0) {
+  if (isTaxExempt || effectiveGstRate <= 0) {
+    taxableAmount = amountAfterDiscount;
+    totalTax = 0;
+  } else if (gstMode === 'included') {
+    // When product price already includes GST:
+    // Taxable Subtotal = Inclusive Price ÷ (1 + GST Rate)
+    // Total GST = Inclusive Price - Taxable Subtotal
+    // CGST = Taxable Subtotal × (GST Rate ÷ 2)
+    // SGST = Taxable Subtotal × (GST Rate ÷ 2)
+    // Final Total = Original Inclusive Price
+    const rawTaxable = amountAfterDiscount / (1 + (effectiveGstRate / 100));
+    taxableAmount = round2(rawTaxable);
+
     if (taxType === 'inter') {
       igstRate = effectiveGstRate;
-      igstAmount = totalTax;
+      igstAmount = round2(amountAfterDiscount - rawTaxable);
+      totalTax = igstAmount;
     } else {
       const halfRate = round2(effectiveGstRate / 2);
-      const halfTax = round2(totalTax / 2);
       cgstRate = halfRate;
-      cgstAmount = halfTax;
       sgstRate = halfRate;
-      sgstAmount = round2(totalTax - halfTax);
+      cgstAmount = round2(rawTaxable * (halfRate / 100));
+      sgstAmount = round2(rawTaxable * (halfRate / 100));
+      totalTax = round2(cgstAmount + sgstAmount);
+    }
+  } else {
+    // GST-Excluded mode remains unchanged
+    taxableAmount = amountAfterDiscount;
+    totalTax = round2(taxableAmount * (effectiveGstRate / 100));
+    if (totalTax > 0) {
+      if (taxType === 'inter') {
+        igstRate = effectiveGstRate;
+        igstAmount = totalTax;
+      } else {
+        const halfRate = round2(effectiveGstRate / 2);
+        const halfTax = round2(totalTax / 2);
+        cgstRate = halfRate;
+        cgstAmount = halfTax;
+        sgstRate = halfRate;
+        sgstAmount = round2(totalTax - halfTax);
+      }
     }
   }
 
@@ -322,19 +340,30 @@ export const calculateDocumentTax = ({
   const addCharges = round2(parseFloat(additionalCharges) || 0);
 
   let rawGrandTotal = 0;
+  let roundOff = 0;
+  let roundedGrandTotal = 0;
+
   if (gstMode === 'included') {
+    // When product price already includes GST:
+    // Final Total = Original Inclusive Price
     rawGrandTotal = round2(Math.max(0, rawSubtotal - totalDiscount) + addCharges);
+    roundedGrandTotal = Math.round(rawGrandTotal);
+    // Component reconciliation: reconcile components (taxable subtotal + tax + charges) to the final inclusive price
+    const componentSum = round2(finalTaxable + finalTotalTax + addCharges);
+    roundOff = round2(roundedGrandTotal - componentSum);
   } else {
     rawGrandTotal = round2(finalTaxable + finalTotalTax + addCharges);
+    roundedGrandTotal = Math.round(rawGrandTotal);
+    roundOff = round2(roundedGrandTotal - rawGrandTotal);
   }
-
-  const roundedGrandTotal = Math.round(rawGrandTotal);
-  const roundOff = round2(roundedGrandTotal - rawGrandTotal);
 
   const slabs = Object.values(slabMap).sort((a, b) => a.rate - b.rate);
 
   return {
-    subtotal: rawSubtotal,
+    subtotal: gstMode === 'included' ? finalTaxable : rawSubtotal,
+    rawSubtotal,
+    inclusiveSubtotal: rawSubtotal,
+    taxableSubtotal: finalTaxable,
     discountAmount: totalDiscount,
     taxableAmount: finalTaxable,
     cgstAmount: finalCgst,

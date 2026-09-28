@@ -67,8 +67,6 @@ export default function HeldReceiptsModal({
     });
   }, [heldReceipts, searchQuery]);
 
-  if (!isOpen) return null;
-
   const colors = {
     bgModal: isDark ? '#1E293B' : '#FFFFFF',
     bgCard: isDark ? '#0F172A' : '#F8FAFC',
@@ -213,6 +211,8 @@ export default function HeldReceiptsModal({
       window.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [isOpen, filteredReceipts, selectedIndex, deleteConfirmTarget, resumeConflictTarget, onClose, currentCart]);
+
+  if (!isOpen) return null;
 
   return (
     <div style={styles.overlay} onClick={onClose}>

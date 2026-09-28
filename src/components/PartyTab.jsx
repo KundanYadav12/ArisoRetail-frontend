@@ -496,19 +496,21 @@ export default function PartyTab({
               placeholder="Search party by name, contact person, phone, GSTIN, or city..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search size={16} />
-                  </InputAdornment>
-                ),
-                endAdornment: searchTerm ? (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setSearchTerm('')}>
-                      <X size={14} />
-                    </IconButton>
-                  </InputAdornment>
-                ) : null
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Search size={16} />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchTerm ? (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearchTerm('')}>
+                        <X size={14} />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : null
+                }
               }}
             />
           </Paper>
@@ -765,19 +767,21 @@ export default function PartyTab({
               placeholder="Search customer receivables by name, phone, or GST..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search size={16} />
-                  </InputAdornment>
-                ),
-                endAdornment: searchTerm ? (
-                  <InputAdornment position="end">
-                    <IconButton size="small" onClick={() => setSearchTerm('')}>
-                      <X size={14} />
-                    </IconButton>
-                  </InputAdornment>
-                ) : null
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Search size={16} />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchTerm ? (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => setSearchTerm('')}>
+                        <X size={14} />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : null
+                }
               }}
             />
             <Button
@@ -1124,7 +1128,7 @@ export default function PartyTab({
         onClose={() => setPartyModalOpen(false)}
         maxWidth="md"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}
+        slotProps={{ paper: { sx: { borderRadius: 3 } } }}
       >
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
           {editingParty ? `Edit Party: ${editingParty.name}` : 'Add New Party / Dealer'}
@@ -1260,8 +1264,10 @@ export default function PartyTab({
                 placeholder="0.00"
                 value={creditLimit}
                 onChange={e => setCreditLimit(e.target.value)}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                slotProps={{
+                  input: {
+                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  }
                 }}
               />
             </Grid>
@@ -1305,8 +1311,10 @@ export default function PartyTab({
                 placeholder="0.00"
                 value={openingBalance}
                 onChange={e => setOpeningBalance(e.target.value)}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                slotProps={{
+                  input: {
+                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  }
                 }}
                 helperText="Receivable opening balance"
               />
@@ -1335,7 +1343,7 @@ export default function PartyTab({
         onClose={() => setHistoryModalOpen(false)}
         maxWidth="lg"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 3, maxHeight: '92vh' } }}
+        slotProps={{ paper: { sx: { borderRadius: 3, maxHeight: '92vh' } } }}
       >
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1, borderBottom: '1px solid #e2e8f0' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -1710,7 +1718,7 @@ export default function PartyTab({
         onClose={() => setPaymentModalOpen(false)}
         maxWidth="sm"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 2.5 } }}
+        slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}
       >
         <DialogTitle sx={{ fontWeight: 800 }}>
           Receive Payment — {selectedPartyForHistory?.name}
@@ -1748,8 +1756,10 @@ export default function PartyTab({
                       handleAutoAllocate(val);
                     }
                   }}
-                  InputProps={{
-                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  slotProps={{
+                    input: {
+                      startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                    }
                   }}
                   autoFocus
                 />
@@ -1862,7 +1872,9 @@ export default function PartyTab({
                                     [inv.id]: val === '' ? '' : num
                                   }));
                                 }}
-                                inputProps={{ min: 0, max: due, style: { textAlign: 'right', padding: '4px 6px', fontSize: '0.8rem', fontWeight: 700 } }}
+                                slotProps={{
+                                  htmlInput: { min: 0, max: due, style: { textAlign: 'right', padding: '4px 6px', fontSize: '0.8rem', fontWeight: 700 } }
+                                }}
                               />
                             </TableCell>
                           </TableRow>

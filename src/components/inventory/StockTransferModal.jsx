@@ -3,7 +3,8 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, Grid, Autocomplete, Table,
   TableHead, TableRow, TableCell, TableBody,
-  IconButton, Typography, Box, Paper, Chip, Alert
+  IconButton, Typography, Box, Paper, Chip, Alert,
+  FormControl, Select, MenuItem
 } from '@mui/material';
 import { X, Plus, Trash2, ArrowRight, Truck, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
@@ -250,7 +251,7 @@ export default function StockTransferModal({
                 required
                 value={transferDate}
                 onChange={e => setTransferDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
 
@@ -264,7 +265,7 @@ export default function StockTransferModal({
                 value={sourceWhId}
                 onChange={e => setSourceWhId(e.target.value)}
                 disabled={Boolean(prefilledRequest)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">-- Select Source --</option>
                 {warehouses.map(w => (
@@ -287,7 +288,7 @@ export default function StockTransferModal({
                 value={destinationWhId}
                 onChange={e => setDestinationWhId(e.target.value)}
                 disabled={Boolean(prefilledRequest)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">-- Select Destination --</option>
                 {warehouses.map(w => (

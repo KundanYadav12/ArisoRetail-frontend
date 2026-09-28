@@ -184,12 +184,14 @@ export default function WarehouseRacksTab({
               placeholder="Search by rack code, name, zone, shelf, bin..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search size={16} />
-                  </InputAdornment>
-                )
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Search size={16} />
+                    </InputAdornment>
+                  )
+                }
               }}
             />
           </Grid>

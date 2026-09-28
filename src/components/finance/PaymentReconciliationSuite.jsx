@@ -389,7 +389,7 @@ export default function PaymentReconciliationSuite({ user }) {
 
       {/* 3. Filter Bar */}
       <Paper variant="outlined" sx={{ p: 2, mb: 2.5, borderRadius: 2 }}>
-        <Grid container spacing={1.5} alignItems="center">
+        <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
           <Grid item xs={12} sm={6} md={2}>
             <TextField
               type="date"
@@ -398,7 +398,7 @@ export default function PaymentReconciliationSuite({ user }) {
               fullWidth
               value={filters.dateFrom}
               onChange={e => setFilters(prev => ({ ...prev, dateFrom: e.target.value }))}
-              InputLabelProps={{ shrink: true }}
+              slotProps={{ inputLabel: { shrink: true } }}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={2}>
@@ -409,7 +409,7 @@ export default function PaymentReconciliationSuite({ user }) {
               fullWidth
               value={filters.dateTo}
               onChange={e => setFilters(prev => ({ ...prev, dateTo: e.target.value }))}
-              InputLabelProps={{ shrink: true }}
+              slotProps={{ inputLabel: { shrink: true } }}
             />
           </Grid>
           <Grid item xs={12} sm={6} md={2}>

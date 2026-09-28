@@ -118,7 +118,7 @@ export default function AdjustSupplierAdvanceModal({ open, onClose, supplier, on
       onClose={onClose}
       maxWidth="sm"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 3 } }}
+      slotProps={{ paper: { sx: { borderRadius: 3 } } }}
     >
       <DialogTitle sx={{ pb: 1, borderBottom: '1px solid #e2e8f0' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -205,7 +205,7 @@ export default function AdjustSupplierAdvanceModal({ open, onClose, supplier, on
               fullWidth
               size="small"
               required
-              inputProps={{ min: 0.01, max: maxAdjustable, step: 0.01 }}
+              slotProps={{ htmlInput: { min: 0.01, max: maxAdjustable, step: 0.01 } }}
               helperText={`Maximum adjustable: ₹${maxAdjustable.toFixed(2)}`}
             />
 

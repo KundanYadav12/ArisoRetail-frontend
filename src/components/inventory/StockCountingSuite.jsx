@@ -297,12 +297,14 @@ export default function StockCountingSuite({
                   placeholder="Search by session #, product, staff..."
                   value={sessionSearch}
                   onChange={(e) => setSessionSearch(e.target.value)}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <Search size={16} />
-                      </InputAdornment>
-                    )
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <Search size={16} />
+                        </InputAdornment>
+                      )
+                    }
                   }}
                 />
               </Grid>

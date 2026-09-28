@@ -175,7 +175,7 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
                 required
                 value={requestingWhId}
                 onChange={e => setRequestingWhId(e.target.value)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">Select Destination...</option>
                 {warehouses.map(w => (
@@ -197,7 +197,7 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
                 required
                 value={sourceWhId}
                 onChange={e => setSourceWhId(e.target.value)}
-                SelectProps={{ native: true }}
+                slotProps={{ select: { native: true } }}
               >
                 <option value="">Select Source Warehouse...</option>
                 {warehouses.map(w => (
@@ -214,7 +214,7 @@ export default function StockRequestModal({ open, onClose, onCreated, warehouses
                 size="small"
                 value={requestDate}
                 onChange={e => setRequestDate(e.target.value)}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
           </Grid>

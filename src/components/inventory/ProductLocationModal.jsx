@@ -188,12 +188,14 @@ export default function ProductLocationModal({
                 placeholder="Search transactions by reference, rack code, user..."
                 value={timelineSearch}
                 onChange={(e) => setTimelineSearch(e.target.value)}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Search size={16} />
-                    </InputAdornment>
-                  )
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={16} />
+                      </InputAdornment>
+                    )
+                  }
                 }}
               />
             </Box>

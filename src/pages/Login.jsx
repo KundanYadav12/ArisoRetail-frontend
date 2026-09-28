@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Eye, EyeOff, Server, Globe, Laptop, Settings, Check } from 'lucide-react';
+import { Eye, EyeOff, Server, Globe, Laptop, Settings, Check, KeyRound } from 'lucide-react';
 import OTPVerification from './OTPVerification';
+import LicenseRegisterModal from '../components/LicenseRegisterModal';
 import { getApiUrl, getBaseUrl, setCustomBaseUrl } from '../utils/api';
 import { cacheUserCredentials, verifyOfflineLogin } from '../utils/offlineAuthService';
 import { SyncService } from '../utils/syncService';
@@ -18,6 +19,7 @@ export default function Login({ onLoginSuccess }) {
 
   // Server Switcher Modal state
   const [serverModalOpen, setServerModalOpen] = useState(false);
+  const [licenseModalOpen, setLicenseModalOpen] = useState(false);
   const [currentServerUrl, setCurrentServerUrl] = useState(getBaseUrl());
   const [customServerInput, setCustomServerInput] = useState(localStorage.getItem('ARISO_API_SERVER_URL') || '');
 
@@ -189,8 +191,11 @@ export default function Login({ onLoginSuccess }) {
     if (isPrimaryUnavailable) {
       const isLocalHost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
       if (!isLocalHost) {
+        const prodCloudUrl = typeof window !== 'undefined' && window.location.protocol && window.location.protocol.startsWith('http') && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+          ? `${window.location.origin}/api`
+          : 'https://retail.arisotechnologies.com/api';
         const fallbackUrl = primaryUrl.includes('localhost')
-          ? 'https://arisoretail.duckdns.org/api'
+          ? prodCloudUrl
           : 'http://localhost:5005/api';
 
         console.warn(`[Login] Primary server (${primaryUrl}) unavailable. Trying fallback (${fallbackUrl})...`);
@@ -273,7 +278,7 @@ export default function Login({ onLoginSuccess }) {
     );
   }
 
-  const isCloud = currentServerUrl.includes('duckdns.org') || currentServerUrl.includes('https://');
+  const isCloud = currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org') || currentServerUrl.includes('https://');
   const isLocal = currentServerUrl.includes('localhost') || currentServerUrl.includes('127.0.0.1');
 
   return (
@@ -479,6 +484,47 @@ export default function Login({ onLoginSuccess }) {
               ⚡ Log In Offline (Local Mode)
             </button>
           </div>
+
+          {/* Create New Account using Licence ID Option */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px',
+            marginTop: '4px',
+            paddingTop: '12px',
+            borderTop: '1px dashed #e2e8f0',
+            flexWrap: 'wrap'
+          }}>
+            <span style={{ fontSize: '12.5px', color: '#64748b', fontWeight: '500' }}>
+              New Store or Outlet?
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setError('');
+                setLicenseModalOpen(true);
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#ea580c',
+                fontSize: '13px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                padding: '2px 4px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                textDecoration: 'none'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+            >
+              <KeyRound size={14} color="#ea580c" />
+              Create New Account using Licence ID
+            </button>
+          </div>
         </form>
 
         {/* Server Indicator & Switcher Button */}
@@ -574,15 +620,15 @@ export default function Login({ onLoginSuccess }) {
               {/* Cloud Option */}
               <button
                 type="button"
-                onClick={() => handleSelectServer('https://arisoretail.duckdns.org/api')}
+                onClick={() => handleSelectServer('https://retail.arisotechnologies.com/api')}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: currentServerUrl.includes('duckdns.org') ? '2px solid #0284c7' : '1px solid #cbd5e1',
-                  backgroundColor: currentServerUrl.includes('duckdns.org') ? '#f0f9ff' : '#ffffff',
+                  border: (currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) ? '2px solid #0284c7' : '1px solid #cbd5e1',
+                  backgroundColor: (currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) ? '#f0f9ff' : '#ffffff',
                   cursor: 'pointer',
                   textAlign: 'left'
                 }}
@@ -591,10 +637,10 @@ export default function Login({ onLoginSuccess }) {
                   <Globe size={18} color="#0284c7" />
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>Cloud Server (Production)</div>
-                    <div style={{ fontSize: '11px', color: '#64748b' }}>https://arisoretail.duckdns.org/api</div>
+                    <div style={{ fontSize: '11px', color: '#64748b' }}>https://retail.arisotechnologies.com/api</div>
                   </div>
                 </div>
-                {currentServerUrl.includes('duckdns.org') && <Check size={16} color="#0284c7" />}
+                {(currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) && <Check size={16} color="#0284c7" />}
               </button>
 
               {/* Localhost Option */}
@@ -682,6 +728,23 @@ export default function Login({ onLoginSuccess }) {
           </div>
         </div>
       )}
+
+      {/* License Registration Modal */}
+      <LicenseRegisterModal
+        isOpen={licenseModalOpen}
+        onClose={() => setLicenseModalOpen(false)}
+        onRegisterSuccess={(newUser, newToken, registeredEmail) => {
+          setLicenseModalOpen(false);
+          if (registeredEmail) {
+            setEmail(registeredEmail);
+          } else if (newUser?.email) {
+            setEmail(newUser.email);
+          }
+          if (newUser && newToken && onLoginSuccess) {
+            onLoginSuccess(newUser, newToken);
+          }
+        }}
+      />
     </div>
   );
 }

@@ -56,11 +56,20 @@ import { useNotify } from '../context/NotificationContext';
 import { GST_STATE_CODES, validateGstin } from '../utils/gstCalculator';
 import CreditNoteModal from './CreditNoteModal';
 
-export default function GstDashboard() {
+export default function GstDashboard({
+  activeTab: controlledGstTab,
+  onTabChange: onGstTabChange,
+  hideTabs = false
+} = {}) {
   const { notify } = useNotify();
 
   // Navigation tab within GST suite
-  const [activeGstTab, setActiveGstTab] = useState(0);
+  const [internalGstTab, setInternalGstTab] = useState(0);
+  const activeGstTab = (controlledGstTab !== undefined && controlledGstTab !== null) ? controlledGstTab : internalGstTab;
+  const setActiveGstTab = (val) => {
+    setInternalGstTab(val);
+    if (onGstTabChange) onGstTabChange(val);
+  };
 
   // Date Range Filters
   const [datePreset, setDatePreset] = useState('month');
@@ -75,6 +84,7 @@ export default function GstDashboard() {
   const [summaryData, setSummaryData] = useState(null);
   const [gstr1Data, setGstr1Data] = useState(null);
   const [gstr2Data, setGstr2Data] = useState(null);
+  const [gstr3bData, setGstr3bData] = useState(null);
   const [hsnData, setHsnData] = useState(null);
   const [creditNotes, setCreditNotes] = useState([]);
   const [gstSettings, setGstSettings] = useState({
@@ -156,9 +166,10 @@ export default function GstDashboard() {
       if (activeGstTab === 0) fetchSummary();
       else if (activeGstTab === 1) fetchGstr1();
       else if (activeGstTab === 2) fetchGstr2();
-      else if (activeGstTab === 3) fetchHsnSummary();
-      else if (activeGstTab === 4) fetchGstr1(); // E-Invoice Hub uses B2B orders from GSTR-1
-      else if (activeGstTab === 5) fetchCreditNotes();
+      else if (activeGstTab === 3) fetchGstr3b();
+      else if (activeGstTab === 4) fetchHsnSummary();
+      else if (activeGstTab === 5) fetchGstr1(); // E-Invoice Hub uses B2B orders from GSTR-1
+      else if (activeGstTab === 6) fetchCreditNotes();
     }
   }, [activeGstTab, dateFrom, dateTo]);
 
@@ -191,7 +202,8 @@ export default function GstDashboard() {
     try {
       const res = await apiFetch(`/api/gst/dashboard?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
       if (res.ok) {
-        setSummaryData(await res.json());
+        const data = await res.json();
+        setSummaryData(data.summary || data);
       }
     } catch (err) {
       notify.error('Failed to load GST liability summary', 'Error');
@@ -205,7 +217,8 @@ export default function GstDashboard() {
     try {
       const res = await apiFetch(`/api/gst/gstr-1?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
       if (res.ok) {
-        setGstr1Data(await res.json());
+        const data = await res.json();
+        setGstr1Data(data.report || data);
       }
     } catch (err) {
       notify.error('Failed to load GSTR-1 report', 'Error');
@@ -219,10 +232,30 @@ export default function GstDashboard() {
     try {
       const res = await apiFetch(`/api/gst/gstr-2?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
       if (res.ok) {
-        setGstr2Data(await res.json());
+        const data = await res.json();
+        const r = data.report || data;
+        setGstr2Data({
+          ...r,
+          inwardSupplies: r.inwardSupplies || r.purchases || []
+        });
       }
     } catch (err) {
       notify.error('Failed to load GSTR-2 report', 'Error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchGstr3b = async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/api/gst/gstr-3b?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setGstr3bData(data.report || data);
+      }
+    } catch (err) {
+      notify.error('Failed to load GSTR-3B report', 'Error');
     } finally {
       setLoading(false);
     }
@@ -233,7 +266,9 @@ export default function GstDashboard() {
     try {
       const res = await apiFetch(`/api/gst/hsn-summary?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
       if (res.ok) {
-        setHsnData(await res.json());
+        const data = await res.json();
+        const r = data.report || data;
+        setHsnData(r);
       }
     } catch (err) {
       notify.error('Failed to load HSN summary', 'Error');
@@ -248,7 +283,7 @@ export default function GstDashboard() {
       const res = await apiFetch(`/api/gst/credit-notes?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
       if (res.ok) {
         const data = await res.json();
-        setCreditNotes(Array.isArray(data) ? data : data.credit_notes || []);
+        setCreditNotes(Array.isArray(data) ? data : (data.creditNotes || data.credit_notes || []));
       }
     } catch (err) {
       notify.error('Failed to load Credit Notes', 'Error');
@@ -282,6 +317,21 @@ export default function GstDashboard() {
       notify.success('GSTR-2 Excel downloaded successfully.', 'Export Complete');
     } catch (err) {
       notify.error(err.message || 'Failed to export GSTR-2 Excel', 'Export Error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleExportGstr3bExcel = async () => {
+    setExporting(true);
+    try {
+      await downloadFile(
+        `/api/gst/gstr-3b/export-excel?date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`,
+        `GSTR3B_Report_${Date.now()}.xlsx`
+      );
+      notify.success('GSTR-3B Excel downloaded successfully.', 'Export Complete');
+    } catch (err) {
+      notify.error(err.message || 'Failed to export GSTR-3B Excel', 'Export Error');
     } finally {
       setExporting(false);
     }
@@ -432,8 +482,10 @@ export default function GstDashboard() {
                 if (activeGstTab === 0) fetchSummary();
                 else if (activeGstTab === 1) fetchGstr1();
                 else if (activeGstTab === 2) fetchGstr2();
-                else if (activeGstTab === 3) fetchHsnSummary();
-                else if (activeGstTab === 5) fetchCreditNotes();
+                else if (activeGstTab === 3) fetchGstr3b();
+                else if (activeGstTab === 4) fetchHsnSummary();
+                else if (activeGstTab === 5) fetchGstr1();
+                else if (activeGstTab === 6) fetchCreditNotes();
               }}
               sx={{ fontWeight: 700, borderRadius: 2 }}
             >
@@ -451,7 +503,21 @@ export default function GstDashboard() {
           </Grid>
           <Grid item xs={12} sm={3}>
             <span style={{ color: '#64748b' }}>GSTIN: </span>
-            <b>{gstSettings.gst_number || 'Not Configured'}</b>
+            {gstSettings.gst_number ? (
+              <b style={{ color: '#16a34a' }}>{gstSettings.gst_number}</b>
+            ) : (
+              <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                <span style={{ color: '#d97706', fontWeight: 700 }}>Not Configured</span>
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() => setActiveGstTab(7)}
+                  sx={{ p: 0, minWidth: 'auto', fontSize: '0.75rem', fontWeight: 800, textTransform: 'none' }}
+                >
+                  (Configure)
+                </Button>
+              </Box>
+            )}
           </Grid>
           <Grid item xs={12} sm={3}>
             <span style={{ color: '#64748b' }}>State (Code): </span>
@@ -462,11 +528,16 @@ export default function GstDashboard() {
             <b>Store Code ({gstSettings.state_code})</b>
           </Grid>
         </Grid>
+        {!gstSettings.gst_number && (
+          <Alert severity="info" sx={{ mt: 1.5, py: 0.5, px: 1.5, fontSize: '0.8rem', borderRadius: 2 }}>
+            <b>Tax Reporting is Active:</b> All POS sales, Sales Orders, and ITC purchase bills are automatically aggregated below. Configure your business GSTIN in the <b>GST Profile Settings</b> tab to enable filing-ready portal exports.
+          </Alert>
+        )}
       </Paper>
 
       {/* Date Range Selector Toolbar */}
       <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
-        <Grid container spacing={2} alignItems="center">
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
           <Grid item xs={12} sm={3}>
             <FormControl fullWidth size="small">
               <InputLabel>Date Range Preset</InputLabel>
@@ -496,7 +567,7 @@ export default function GstDashboard() {
                 setDatePreset('custom');
                 setDateFrom(e.target.value ? e.target.value.replace('T', ' ') + ':00' : '');
               }}
-              InputLabelProps={{ shrink: true }}
+              slotProps={{ inputLabel: { shrink: true } }}
             />
           </Grid>
 
@@ -511,7 +582,7 @@ export default function GstDashboard() {
                 setDatePreset('custom');
                 setDateTo(e.target.value ? e.target.value.replace('T', ' ') + ':59' : '');
               }}
-              InputLabelProps={{ shrink: true }}
+              slotProps={{ inputLabel: { shrink: true } }}
             />
           </Grid>
 
@@ -540,38 +611,53 @@ export default function GstDashboard() {
                 Export GSTR-2
               </Button>
             )}
+            {activeGstTab === 3 && (
+              <Button
+                variant="contained"
+                color="success"
+                startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <Download size={16} />}
+                onClick={handleExportGstr3bExcel}
+                disabled={exporting}
+                sx={{ fontWeight: 800 }}
+              >
+                Export GSTR-3B
+              </Button>
+            )}
           </Grid>
         </Grid>
       </Paper>
 
       {/* Tabs Navigation */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs
-          value={activeGstTab}
-          onChange={(e, val) => setActiveGstTab(val)}
-          variant="scrollable"
-          scrollButtons="auto"
-          textColor="primary"
-          indicatorColor="primary"
-          sx={{
-            '& .MuiTab-root': {
-              fontWeight: 800,
-              textTransform: 'none',
-              fontSize: '0.9rem',
-              minHeight: 48,
-              px: 2.5
-            }
-          }}
-        >
-          <Tab icon={<TrendingUp size={16} />} iconPosition="start" label="Net GST Liability" value={0} />
-          <Tab icon={<FileText size={16} />} iconPosition="start" label="GSTR-1 (Sales)" value={1} />
-          <Tab icon={<FileSpreadsheet size={16} />} iconPosition="start" label="GSTR-2 (Purchases / ITC)" value={2} />
-          <Tab icon={<HelpCircle size={16} />} iconPosition="start" label="HSN / SAC Summary" value={3} />
-          <Tab icon={<Truck size={16} />} iconPosition="start" label="E-Invoice & E-Way Bill" value={4} />
-          <Tab icon={<RotateCcw size={16} />} iconPosition="start" label="Credit Notes Register" value={5} />
-          <Tab icon={<Settings size={16} />} iconPosition="start" label="GST Profile Settings" value={6} />
-        </Tabs>
-      </Box>
+      {!hideTabs && (
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs
+            value={activeGstTab}
+            onChange={(e, val) => setActiveGstTab(val)}
+            variant="scrollable"
+            scrollButtons="auto"
+            textColor="primary"
+            indicatorColor="primary"
+            sx={{
+              '& .MuiTab-root': {
+                fontWeight: 800,
+                textTransform: 'none',
+                fontSize: '0.9rem',
+                minHeight: 48,
+                px: 2.5
+              }
+            }}
+          >
+            <Tab icon={<TrendingUp size={16} />} iconPosition="start" label="Net GST Liability" value={0} />
+            <Tab icon={<FileText size={16} />} iconPosition="start" label="GSTR-1 (Sales)" value={1} />
+            <Tab icon={<FileSpreadsheet size={16} />} iconPosition="start" label="GSTR-2 (Purchases / ITC)" value={2} />
+            <Tab icon={<ShieldCheck size={16} />} iconPosition="start" label="GSTR-3B (Monthly Summary)" value={3} />
+            <Tab icon={<HelpCircle size={16} />} iconPosition="start" label="HSN / SAC Summary" value={4} />
+            <Tab icon={<Truck size={16} />} iconPosition="start" label="E-Invoice & E-Way Bill" value={5} />
+            <Tab icon={<RotateCcw size={16} />} iconPosition="start" label="Credit Notes Register" value={6} />
+            <Tab icon={<Settings size={16} />} iconPosition="start" label="GST Profile Settings" value={7} />
+          </Tabs>
+        </Box>
+      )}
 
       {/* --- TAB 0: NET GST LIABILITY DASHBOARD --- */}
       {activeGstTab === 0 && (
@@ -847,12 +933,12 @@ export default function GstDashboard() {
                           <TableCell>{bill.supplier_name}</TableCell>
                           <TableCell sx={{ fontWeight: 700 }}>{bill.bill_number}</TableCell>
                           <TableCell>{new Date(bill.bill_date).toLocaleDateString()}</TableCell>
-                          <TableCell align="right">₹{parseFloat(bill.taxable_amount || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(bill.taxable_amount || bill.taxable_value || 0).toFixed(2)}</TableCell>
                           <TableCell align="right">₹{parseFloat(bill.cgst_amount || 0).toFixed(2)}</TableCell>
                           <TableCell align="right">₹{parseFloat(bill.sgst_amount || 0).toFixed(2)}</TableCell>
                           <TableCell align="right">₹{parseFloat(bill.igst_amount || 0).toFixed(2)}</TableCell>
                           <TableCell align="right" sx={{ fontWeight: 800 }}>
-                            ₹{parseFloat(bill.total_amount || 0).toFixed(2)}
+                            ₹{parseFloat(bill.total_amount || bill.invoice_value || 0).toFixed(2)}
                           </TableCell>
                           <TableCell>
                             <Chip label="Inputs" color="success" size="small" sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
@@ -874,8 +960,272 @@ export default function GstDashboard() {
         </Box>
       )}
 
-      {/* --- TAB 3: HSN SUMMARY --- */}
+      {/* --- TAB 3: GSTR-3B (MONTHLY SUMMARY RETURN) --- */}
       {activeGstTab === 3 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+          {loading && <CircularProgress sx={{ alignSelf: 'center', my: 4 }} />}
+
+          {!loading && gstr3bData && (
+            <>
+              {/* Statutory Summary Cards */}
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card variant="outlined" sx={{ borderRadius: 2.5, bgcolor: 'rgba(59, 130, 246, 0.04)' }}>
+                    <CardContent sx={{ pb: 2 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase' }}>
+                        3.1 Net Outward Taxable Value
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'primary.main' }}>
+                        ₹{parseFloat(gstr3bData.table3_1?.total?.taxable_value || 0).toFixed(2)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Total Output Tax: ₹{parseFloat(gstr3bData.table3_1?.total?.total_tax || 0).toFixed(2)}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card variant="outlined" sx={{ borderRadius: 2.5, bgcolor: 'rgba(34, 197, 94, 0.04)' }}>
+                    <CardContent sx={{ pb: 2 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase' }}>
+                        4. Net Eligible ITC Available
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'success.main' }}>
+                        ₹{parseFloat(gstr3bData.table4_itc?.net_itc?.total || 0).toFixed(2)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        CGST: ₹{parseFloat(gstr3bData.table4_itc?.net_itc?.cgst || 0).toFixed(2)} | SGST: ₹{parseFloat(gstr3bData.table4_itc?.net_itc?.sgst || 0).toFixed(2)}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card variant="outlined" sx={{ borderRadius: 2.5, bgcolor: 'rgba(249, 115, 22, 0.04)' }}>
+                    <CardContent sx={{ pb: 2 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase' }}>
+                        5.1 ITC Utilized for Output
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'warning.main' }}>
+                        ₹{parseFloat(gstr3bData.table5_payment?.total?.itc_paid || 0).toFixed(2)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Set-off against Output GST
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={3}>
+                  <Card variant="outlined" sx={{ borderRadius: 2.5, bgcolor: 'rgba(239, 68, 68, 0.04)', borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+                    <CardContent sx={{ pb: 2 }}>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 800, textTransform: 'uppercase' }}>
+                        5.1 Net Tax Paid in Cash
+                      </Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 900, mt: 0.5, color: 'error.main' }}>
+                        ₹{parseFloat(gstr3bData.table5_payment?.total?.cash_paid || 0).toFixed(2)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Challan / PMT-06 Cash Liability
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+
+              {/* Table 3.1: Details of Outward Supplies */}
+              <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2.5 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                    3.1 Details of Outward Supplies and Inward Supplies Liable to Reverse Charge
+                  </Typography>
+                  <Chip label="Filing Ready" color="success" size="small" sx={{ fontWeight: 800, fontSize: '0.7rem' }} />
+                </Box>
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: 'action.hover' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 800, width: '40%' }}>Nature of Supplies</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Total Taxable Value</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Integrated Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Central Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">State/UT Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Cess</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {[
+                        gstr3bData.table3_1?.outward_taxable,
+                        gstr3bData.table3_1?.zero_rated,
+                        gstr3bData.table3_1?.nil_exempt,
+                        gstr3bData.table3_1?.reverse_charge,
+                        gstr3bData.table3_1?.non_gst
+                      ].filter(Boolean).map((row, idx) => (
+                        <TableRow key={idx} hover>
+                          <TableCell sx={{ fontWeight: 600 }}>{row.nature || '-'}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.taxable_value || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.igst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.sgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cess || 0).toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {gstr3bData.table3_1?.total && (
+                        <TableRow sx={{ bgcolor: 'action.selected' }}>
+                          <TableCell sx={{ fontWeight: 900 }}>Total Outward Supplies</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>
+                            ₹{parseFloat(gstr3bData.table3_1.total.taxable_value || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>
+                            ₹{parseFloat(gstr3bData.table3_1.total.igst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>
+                            ₹{parseFloat(gstr3bData.table3_1.total.cgst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>
+                            ₹{parseFloat(gstr3bData.table3_1.total.sgst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>₹0.00</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Paper>
+
+              {/* Table 4: Eligible ITC */}
+              <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2.5 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 1.5 }}>
+                  4. Eligible Input Tax Credit (ITC)
+                </Typography>
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: 'action.hover' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 800, width: '40%' }}>Details</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Integrated Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Central Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">State/UT Tax</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Cess</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      <TableRow sx={{ bgcolor: 'action.hover' }}>
+                        <TableCell colSpan={5} sx={{ fontWeight: 800, color: 'primary.main' }}>
+                          (A) ITC Available (whether in full or part)
+                        </TableCell>
+                      </TableRow>
+                      {gstr3bData.table4_itc?.itc_available && Object.values(gstr3bData.table4_itc.itc_available).map((row, idx) => (
+                        <TableRow key={idx} hover>
+                          <TableCell sx={{ pl: 4, fontWeight: 500 }}>{row.nature}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.igst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.sgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cess || 0).toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+
+                      <TableRow sx={{ bgcolor: 'action.hover' }}>
+                        <TableCell colSpan={5} sx={{ fontWeight: 800, color: 'error.main' }}>
+                          (B) ITC Reversed
+                        </TableCell>
+                      </TableRow>
+                      {gstr3bData.table4_itc?.itc_reversed && Object.values(gstr3bData.table4_itc.itc_reversed).map((row, idx) => (
+                        <TableRow key={idx} hover>
+                          <TableCell sx={{ pl: 4, fontWeight: 500 }}>{row.nature}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.igst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.sgst || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(row.cess || 0).toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+
+                      {gstr3bData.table4_itc?.net_itc && (
+                        <TableRow sx={{ bgcolor: 'rgba(34, 197, 94, 0.08)' }}>
+                          <TableCell sx={{ fontWeight: 900, color: 'success.dark' }}>
+                            (C) Net ITC Available (A - B)
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'success.dark' }}>
+                            ₹{parseFloat(gstr3bData.table4_itc.net_itc.igst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'success.dark' }}>
+                            ₹{parseFloat(gstr3bData.table4_itc.net_itc.cgst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'success.dark' }}>
+                            ₹{parseFloat(gstr3bData.table4_itc.net_itc.sgst || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'success.dark' }}>₹0.00</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Paper>
+
+              {/* Table 5.1: Payment of Tax */}
+              <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2.5 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800, mb: 1.5 }}>
+                  5.1 Payment of Tax (Discharge of Liability)
+                </Typography>
+                <TableContainer>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: 'action.hover' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 800 }}>Description</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Total Tax Payable</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Paid through ITC</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Tax Paid in Cash</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Interest Paid</TableCell>
+                        <TableCell sx={{ fontWeight: 800 }} align="right">Late Fee</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {gstr3bData.table5_payment && [
+                        { label: 'Integrated Tax (IGST)', data: gstr3bData.table5_payment.igst },
+                        { label: 'Central Tax (CGST)', data: gstr3bData.table5_payment.cgst },
+                        { label: 'State/UT Tax (SGST)', data: gstr3bData.table5_payment.sgst }
+                      ].map((item, idx) => (
+                        <TableRow key={idx} hover>
+                          <TableCell sx={{ fontWeight: 700 }}>{item.label}</TableCell>
+                          <TableCell align="right">₹{parseFloat(item.data?.tax_payable || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right" sx={{ color: 'warning.main', fontWeight: 600 }}>
+                            ₹{parseFloat(item.data?.itc_paid || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ color: 'error.main', fontWeight: 700 }}>
+                            ₹{parseFloat(item.data?.cash_paid || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right">₹{parseFloat(item.data?.interest || 0).toFixed(2)}</TableCell>
+                          <TableCell align="right">₹{parseFloat(item.data?.late_fee || 0).toFixed(2)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {gstr3bData.table5_payment?.total && (
+                        <TableRow sx={{ bgcolor: 'action.selected' }}>
+                          <TableCell sx={{ fontWeight: 900 }}>Total Liability Discharged</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>
+                            ₹{parseFloat(gstr3bData.table5_payment.total.tax_payable || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'warning.dark' }}>
+                            ₹{parseFloat(gstr3bData.table5_payment.total.itc_paid || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900, color: 'error.dark' }}>
+                            ₹{parseFloat(gstr3bData.table5_payment.total.cash_paid || 0).toFixed(2)}
+                          </TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>₹0.00</TableCell>
+                          <TableCell align="right" sx={{ fontWeight: 900 }}>₹0.00</TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Paper>
+            </>
+          )}
+        </Box>
+      )}
+
+      {/* --- TAB 4: HSN SUMMARY --- */}
+      {activeGstTab === 4 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           {loading && <CircularProgress sx={{ alignSelf: 'center', my: 4 }} />}
 
@@ -929,8 +1279,8 @@ export default function GstDashboard() {
         </Box>
       )}
 
-      {/* --- TAB 4: E-INVOICE & E-WAY BILL HUB --- */}
-      {activeGstTab === 4 && (
+      {/* --- TAB 5: E-INVOICE & E-WAY BILL HUB --- */}
+      {activeGstTab === 5 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2.5 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -1001,11 +1351,11 @@ export default function GstDashboard() {
                                 variant="outlined"
                                 color="error"
                                 onClick={() => setCancelDialog({
-                                  open: true,
-                                  orderId: inv.order_id,
-                                  docType: 'einvoice',
-                                  reason: '1',
-                                  remarks: ''
+                                   open: true,
+                                   orderId: inv.order_id,
+                                   docType: 'einvoice',
+                                   reason: '1',
+                                   remarks: ''
                                 })}
                                 sx={{ fontSize: '0.72rem', fontWeight: 700, py: 0.3 }}
                               >
@@ -1061,8 +1411,8 @@ export default function GstDashboard() {
         </Box>
       )}
 
-      {/* --- TAB 5: CREDIT NOTES REGISTER --- */}
-      {activeGstTab === 5 && (
+      {/* --- TAB 6: CREDIT NOTES REGISTER --- */}
+      {activeGstTab === 6 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           {loading && <CircularProgress sx={{ alignSelf: 'center', my: 4 }} />}
 
@@ -1139,8 +1489,8 @@ export default function GstDashboard() {
         </Box>
       )}
 
-      {/* --- TAB 6: GST PROFILE SETTINGS --- */}
-      {activeGstTab === 6 && (
+      {/* --- TAB 7: GST PROFILE SETTINGS --- */}
+      {activeGstTab === 7 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
           <Paper variant="outlined" sx={{ p: 3, borderRadius: 2.5 }}>
             <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
@@ -1340,7 +1690,7 @@ export default function GstDashboard() {
         open={creditNoteModalOpen}
         onClose={() => setCreditNoteModalOpen(false)}
         onSuccess={() => {
-          if (activeGstTab === 5) fetchCreditNotes();
+          if (activeGstTab === 6) fetchCreditNotes();
           if (activeGstTab === 0) fetchSummary();
         }}
       />

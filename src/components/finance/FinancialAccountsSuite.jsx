@@ -636,12 +636,14 @@ export default function FinancialAccountsSuite() {
               size="small"
               value={accountSearch}
               onChange={(e) => setAccountSearch(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <Search size={18} color="#64748b" />
-                  </InputAdornment>
-                )
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Search size={18} color="#64748b" />
+                    </InputAdornment>
+                  )
+                }
               }}
               sx={{ width: { xs: '100%', sm: 350 } }}
             />
@@ -763,7 +765,7 @@ export default function FinancialAccountsSuite() {
         <Box>
           {/* Ledger Filter Bar */}
           <Paper sx={{ p: 2, mb: 3, borderRadius: 2 }}>
-            <Grid container spacing={2} alignItems="center">
+            <Grid container spacing={2} sx={{ alignItems: 'center' }}>
               <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth size="small">
                   <InputLabel>Account</InputLabel>
@@ -793,7 +795,7 @@ export default function FinancialAccountsSuite() {
                   type="date"
                   value={ledgerDateFrom}
                   onChange={(e) => setLedgerDateFrom(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{ inputLabel: { shrink: true } }}
                 />
               </Grid>
 
@@ -805,7 +807,7 @@ export default function FinancialAccountsSuite() {
                   type="date"
                   value={ledgerDateTo}
                   onChange={(e) => setLedgerDateTo(e.target.value)}
-                  InputLabelProps={{ shrink: true }}
+                  slotProps={{ inputLabel: { shrink: true } }}
                 />
               </Grid>
 
@@ -884,8 +886,10 @@ export default function FinancialAccountsSuite() {
                     type="number"
                     value={statementBalanceInput}
                     onChange={(e) => setStatementBalanceInput(e.target.value)}
-                    InputProps={{
-                      startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                    slotProps={{
+                      input: {
+                        startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                      }
                     }}
                     sx={{ width: 220 }}
                   />
@@ -1220,8 +1224,10 @@ export default function FinancialAccountsSuite() {
                     type="number"
                     value={accountForm.opening_balance}
                     onChange={(e) => setAccountForm({ ...accountForm, opening_balance: e.target.value })}
-                    InputProps={{
-                      startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                    slotProps={{
+                      input: {
+                        startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                      }
                     }}
                   />
                 </Grid>
@@ -1233,7 +1239,7 @@ export default function FinancialAccountsSuite() {
                     type="date"
                     value={accountForm.opening_balance_date}
                     onChange={(e) => setAccountForm({ ...accountForm, opening_balance_date: e.target.value })}
-                    InputLabelProps={{ shrink: true }}
+                    slotProps={{ inputLabel: { shrink: true } }}
                   />
                 </Grid>
               </>
@@ -1309,8 +1315,10 @@ export default function FinancialAccountsSuite() {
                 type="number"
                 value={transferForm.amount}
                 onChange={(e) => setTransferForm({ ...transferForm, amount: e.target.value })}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                slotProps={{
+                  input: {
+                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  }
                 }}
               />
             </Grid>
@@ -1323,7 +1331,7 @@ export default function FinancialAccountsSuite() {
                 type="date"
                 value={transferForm.transfer_date}
                 onChange={(e) => setTransferForm({ ...transferForm, transfer_date: e.target.value })}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
 
@@ -1394,8 +1402,10 @@ export default function FinancialAccountsSuite() {
                 type="number"
                 value={expenseForm.amount}
                 onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
-                InputProps={{
-                  startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                slotProps={{
+                  input: {
+                    startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                  }
                 }}
               />
             </Grid>
@@ -1443,7 +1453,7 @@ export default function FinancialAccountsSuite() {
                 type="date"
                 value={expenseForm.expense_date}
                 onChange={(e) => setExpenseForm({ ...expenseForm, expense_date: e.target.value })}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
               />
             </Grid>
 

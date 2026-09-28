@@ -66,7 +66,8 @@ import {
   generateLocalEscPosReceipt,
   generateLocalHtmlKot,
   generateLocalEscPosKot,
-  safeUtf8ToBase64
+  safeUtf8ToBase64,
+  printHtmlSilentlyViaIframe
 } from '../utils/localReceiptGenerator';
 import { calculateDocumentTax, resolvePlaceOfSupply, validateGstin } from '../utils/gstCalculator';
 
@@ -819,6 +820,7 @@ export default function POS({
   // Helper: Match cart item against product using ID, SKU, or Barcode
   const isCartItemMatchingProduct = useCallback((cartItem, product) => {
     if (!cartItem || !product || cartItem.is_weight_based) return false;
+    if (cartItem.serial_number || product.scanned_serial_number) return false;
     const prodId = product.id || product.menu_item_id || product.product_id;
     const prodSku = (product.sku || '').trim().toLowerCase();
     const prodBarcode = (product.barcode || '').trim().toLowerCase();
@@ -889,20 +891,26 @@ export default function POS({
       }
     }
 
-    setCart((prevCart) => {
-      const existingIdx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+    const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
+    if (existingIdx > -1) {
+      setSelectedCartIndex(existingIdx);
+    } else {
+      setSelectedCartIndex(cart.length);
+    }
 
-      if (existingIdx > -1) {
+    setCart((prevCart) => {
+      const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+
+      if (idx > -1) {
         const updated = [...prevCart];
-        const item = updated[existingIdx];
+        const item = updated[idx];
         const newQty = (parseInt(item.quantity, 10) || 1) + 1;
         const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || price));
-        updated[existingIdx] = {
+        updated[idx] = {
           ...item,
           quantity: newQty,
           total_price: (newQty * unitPrice).toFixed(2)
         };
-        setSelectedCartIndex(existingIdx);
         return updated;
       } else {
         const newItem = {
@@ -917,11 +925,10 @@ export default function POS({
           is_weight_based: false,
           total_price: price.toFixed(2),
           gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
-          notes: ''
+          notes: product.scanned_serial_number ? `SN: ${product.scanned_serial_number}` : '',
+          serial_number: product.scanned_serial_number || null
         };
-        const nextCart = [...prevCart, newItem];
-        setSelectedCartIndex(nextCart.length - 1);
-        return nextCart;
+        return [...prevCart, newItem];
       }
     });
   }, [setCart, cart, isCartItemMatchingProduct]);
@@ -974,7 +981,8 @@ export default function POS({
           is_weight_based: true,
           total_price: calculatedTotal.toFixed(2),
           gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
-          notes: ''
+          notes: product.scanned_serial_number ? `SN: ${product.scanned_serial_number}` : (product.notes || ''),
+          serial_number: product.scanned_serial_number || product.serial_number || null
         }
       ]);
     }
@@ -1005,19 +1013,25 @@ export default function POS({
       const price = parseFloat(product.price || product.selling_price || product.unit_price || 0);
       const prodId = product.id || product.menu_item_id || product.product_id;
 
-      setCart((prevCart) => {
-        const existingIdx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+      const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
+      if (existingIdx > -1) {
+        setSelectedCartIndex(existingIdx);
+      } else {
+        setSelectedCartIndex(cart.length);
+      }
 
-        if (existingIdx > -1) {
+      setCart((prevCart) => {
+        const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+
+        if (idx > -1) {
           const updated = [...prevCart];
-          const item = updated[existingIdx];
+          const item = updated[idx];
           const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || price));
-          updated[existingIdx] = {
+          updated[idx] = {
             ...item,
             quantity: newQty,
             total_price: (newQty * unitPrice).toFixed(2)
           };
-          setSelectedCartIndex(existingIdx);
           return updated;
         } else {
           const newItem = {
@@ -1034,9 +1048,7 @@ export default function POS({
             gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
             notes: ''
           };
-          const nextCart = [...prevCart, newItem];
-          setSelectedCartIndex(nextCart.length - 1);
-          return nextCart;
+          return [...prevCart, newItem];
         }
       });
     }
@@ -1071,39 +1083,37 @@ export default function POS({
     }
   };
 
+  const removeCartItem = (index) => {
+    setSelectedCartIndex((prevIdx) => {
+      const nextLen = cart.length - 1;
+      if (nextLen <= 0) return 0;
+      return Math.max(0, Math.min(index, nextLen - 1));
+    });
+    setCart((prevCart) => prevCart.filter((_, i) => i !== index));
+  };
+
   const updateCartQty = (index, delta) => {
+    if (!cart || index < 0 || index >= cart.length) return;
+    const item = cart[index];
+    if (!item || item.is_weight_based) return;
+
+    const currentQty = parseInt(item.quantity, 10) || 1;
+    const newQty = currentQty + delta;
+    if (newQty <= 0) {
+      removeCartItem(index);
+      return;
+    }
+
+    const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || item.selling_price || 0));
     setCart((prevCart) => {
       if (!prevCart || index < 0 || index >= prevCart.length) return prevCart;
-      const item = prevCart[index];
-      if (!item || item.is_weight_based) return prevCart;
-
-      const currentQty = parseInt(item.quantity, 10) || 1;
-      const newQty = currentQty + delta;
-      const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || item.selling_price || 0));
-
-      if (newQty <= 0) {
-        const nextCart = prevCart.filter((_, i) => i !== index);
-        const nextIdx = Math.max(0, Math.min(index, nextCart.length - 1));
-        setSelectedCartIndex(nextIdx);
-        return nextCart;
-      }
-
       const updated = [...prevCart];
       updated[index] = {
-        ...item,
+        ...updated[index],
         quantity: newQty,
         total_price: (newQty * unitPrice).toFixed(2)
       };
       return updated;
-    });
-  };
-
-  const removeCartItem = (index) => {
-    setCart((prevCart) => {
-      const nextCart = prevCart.filter((_, i) => i !== index);
-      const nextIdx = Math.max(0, Math.min(index, nextCart.length - 1));
-      setSelectedCartIndex(nextIdx);
-      return nextCart;
     });
   };
 
@@ -1174,6 +1184,21 @@ export default function POS({
             clearTimeout(timeoutId);
             return;
           }
+          if (/^\d{8}$/.test(candidate)) {
+            e.preventDefault();
+            e.stopPropagation();
+            apiFetch(`/api/serial-numbers/lookup?sn=${candidate}`).then(res => res.json()).then(sData => {
+              if (sData.success && sData.data && !sData.data.is_sold) {
+                const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+                handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+              } else if (sData.success && sData.data && sData.data.is_sold) {
+                playBarcodeError();
+              }
+            }).catch(() => {});
+            buffer = '';
+            clearTimeout(timeoutId);
+            return;
+          }
         }
         buffer = '';
         clearTimeout(timeoutId);
@@ -1205,6 +1230,19 @@ export default function POS({
 
     if (exactMatch) {
       handleBarcodeScanAdd(exactMatch);
+    } else if (/^\d{8}$/.test(queryLower)) {
+      apiFetch(`/api/serial-numbers/lookup?sn=${queryLower}`).then(res => res.json()).then(sData => {
+        if (sData.success && sData.data && !sData.data.is_sold) {
+          const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+          handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+        } else if (sData.success && sData.data && sData.data.is_sold) {
+          playBarcodeError();
+          notify?.error(`Serial #${queryLower} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
+        } else {
+          playBarcodeError();
+          notify?.error(`No active product found for serial #${queryLower}`, 'Not Found');
+        }
+      }).catch(() => playBarcodeError());
     } else if (filteredProducts.length > 0) {
       handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0], false);
     } else {
@@ -1213,7 +1251,7 @@ export default function POS({
   };
 
   // Live Camera Barcode Scanner Continuous Handler
-  const handleCameraBarcodeScan = (scannedCode) => {
+  const handleCameraBarcodeScan = async (scannedCode) => {
     if (!scannedCode) return { success: false, message: 'No barcode detected' };
     const clean = String(scannedCode).trim();
     const matched = findMatchingProduct(clean);
@@ -1221,6 +1259,30 @@ export default function POS({
       handleBarcodeScanAdd(matched);
       return { success: true, message: `Added ${matched.name} to cart` };
     }
+
+    // Check if it's an 8-digit serial number
+    if (/^\d{8}$/.test(clean)) {
+      try {
+        const res = await apiFetch(`/api/serial-numbers/lookup?sn=${clean}`);
+        const sData = await res.json();
+        if (sData.success && sData.data && !sData.data.is_sold) {
+          const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+          handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+          return { success: true, message: `Added ${prod.name} (SN: ${clean}) to cart` };
+        } else if (sData.success && sData.data && sData.data.is_sold) {
+          playBarcodeError();
+          notify?.error(`Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
+          return { success: false, message: `Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'})` };
+        } else {
+          playBarcodeError();
+          return { success: false, message: `Serial #${clean} not found in inventory` };
+        }
+      } catch (snErr) {
+        playBarcodeError();
+        return { success: false, message: `Error checking serial #${clean}` };
+      }
+    }
+
     playBarcodeError();
     return { success: false, message: `No item found for barcode "${scannedCode}"` };
   };
@@ -1351,6 +1413,10 @@ export default function POS({
 
   const taxAmount = docTax.totalTax;
   const taxableAmount = docTax.taxableAmount;
+  const displaySubtotal = docTax.subtotal;
+  const cgstAmount = docTax.cgstAmount;
+  const sgstAmount = docTax.sgstAmount;
+  const igstAmount = docTax.igstAmount;
   const grandTotal = docTax.grandTotal;
   const roundOff = docTax.roundOff;
   const taxInvoiceType = docTax.taxInvoiceType;
@@ -1425,7 +1491,8 @@ export default function POS({
         igst_amount: i.igstAmount || 0,
         tax_amount: parseFloat(i.totalTax !== undefined ? i.totalTax : (i.tax_amount || 0)).toFixed(2),
         discount_amount: parseFloat(i.discountAmount !== undefined ? i.discountAmount : (i.discount_amount || 0)).toFixed(2),
-        notes: i.notes || ''
+        notes: i.notes || '',
+        serial_number: i.serial_number || null
       })),
       subtotal: docTax.subtotal.toFixed(2),
       discount_amount: docTax.discountAmount.toFixed(2),
@@ -1451,7 +1518,8 @@ export default function POS({
       gst_number: customerGst || null,
       tax_type: docTax.taxType || taxType,
       salesman_id: (user?.role === 'salesman' || user?.role === 'admin' || user?.role === 'manager') ? user.id : null,
-      salesman_name: (user?.role === 'salesman' || user?.role === 'admin' || user?.role === 'manager') ? user.name : null
+      salesman_name: (user?.role === 'salesman' || user?.role === 'admin' || user?.role === 'manager') ? user.name : null,
+      warehouse_id: user?.assigned_warehouse_id || null
     };
 
     try {
@@ -1493,34 +1561,33 @@ export default function POS({
           });
         });
 
-        // Step 2: Determine and Execute Print Stage Workflow (non-blocking)
-        const workflowAction = overrideWorkflow || receiptSettings?.print_stage2_mode || 'print_receipt_only';
-        try {
-          await executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartWithTax, workflowAction);
-        } catch (printErr) {
-          console.error('[Print Workflow Warning]', printErr);
+        // Step 2: Clear Cart, Reset Customer & Close Checkout UI immediately for next sale
+        if (activeHoldId) {
+          try {
+            await completeHeldReceipt(activeHoldId, orderRes?.id || null, invoiceNo);
+            setActiveHoldId(null);
+            loadHeldReceipts();
+          } catch (completeErr) {
+            console.warn('[completeHeldReceipt error]', completeErr);
+          }
         }
-      }
+        setCart([]);
+        setDiscountValue('0');
+        handleClearCustomer();
+        setCreditPartialPaidAmount('');
+        setCreditDueDate('');
+        loadCustomers();
+        setCheckoutVisible(false);
+        setCashReceived('');
+        setActiveMobileTab('catalog');
 
-      // Step 3: Clear Cart, Reset Customer & UI for next sale
-      if (activeHoldId) {
-        try {
-          await completeHeldReceipt(activeHoldId, orderRes?.id || null, invoiceNo);
-          setActiveHoldId(null);
-          loadHeldReceipts();
-        } catch (completeErr) {
-          console.warn('[completeHeldReceipt error]', completeErr);
-        }
+        // Step 3: Determine and Execute Print Stage Workflow (non-blocking in background)
+        const workflowAction = overrideWorkflow || receiptSettings?.print_stage2_mode || 'print_receipt_only';
+        executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartWithTax, workflowAction)
+          .catch((printErr) => {
+            console.error('[Print Workflow Warning]', printErr);
+          });
       }
-      setCart([]);
-      setDiscountValue('0');
-      handleClearCustomer();
-      setCreditPartialPaidAmount('');
-      setCreditDueDate('');
-      loadCustomers();
-      setCheckoutVisible(false);
-      setCashReceived('');
-      setActiveMobileTab('catalog');
     } catch (err) {
       console.error('[Complete Sale Error]', err);
       alert('Error completing sale: ' + (err.message || 'Unknown error'));
@@ -1707,12 +1774,18 @@ export default function POS({
       tax_type: taxType
     };
 
-    // Find default receipt & KOT printers
-    const defaultReceiptPrn = printersList.find(p => p.is_default_receipt === 1 || p.is_default_receipt === true) ||
+    // Find default receipt & KOT printers (prioritize configured LAN/network thermal printers with IP address)
+    const defaultReceiptPrn = printersList.find(p => (p.is_default_receipt === 1 || p.is_default_receipt === true) && (p.type === 'lan' || p.type === 'network' || !!p.ip_address)) ||
+                              printersList.find(p => p.is_default_receipt === 1 || p.is_default_receipt === true) ||
+                              printersList.find(p => (p.role === 'receipt' || p.role === 'both') && (p.type === 'lan' || p.type === 'network' || !!p.ip_address)) ||
+                              printersList.find(p => p.type === 'lan' || p.type === 'network' || !!p.ip_address) ||
                               printersList.find(p => p.role === 'receipt' || p.role === 'both') ||
                               printersList[0] || null;
 
-    const defaultKotPrn = printersList.find(p => p.is_default_kot === 1 || p.is_default_kot === true) ||
+    const defaultKotPrn = printersList.find(p => (p.is_default_kot === 1 || p.is_default_kot === true) && (p.type === 'lan' || p.type === 'network' || !!p.ip_address)) ||
+                          printersList.find(p => p.is_default_kot === 1 || p.is_default_kot === true) ||
+                          printersList.find(p => (p.role === 'kitchen' || p.role === 'both') && (p.type === 'lan' || p.type === 'network' || !!p.ip_address)) ||
+                          printersList.find(p => p.type === 'lan' || p.type === 'network' || !!p.ip_address) ||
                           printersList.find(p => p.role === 'kitchen' || p.role === 'both') ||
                           defaultReceiptPrn || null;
 
@@ -1725,6 +1798,16 @@ export default function POS({
 
     const effectivePaperSize = receiptSettings?.paper_size || defaultReceiptPrn?.paper_width || 'auto';
     const printEngine = receiptSettings?.print_engine || 'auto';
+
+    // Helper for silent in-page browser print fallback (no popup windows, no about:blank tabs)
+    const openBrowserPrintFallback = () => {
+      try {
+        const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+        printHtmlSilentlyViaIframe(htmlReceipt);
+      } catch (err) {
+        console.error('[Browser Print Fallback Error]', err);
+      }
+    };
 
     // 1. Dispatch Receipt
     if (shouldPrintReceipt) {
@@ -1756,20 +1839,75 @@ export default function POS({
             }
           }
         } else {
-          // Browser Web Fallback
-          const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
-          const printWin = window.open('', '_blank');
-          if (printWin) {
-            printWin.document.write(htmlReceipt);
-            printWin.document.close();
-            printWin.focus();
-            printWin.print();
-            printWin.close();
+          // Web Application Flow (Browser + LAN Thermal Printer connected to same Wi-Fi/network)
+          const targetPrn = (defaultReceiptPrn?.ip_address ? defaultReceiptPrn : null) ||
+                            printersList.find(p => (p.type === 'lan' || p.type === 'network' || !!p.ip_address) && !!p.ip_address);
+
+          if (targetPrn?.ip_address) {
+            // Direct LAN Thermal Socket Printing via Backend TCP Relay
+            let printedOnLan = false;
+            try {
+              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+
+              const printRes = await apiFetch('/api/printers/print-receipt', {
+                method: 'POST',
+                timeout: 5000,
+                body: {
+                  order: orderData,
+                  items: cartItems,
+                  printer_id: targetPrn.id,
+                  payload_base64: base64Payload,
+                  print_type: 'RECEIPT'
+                }
+              });
+
+              const resData = await printRes.json().catch(() => ({}));
+              if (printRes.ok && resData.success !== false) {
+                printedOnLan = true;
+              } else {
+                console.warn('[POS LAN Print] Server returned error or printer unreachable:', resData.error || resData.message);
+              }
+            } catch (lanErr) {
+              console.warn('[POS LAN Print Failover] Direct LAN socket unreachable, falling back to browser print:', lanErr.message || lanErr);
+            }
+
+            if (!printedOnLan) {
+              openBrowserPrintFallback();
+            }
+          } else {
+            // No LAN printer in state: attempt backend network auto-detect dispatch
+            let printedOnBackend = false;
+            try {
+              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+              const base64Payload = safeUtf8ToBase64(rawEscPos);
+              const printRes = await apiFetch('/api/printers/print-receipt', {
+                method: 'POST',
+                timeout: 4000,
+                body: {
+                  order: orderData,
+                  items: cartItems,
+                  payload_base64: base64Payload,
+                  print_type: 'RECEIPT'
+                }
+              });
+              const resData = await printRes.json().catch(() => ({}));
+              if (printRes.ok && resData.success) {
+                printedOnBackend = true;
+                fetchPrinters(token).then(prns => { if (prns?.length > 0) setPrintersList(prns); }).catch(() => {});
+              }
+            } catch (backendErr) {
+              // Ignore error to allow fallback
+            }
+
+            if (!printedOnBackend) {
+              openBrowserPrintFallback();
+            }
           }
         }
       } catch (receiptErr) {
         console.error('[Receipt Print Error]', receiptErr);
-        printErrors.push(`Receipt Printer (${defaultReceiptPrn?.name || defaultReceiptPrn?.ip_address || 'Default'}): ${receiptErr.message}`);
+        printErrors.push(`Receipt Printer: ${receiptErr.message}`);
       }
     }
 
@@ -1802,10 +1940,33 @@ export default function POS({
               await window.electron.printSystemSilent(htmlKot, targetPrinterName, { paperSize: effectivePaperSize });
             }
           }
+        } else {
+          // Web Application Flow for KOT (Browser + LAN Kitchen Thermal Printer)
+          const isLan = (defaultKotPrn?.type === 'lan' || defaultKotPrn?.type === 'network' || !!defaultKotPrn?.ip_address) && !!defaultKotPrn?.ip_address;
+          if (isLan) {
+            const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
+            const base64Payload = safeUtf8ToBase64(rawEscPos);
+
+            const printRes = await apiFetch('/api/printers/print-receipt', {
+              method: 'POST',
+              body: {
+                order: orderData,
+                items: cartItems,
+                printer_id: defaultKotPrn.id,
+                payload_base64: base64Payload,
+                print_type: 'KOT'
+              }
+            });
+
+            const resData = await printRes.json().catch(() => ({}));
+            if (!printRes.ok || resData.success === false) {
+              throw new Error(resData.error || resData.message || `Unable to reach LAN KOT printer (${defaultKotPrn.name || 'Kitchen'} at ${defaultKotPrn.ip_address}:${defaultKotPrn.port || 9100})`);
+            }
+          }
         }
       } catch (kotErr) {
         console.error('[KOT Print Error]', kotErr);
-        printErrors.push(`KOT Printer (${defaultKotPrn?.name || defaultKotPrn?.ip_address || 'Default'}): ${kotErr.message}`);
+        printErrors.push(`KOT Printer: ${kotErr.message}`);
       }
     }
 
@@ -1813,7 +1974,8 @@ export default function POS({
       setPrintStatusToast({
         type: 'error',
         message: `Printing Issue: ${printErrors.join(' | ')}`,
-        retryFn: () => executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction)
+        retryFn: () => executePrintWorkflow(invoiceNo, orderPayload, effectivePaymentMode, cartItems, workflowAction),
+        fallbackFn: () => openBrowserPrintFallback()
       });
     } else {
       setPrintStatusToast({
@@ -2077,6 +2239,28 @@ export default function POS({
               Retry Print
             </button>
           )}
+          {printStatusToast.fallbackFn && (
+            <button
+              onClick={printStatusToast.fallbackFn}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                backgroundColor: '#374151',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: '700',
+                cursor: 'pointer',
+                fontSize: '12px'
+              }}
+              title="Open browser print dialog as fallback"
+            >
+              <Printer size={13} />
+              Browser Print
+            </button>
+          )}
           <button
             onClick={() => setPrintStatusToast(null)}
             style={{
@@ -2196,6 +2380,59 @@ export default function POS({
             >
               <Camera size={14} /> Barcode Camera
             </button>
+
+            {/* Live LAN Thermal Printer Status & Test Print */}
+            {(() => {
+              const lanPrn = printersList.find(p => (p.type === 'lan' || p.type === 'network' || !!p.ip_address) && !!p.ip_address);
+              if (!lanPrn) return null;
+              const isPrnOnline = lanPrn.status === 'online';
+              return (
+                <button
+                  type="button"
+                  className="pos-control-pill"
+                  onClick={async () => {
+                    setPrintStatusToast({ type: 'printing', message: `Sending test print to "${lanPrn.name}" (${lanPrn.ip_address})...` });
+                    try {
+                      const res = await apiFetch('/api/printers/test', {
+                        method: 'POST',
+                        body: { id: lanPrn.id, ip_address: lanPrn.ip_address, port: lanPrn.port, name: lanPrn.name, paper_width: lanPrn.paper_width }
+                      });
+                      const data = await res.json();
+                      if (res.ok && (data.status === 'connected' || data.success)) {
+                        setPrintStatusToast({ type: 'success', message: `Printer "${lanPrn.name}" is ONLINE & test receipt printed!` });
+                        setTimeout(() => setPrintStatusToast(null), 4000);
+                        const updated = await fetchPrinters(token);
+                        if (updated?.length > 0) setPrintersList(updated);
+                      } else {
+                        setPrintStatusToast({ type: 'error', message: `Test Failed: ${data.error || 'Printer unreachable'}` });
+                        setTimeout(() => setPrintStatusToast(null), 5000);
+                      }
+                    } catch (e) {
+                      setPrintStatusToast({ type: 'error', message: `Socket Error: ${e.message}` });
+                      setTimeout(() => setPrintStatusToast(null), 5000);
+                    }
+                  }}
+                  style={{
+                    ...styles.controlPill,
+                    backgroundColor: isPrnOnline ? (isDark ? '#064E3B' : '#ECFDF5') : (isDark ? '#7F1D1D' : '#FEF2F2'),
+                    color: isPrnOnline ? (isDark ? '#A7F3D0' : '#059669') : (isDark ? '#FECACA' : '#DC2626'),
+                    borderColor: isPrnOnline ? '#10B981' : '#EF4444',
+                    fontWeight: '700',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title={`LAN Thermal Printer: ${lanPrn.name} (${lanPrn.ip_address}:${lanPrn.port || 9100}) - Status: ${isPrnOnline ? 'ONLINE' : 'OFFLINE'}. Click to run Test Print.`}
+                >
+                  <Printer size={14} />
+                  <span>{lanPrn.name || 'Thermal'} ({lanPrn.ip_address})</span>
+                  <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', backgroundColor: isPrnOnline ? '#10B981' : '#EF4444', color: '#fff' }}>
+                    {isPrnOnline ? 'ONLINE' : 'OFFLINE'}
+                  </span>
+                </button>
+              );
+            })()}
 
             {/* Dynamic Product Stickers Printing Button */}
             <button
@@ -2848,6 +3085,17 @@ export default function POS({
                               #{itemSku}
                             </div>
                           )}
+                          {item.serial_number && (
+                            <div style={{
+                              fontSize: '10px',
+                              color: '#9333ea',
+                              fontFamily: 'monospace',
+                              fontWeight: '800',
+                              marginTop: '1px'
+                            }}>
+                              SN: {item.serial_number}
+                            </div>
+                          )}
                           <div style={{ fontSize: '11px', color: colors.accentOrange }}>
                             {item.is_weight_based ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Scale size={10} />{t('weightBadge')}</span> : <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>}
                           </div>
@@ -2926,7 +3174,7 @@ export default function POS({
           <div style={{ ...styles.cartSummary, backgroundColor: colors.bgInput, borderColor: colors.borderColor }}>
             <div style={styles.summaryRow}>
               <span style={{ color: colors.textSecondary }}>{t('subtotal')}</span>
-              <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{subtotal.toFixed(2)}</span>
+              <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{displaySubtotal.toFixed(2)}</span>
             </div>
             {discountAmount > 0 && (
               <div style={styles.summaryRow}>
@@ -2937,17 +3185,17 @@ export default function POS({
             {taxType === 'inter' ? (
               <div style={styles.summaryRow}>
                 <span style={{ color: colors.textSecondary }}>IGST</span>
-                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
+                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{igstAmount.toFixed(2)}</span>
               </div>
             ) : (
               <>
                 <div style={styles.summaryRow}>
                   <span style={{ color: colors.textSecondary }}>CGST</span>
-                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{cgstAmount.toFixed(2)}</span>
                 </div>
                 <div style={styles.summaryRow}>
                   <span style={{ color: colors.textSecondary }}>SGST</span>
-                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{sgstAmount.toFixed(2)}</span>
                 </div>
               </>
             )}
@@ -3186,7 +3434,7 @@ export default function POS({
             <div style={{ ...styles.cartSummary, backgroundColor: colors.bgInput, borderColor: colors.borderColor }}>
               <div style={styles.summaryRow}>
                 <span style={{ color: colors.textSecondary }}>{t('subtotal')}</span>
-                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{subtotal.toFixed(2)}</span>
+                <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{displaySubtotal.toFixed(2)}</span>
               </div>
               {discountAmount > 0 && (
                 <div style={styles.summaryRow}>
@@ -3197,17 +3445,17 @@ export default function POS({
               {taxType === 'inter' ? (
                 <div style={styles.summaryRow}>
                   <span style={{ color: colors.textSecondary }}>IGST</span>
-                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{taxAmount.toFixed(2)}</span>
+                  <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{igstAmount.toFixed(2)}</span>
                 </div>
               ) : (
                 <>
                   <div style={styles.summaryRow}>
                     <span style={{ color: colors.textSecondary }}>CGST</span>
-                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{cgstAmount.toFixed(2)}</span>
                   </div>
                   <div style={styles.summaryRow}>
                     <span style={{ color: colors.textSecondary }}>SGST</span>
-                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{(taxAmount / 2).toFixed(2)}</span>
+                    <span style={{ fontWeight: '700', color: colors.textPrimary }}>₹{sgstAmount.toFixed(2)}</span>
                   </div>
                 </>
               )}

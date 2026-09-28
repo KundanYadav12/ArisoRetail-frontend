@@ -41,8 +41,6 @@ export default function ProductStickerModal({
   shopData = {}, // Store name, address, etc.
   initialPreviewMode = null // Optional initial preview mode: 'single' | 'roll'
 }) {
-  if (!open) return null;
-
   // Local state for sticker configuration
   const [config, setConfig] = useState(() => {
     const saved = loadSavedStickerConfig();
@@ -259,6 +257,8 @@ export default function ProductStickerModal({
   const formattedAddressLines = useMemo(() => {
     return formatStickerAddress(addressDisplay, 3);
   }, [addressDisplay]);
+
+  if (!open) return null;
 
   return (
     <div style={styles.overlay} onClick={onClose}>

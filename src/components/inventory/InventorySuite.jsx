@@ -11,7 +11,7 @@ import {
   Sliders, FileText, Search, Plus, Download, FileSpreadsheet,
   AlertTriangle, XCircle, CheckCircle, RefreshCw, X, ArrowRight,
   PackageCheck, Undo2, ShoppingCart, ShieldCheck, Edit2, Tag,
-  MapPin, Barcode
+  MapPin, Barcode, Eye, Mail
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
@@ -26,6 +26,7 @@ import StockTransferModal from './StockTransferModal';
 import StockReceivingModal from './StockReceivingModal';
 import PurchaseOrderModal from './PurchaseOrderModal';
 import PurchaseBillModal from './PurchaseBillModal';
+import PurchaseBillViewModal from './PurchaseBillViewModal';
 import PurchaseReturnModal from './PurchaseReturnModal';
 import StockAdjustmentModal from './StockAdjustmentModal';
 import GRNModal from './GRNModal';
@@ -39,7 +40,10 @@ export default function InventorySuite({
   onOpenStickersModal,
   categories = [],
   menuItems = [],
-  currentUser = null
+  currentUser = null,
+  activeSubTab = null,
+  onSubTabChange = null,
+  hideTabs = false
 }) {
   const notify = useNotify();
 
@@ -89,7 +93,7 @@ export default function InventorySuite({
   }), [warehouses.length, hasPerm]);
 
   // Active Sub-Tab: initialize to first authorized subtab
-  const [subTab, setSubTab] = useState(() => {
+  const [internalSubTab, setInternalSubTab] = useState(() => {
     if (isWarehouseManager) {
       if (hasPerm('warehouse_dashboard')) return 'overview';
       if (hasPerm('inventory_catalog')) return 'catalog';
@@ -106,6 +110,12 @@ export default function InventorySuite({
     return 'overview';
   });
 
+  const subTab = (activeSubTab !== null && activeSubTab !== undefined) ? activeSubTab : internalSubTab;
+  const setSubTab = useCallback((val) => {
+    setInternalSubTab(val);
+    if (onSubTabChange) onSubTabChange(val);
+  }, [onSubTabChange]);
+
   // Ensure active subTab is permitted
   useEffect(() => {
     if (isWarehouseManager && availableSubTabs.length > 0) {
@@ -114,7 +124,7 @@ export default function InventorySuite({
         setSubTab(availableSubTabs[0].id);
       }
     }
-  }, [isWarehouseManager, availableSubTabs, subTab]);
+  }, [isWarehouseManager, availableSubTabs, subTab, setSubTab]);
   const [dashboardMetrics, setDashboardMetrics] = useState(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
 
@@ -162,6 +172,7 @@ export default function InventorySuite({
 
   // PO action state
   const [poActionLoading, setPoActionLoading] = useState(null);
+  const [poExistingBillDialog, setPoExistingBillDialog] = useState(null);
 
   // Adjustments State
   const [adjustments, setAdjustments] = useState([]);
@@ -191,6 +202,7 @@ export default function InventorySuite({
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [billModalOpen, setBillModalOpen] = useState(false);
   const [prefilledPOForBill, setPrefilledPOForBill] = useState(null);
+  const [viewBillId, setViewBillId] = useState(null);
   const [returnModalOpen, setReturnModalOpen] = useState(false);
 
   const [adjustmentModalOpen, setAdjustmentModalOpen] = useState(false);
@@ -364,6 +376,143 @@ export default function InventorySuite({
       fetchPurchases();
     } catch (err) {
       notify.error(err.message, 'Cancel Failed');
+    } finally {
+      setPoActionLoading(null);
+    }
+  };
+
+  const handleDownloadBillPDF = async (billId, billRef) => {
+    try {
+      const res = await apiFetch(`/api/inventory/purchases/bills/${billId}/pdf`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to download bill PDF');
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Purchase-Bill-${billRef || billId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify.success('Purchase bill PDF downloaded.', 'Success');
+    } catch (err) {
+      notify.error(err.message, 'Download Error');
+    }
+  };
+
+  const handleEditBill = async (bill) => {
+    try {
+      const res = await apiFetch(`/api/inventory/purchases/bills/${bill.id}`);
+      const fullBill = await res.json();
+      if (!res.ok) throw new Error(fullBill.error || 'Failed to load bill for editing');
+      setPrefilledPOForBill({
+        ...fullBill,
+        _edit_mode: true,
+        items: (fullBill.items || []).map(it => ({
+          menu_item_id: it.menu_item_id,
+          item_name: it.item_name,
+          unit: it.unit || 'pcs',
+          quantity: parseFloat(it.quantity || 1),
+          rate: parseFloat(it.rate || 0),
+          tax_rate: parseFloat(it.tax_rate || 0),
+          discount_amount: parseFloat(it.discount_amount || 0),
+          batch_number: it.batch_number || '',
+          expiry_date: it.expiry_date ? String(it.expiry_date).split('T')[0] : ''
+        }))
+      });
+      setBillModalOpen(true);
+    } catch (err) {
+      notify.error(err.message, 'Error');
+    }
+  };
+
+  const handleViewPOBills = (po) => {
+    if (!po.bill_ids) {
+      handleBillPO(po);
+      return;
+    }
+    const ids = String(po.bill_ids).split(',').map(s => parseInt(s.trim())).filter(Boolean);
+    if (ids.length === 1) {
+      setViewBillId(ids[0]);
+    } else {
+      handleBillPO(po);
+    }
+  };
+
+  const handleBillPO = async (po) => {
+    setPoActionLoading(po.id + '_bill');
+    try {
+      const res = await apiFetch(`/api/inventory/purchases/orders/${po.id}`);
+      const fullPO = await res.json();
+      if (!res.ok) throw new Error(fullPO.error || 'Failed to fetch Purchase Order details');
+
+      // Strictly filter bills by target PO ID and dedupe
+      const targetId = po.id;
+      const rawBills = fullPO.bills || fullPO.related_bills || [];
+      const strictBills = rawBills.filter(b => b && b.purchase_order_id && String(b.purchase_order_id) === String(targetId));
+      const seen = new Set();
+      const dedupedBills = strictBills.filter(b => {
+        const k = b.id || b.internal_bill_number || b.bill_number;
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+
+      if (dedupedBills.length > 0) {
+        setPoExistingBillDialog({
+          open: true,
+          type: 'po',
+          record: fullPO,
+          bills: dedupedBills
+        });
+      } else {
+        setPrefilledPOForBill({ ...fullPO, bills: [] });
+        setBillModalOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to load PO for bill:', err);
+      notify.error(err.message || 'Failed to load Purchase Order details.', 'Error');
+    } finally {
+      setPoActionLoading(null);
+    }
+  };
+
+  const handleBillGRN = async (grn) => {
+    setPoActionLoading(grn.id + '_grn_bill');
+    try {
+      const res = await apiFetch(`/api/inventory/purchases/grns/${grn.id}`);
+      const fullGRN = await res.json();
+      if (!res.ok) throw new Error(fullGRN.error || 'Failed to fetch GRN details');
+
+      // Strictly filter bills by target GRN ID and dedupe
+      const targetId = grn.id;
+      const rawBills = fullGRN.bills || fullGRN.related_bills || [];
+      const strictBills = rawBills.filter(b => b && b.grn_id && String(b.grn_id) === String(targetId));
+      const seen = new Set();
+      const dedupedBills = strictBills.filter(b => {
+        const k = b.id || b.internal_bill_number || b.bill_number;
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+
+      if (dedupedBills.length > 0) {
+        setPoExistingBillDialog({
+          open: true,
+          type: 'grn',
+          record: fullGRN,
+          bills: dedupedBills
+        });
+      } else {
+        setPrefilledPOForBill({ ...fullGRN, _grn_id: fullGRN.id, bills: [] });
+        setBillModalOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to load GRN for bill:', err);
+      notify.error(err.message || 'Failed to load GRN details.', 'Error');
     } finally {
       setPoActionLoading(null);
     }
@@ -589,38 +738,40 @@ export default function InventorySuite({
       </Box>
 
       {/* 2. Sub-Navigation Tabs */}
-      <Paper elevation={0} sx={{ borderBottom: '1px solid #e2e8f0', bgcolor: '#ffffff', borderRadius: 2 }}>
-        <Tabs
-          value={subTab}
-          onChange={(e, val) => setSubTab(val)}
-          variant="scrollable"
-          scrollButtons="auto"
-          textColor="primary"
-          indicatorColor="primary"
-          sx={{
-            '& .MuiTab-root': {
-              textTransform: 'none',
-              fontWeight: 700,
-              fontSize: '0.85rem',
-              minHeight: 46,
-              py: 1
-            }
-          }}
-        >
-          {availableSubTabs.map(tab => {
-            const IconComp = tab.icon;
-            return (
-              <Tab
-                key={tab.id}
-                icon={<IconComp size={16} />}
-                iconPosition="start"
-                label={tab.label}
-                value={tab.id}
-              />
-            );
-          })}
-        </Tabs>
-      </Paper>
+      {!hideTabs && (
+        <Paper elevation={0} sx={{ borderBottom: '1px solid #e2e8f0', bgcolor: '#ffffff', borderRadius: 2 }}>
+          <Tabs
+            value={subTab}
+            onChange={(e, val) => setSubTab(val)}
+            variant="scrollable"
+            scrollButtons="auto"
+            textColor="primary"
+            indicatorColor="primary"
+            sx={{
+              '& .MuiTab-root': {
+                textTransform: 'none',
+                fontWeight: 700,
+                fontSize: '0.85rem',
+                minHeight: 46,
+                py: 1
+              }
+            }}
+          >
+            {availableSubTabs.map(tab => {
+              const IconComp = tab.icon;
+              return (
+                <Tab
+                  key={tab.id}
+                  icon={<IconComp size={16} />}
+                  iconPosition="start"
+                  label={tab.label}
+                  value={tab.id}
+                />
+              );
+            })}
+          </Tabs>
+        </Paper>
+      )}
 
       {/* -------------------------------------------------------------------
           SUB-TAB 1: EXECUTIVE OVERVIEW / DASHBOARD
@@ -890,17 +1041,19 @@ export default function InventorySuite({
                   placeholder="Search product, SKU, barcode..."
                   value={stockSearch}
                   onChange={e => setStockSearch(e.target.value)}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <Search size={16} color="#64748b" />
-                      </InputAdornment>
-                    ),
-                    endAdornment: stockSearch ? (
-                      <InputAdornment position="end">
-                        <IconButton size="small" onClick={() => setStockSearch('')}><X size={14} /></IconButton>
-                      </InputAdornment>
-                    ) : null
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <Search size={16} color="#64748b" />
+                        </InputAdornment>
+                      ),
+                      endAdornment: stockSearch ? (
+                        <InputAdornment position="end">
+                          <IconButton size="small" onClick={() => setStockSearch('')}><X size={14} /></IconButton>
+                        </InputAdornment>
+                      ) : null
+                    }
                   }}
                 />
               </Grid>
@@ -1404,12 +1557,14 @@ export default function InventorySuite({
                 placeholder="Search vendor name, GSTIN, mobile..."
                 value={supplierSearch}
                 onChange={e => setSupplierSearch(e.target.value)}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <Search size={15} color="#64748b" />
-                    </InputAdornment>
-                  )
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <Search size={15} color="#64748b" />
+                      </InputAdornment>
+                    )
+                  }
                 }}
                 sx={{ width: 280 }}
               />
@@ -1619,31 +1774,61 @@ export default function InventorySuite({
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700 }}>Internal Ref #</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Vendor Bill #</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>PO #</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Supplier</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Receiving Warehouse</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Bill Date</TableCell>
                     <TableCell align="right" sx={{ fontWeight: 700 }}>Total Amount (₹)</TableCell>
                     <TableCell align="center" sx={{ fontWeight: 700 }}>Payment Status</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>Created By</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 700, minWidth: 140 }}>Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {loadingPurchases ? (
                     <TableRow>
-                      <TableCell colSpan={8} align="center" sx={{ py: 6 }}><CircularProgress size={28} /></TableCell>
+                      <TableCell colSpan={10} align="center" sx={{ py: 6 }}><CircularProgress size={28} /></TableCell>
                     </TableRow>
                   ) : purchaseBills.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} align="center" sx={{ py: 6, color: 'text.secondary' }}>
-                        No purchase bills recorded yet.
+                      <TableCell colSpan={10} align="center" sx={{ py: 6, color: 'text.secondary' }}>
+                        No purchase bills recorded yet. Click "Record Purchase Bill" or bill a Purchase Order above.
                       </TableCell>
                     </TableRow>
                   ) : (
                     purchaseBills.map(b => (
-                      <TableRow key={b.id} hover>
-                        <TableCell sx={{ fontWeight: 700, fontFamily: 'monospace' }}>{b.internal_bill_number}</TableCell>
+                      <TableRow
+                        key={b.id}
+                        hover
+                        onClick={() => setViewBillId(b.id)}
+                        sx={{ cursor: 'pointer', '&:hover': { bgcolor: '#f0f9ff' } }}
+                      >
+                        <TableCell sx={{ fontWeight: 700, fontFamily: 'monospace', color: '#EA580C' }}>{b.internal_bill_number}</TableCell>
                         <TableCell sx={{ fontWeight: 600 }}>{b.bill_number}</TableCell>
-                        <TableCell>{b.supplier_name}</TableCell>
+                        <TableCell>
+                          {b.po_number ? (
+                            <Chip
+                              label={b.po_number}
+                              size="small"
+                              variant="outlined"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPurchaseSegment('orders');
+                              }}
+                              sx={{
+                                fontFamily: 'monospace',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                color: '#0284c7',
+                                borderColor: '#bae6fd',
+                                '&:hover': { bgcolor: '#e0f2fe' }
+                              }}
+                            />
+                          ) : (
+                            <Typography variant="caption" sx={{ color: '#94a3b8' }}>Direct Inward</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{b.supplier_name}</TableCell>
                         <TableCell>{b.warehouse_name}</TableCell>
                         <TableCell>{b.bill_date ? new Date(b.bill_date).toLocaleDateString() : 'N/A'}</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 800, color: '#16a34a' }}>
@@ -1658,6 +1843,30 @@ export default function InventorySuite({
                           />
                         </TableCell>
                         <TableCell>{b.created_by_name || 'Staff'}</TableCell>
+                        <TableCell align="center">
+                          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+                            <Tooltip title="View Bill Document">
+                              <IconButton size="small" onClick={() => setViewBillId(b.id)} sx={{ color: '#0284c7' }}>
+                                <Eye size={15} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Download PDF">
+                              <IconButton size="small" onClick={() => handleDownloadBillPDF(b.id, b.internal_bill_number)} sx={{ color: '#EA580C' }}>
+                                <Download size={15} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Share / Email">
+                              <IconButton size="small" onClick={() => setViewBillId(b.id)} sx={{ color: '#7c3aed' }}>
+                                <Mail size={15} />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Edit Bill">
+                              <IconButton size="small" onClick={() => handleEditBill(b)} sx={{ color: '#16a34a' }}>
+                                <Edit2 size={15} />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -1743,18 +1952,66 @@ export default function InventorySuite({
                                 + GRN
                               </Button>
                             )}
-                            {/* Create Bill: approved/partially_received/received */}
-                            {!['cancelled', 'pending'].includes(po.status) && (
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="success"
-                                onClick={() => { setPrefilledPOForBill(po); setBillModalOpen(true); }}
-                                sx={{ fontSize: '0.7rem', fontWeight: 700, minWidth: 70 }}
-                              >
-                                Bill
-                              </Button>
-                            )}
+                            {/* Bill Actions: Reflect state (Create Bill / View Bill / Fully Billed) */}
+                            {!['cancelled', 'pending'].includes(po.status) && (() => {
+                              const hasBills = (po.bill_count && parseInt(po.bill_count) > 0);
+                              const totQty = parseFloat(po.total_quantity || 0);
+                              const billedQty = parseFloat(po.total_billed_quantity || 0);
+                              const isFullyBilled = hasBills && (billedQty >= totQty && totQty > 0);
+
+                              if (isFullyBilled) {
+                                return (
+                                  <Button
+                                    size="small"
+                                    variant="contained"
+                                    color="info"
+                                    onClick={() => handleViewPOBills(po)}
+                                    sx={{ fontSize: '0.7rem', fontWeight: 700, minWidth: 80, bgcolor: '#0284c7', '&:hover': { bgcolor: '#0369a1' } }}
+                                  >
+                                    View Bill{po.bill_count > 1 ? `s (${po.bill_count})` : ''}
+                                  </Button>
+                                );
+                              }
+
+                              if (hasBills) {
+                                return (
+                                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      color="success"
+                                      disabled={poActionLoading === po.id + '_bill'}
+                                      onClick={() => handleBillPO(po)}
+                                      sx={{ fontSize: '0.7rem', fontWeight: 700 }}
+                                    >
+                                      {poActionLoading === po.id + '_bill' ? <CircularProgress size={14} color="inherit" /> : '+ Bill'}
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      color="info"
+                                      onClick={() => handleViewPOBills(po)}
+                                      sx={{ fontSize: '0.7rem', fontWeight: 700 }}
+                                    >
+                                      View ({po.bill_count})
+                                    </Button>
+                                  </Box>
+                                );
+                              }
+
+                              return (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                  disabled={poActionLoading === po.id + '_bill'}
+                                  onClick={() => handleBillPO(po)}
+                                  sx={{ fontSize: '0.7rem', fontWeight: 700, minWidth: 70 }}
+                                >
+                                  {poActionLoading === po.id + '_bill' ? <CircularProgress size={14} color="inherit" /> : 'Create Bill'}
+                                </Button>
+                              );
+                            })()}
                             {/* Cancel: only pending/approved (no GRNs) */}
                             {['pending', 'approved'].includes(po.status) && (
                               <Button
@@ -1834,13 +2091,11 @@ export default function InventorySuite({
                               size="small"
                               variant="contained"
                               color="success"
-                              onClick={() => {
-                                setBillModalOpen(true);
-                                setPrefilledPOForBill({ ...grn, _grn_id: grn.id, items: [] });
-                              }}
+                              disabled={poActionLoading === grn.id + '_grn_bill'}
+                              onClick={() => handleBillGRN(grn)}
                               sx={{ fontSize: '0.7rem', fontWeight: 700 }}
                             >
-                              → Create Bill
+                              {poActionLoading === grn.id + '_grn_bill' ? <CircularProgress size={14} color="inherit" /> : '→ Create Bill'}
                             </Button>
                           )}
                         </TableCell>
@@ -2169,8 +2424,11 @@ export default function InventorySuite({
         open={poModalOpen}
         warehouses={warehouses}
         suppliers={suppliers}
+        categories={categories}
         onClose={() => setPoModalOpen(false)}
         onCreated={() => { fetchPurchases(); fetchDashboardMetrics(); }}
+        onWarehouseCreated={() => fetchWarehouses()}
+        onSupplierCreated={() => fetchSuppliers()}
       />
 
       {/* 8. Purchase Bill (Goods Inward) Modal */}
@@ -2179,9 +2437,139 @@ export default function InventorySuite({
         warehouses={warehouses}
         suppliers={suppliers}
         prefilledPO={prefilledPOForBill}
-        onClose={() => setBillModalOpen(false)}
-        onCreated={() => { fetchPurchases(); fetchCatalog(); fetchDashboardMetrics(); }}
+        onClose={() => { setBillModalOpen(false); setPrefilledPOForBill(null); }}
+        onCreated={(newBill) => {
+          fetchPurchases();
+          fetchCatalog();
+          fetchDashboardMetrics();
+          // After creating a bill, open the view modal for it
+          if (newBill?.id) setViewBillId(newBill.id);
+        }}
       />
+
+      {/* 8b. Purchase Bill Read-Only View Modal */}
+      <PurchaseBillViewModal
+        open={Boolean(viewBillId)}
+        billId={viewBillId}
+        onClose={() => setViewBillId(null)}
+        onEdit={(bill) => {
+          // Open the edit form pre-filled with saved bill data
+          setViewBillId(null);
+          setPrefilledPOForBill({
+            ...bill,
+            _edit_mode: true,
+            items: (bill.items || []).map(it => ({
+              menu_item_id: it.menu_item_id,
+              item_name: it.item_name,
+              sku: it.sku || '',
+              unit: it.unit || 'pcs',
+              quantity: parseFloat(it.quantity || 0),
+              rate: parseFloat(it.rate || 0),
+              tax_rate: parseFloat(it.tax_rate || 0),
+              tax_amount: parseFloat(it.tax_amount || 0),
+              discount_amount: parseFloat(it.discount_amount || 0),
+              total_amount: parseFloat(it.total_amount || 0),
+              batch_number: it.batch_number || '',
+              expiry_date: it.expiry_date ? String(it.expiry_date).split('T')[0] : ''
+            }))
+          });
+          setBillModalOpen(true);
+        }}
+        onRefresh={() => fetchPurchases()}
+      />
+
+      {/* Existing Bill Warning Dialog */}
+      <Dialog
+        open={Boolean(poExistingBillDialog?.open)}
+        onClose={() => setPoExistingBillDialog(null)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pb: 1 }}>
+          <AlertTriangle size={22} color="#f59e0b" />
+          <Typography variant="h6" sx={{ fontWeight: 800 }}>
+            Bill Already Exists
+          </Typography>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Alert severity="warning">
+              A purchase bill has already been recorded for {poExistingBillDialog?.type === 'grn' ? 'Goods Received Note' : 'Purchase Order'}{' '}
+              <strong>
+                #{poExistingBillDialog?.type === 'grn' ? poExistingBillDialog?.record?.grn_number : poExistingBillDialog?.record?.po_number}
+              </strong>.
+            </Alert>
+
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              Existing Bill(s):
+            </Typography>
+            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 1.5 }}>
+              <Table size="small">
+                <TableHead sx={{ bgcolor: '#f8fafc' }}>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 700 }}>Ref #</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Vendor Bill #</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                    <TableCell align="right" sx={{ fontWeight: 700 }}>Amount</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 700 }}>Status</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {poExistingBillDialog?.bills?.map(b => (
+                    <TableRow key={b.id}>
+                      <TableCell sx={{ fontFamily: 'monospace', fontWeight: 600 }}>{b.internal_bill_number}</TableCell>
+                      <TableCell>{b.bill_number}</TableCell>
+                      <TableCell>{b.bill_date ? new Date(b.bill_date).toLocaleDateString() : 'N/A'}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, color: '#16a34a' }}>
+                        ₹{parseFloat(b.total_amount || 0).toFixed(2)}
+                      </TableCell>
+                      <TableCell align="center">
+                        <Chip
+                          label={(b.payment_status || 'unpaid').toUpperCase()}
+                          size="small"
+                          color={b.payment_status === 'paid' ? 'success' : b.payment_status === 'partially_paid' ? 'warning' : 'error'}
+                          sx={{ fontWeight: 700, fontSize: '0.65rem' }}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+
+            <Typography variant="body2" color="text.secondary">
+              Would you like to view the existing bill instead, or proceed to create another bill for any unbilled quantities?
+            </Typography>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={() => setPoExistingBillDialog(null)} color="inherit">
+            Cancel
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              setPoExistingBillDialog(null);
+              setPurchaseSegment('bills');
+            }}
+          >
+            View Existing Bill
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            onClick={() => {
+              const rec = poExistingBillDialog?.record;
+              const isGrn = poExistingBillDialog?.type === 'grn';
+              setPoExistingBillDialog(null);
+              setPrefilledPOForBill(isGrn ? { ...rec, _grn_id: rec.id } : rec);
+              setBillModalOpen(true);
+            }}
+          >
+            Create New Bill
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* 9. Purchase Return Modal */}
       <PurchaseReturnModal

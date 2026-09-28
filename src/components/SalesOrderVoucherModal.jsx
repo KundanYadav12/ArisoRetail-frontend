@@ -242,8 +242,8 @@ export default function SalesOrderVoucherModal({
         onClose={onClose}
         maxWidth="md"
         fullWidth
-        PaperProps={{
-          sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' }
+        slotProps={{
+          paper: { sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' } }
         }}
       >
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1, borderBottom: '1px solid #e2e8f0' }}>
@@ -286,7 +286,7 @@ export default function SalesOrderVoucherModal({
               anchorEl={menuAnchor}
               open={Boolean(menuAnchor)}
               onClose={() => setMenuAnchor(null)}
-              PaperProps={{ sx: { borderRadius: 2, minWidth: 180 } }}
+              slotProps={{ paper: { sx: { borderRadius: 2, minWidth: 180 } } }}
             >
               {isPending && (
                 <MenuItem onClick={handleConvertToInvoice} sx={{ fontWeight: 700, color: '#16a34a' }}>
@@ -794,7 +794,7 @@ export default function SalesOrderVoucherModal({
         onClose={() => setEmailModalOpen(false)}
         maxWidth="xs"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 2.5 } }}
+        slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}
       >
         <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>Share Voucher via Email</DialogTitle>
         <DialogContent sx={{ pt: 1.5 }}>

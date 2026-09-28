@@ -220,15 +220,15 @@ export default function SuperAdminAiConfigManager({ token }) {
           </Alert>
         )}
 
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 2, borderTop: 1, borderColor: 'divider', flexWrap: 'wrap', gap: 1.5 }}>
-          <Box sx={{ display: 'flex', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column-reverse', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'stretch', sm: 'center' }, pt: 2, borderTop: 1, borderColor: 'divider', gap: 1.5 }}>
+          <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5, width: { xs: '100%', sm: 'auto' } }}>
             <Button
               variant="outlined"
               color="secondary"
               disabled={testing || saving}
               onClick={handleTestConnection}
               startIcon={testing ? <CircularProgress size={16} color="inherit" /> : <Send size={16} />}
-              sx={{ fontWeight: 800, textTransform: 'none' }}
+              sx={{ fontWeight: 800, textTransform: 'none', width: { xs: '100%', sm: 'auto' } }}
             >
               {testing ? 'Testing Gemini API Connection...' : '⚡ Test API Connection'}
             </Button>
@@ -240,7 +240,7 @@ export default function SuperAdminAiConfigManager({ token }) {
                 disabled={saving || testing}
                 onClick={handleRemoveKey}
                 startIcon={<Trash2 size={16} />}
-                sx={{ fontWeight: 800, textTransform: 'none' }}
+                sx={{ fontWeight: 800, textTransform: 'none', width: { xs: '100%', sm: 'auto' } }}
               >
                 Remove API Key
               </Button>
@@ -252,7 +252,7 @@ export default function SuperAdminAiConfigManager({ token }) {
             disabled={saving || testing}
             onClick={handleSaveConfig}
             startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <Save size={16} />}
-            sx={{ fontWeight: 800, textTransform: 'none', px: 3 }}
+            sx={{ fontWeight: 800, textTransform: 'none', px: 3, width: { xs: '100%', sm: 'auto' } }}
           >
             {saving ? 'Saving Settings...' : 'Save AI Configuration'}
           </Button>

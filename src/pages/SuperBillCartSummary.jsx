@@ -71,6 +71,10 @@ export default function SuperBillCartSummary({
 
   const taxAmount = docTax.totalTax;
   const taxableAmount = docTax.taxableAmount;
+  const displaySubtotal = docTax.subtotal;
+  const cgstAmount = docTax.cgstAmount;
+  const sgstAmount = docTax.sgstAmount;
+  const igstAmount = docTax.igstAmount;
   const grandTotal = docTax.grandTotal;
   const roundOff = docTax.roundOff;
   const taxInvoiceType = docTax.taxInvoiceType;
@@ -332,7 +336,7 @@ export default function SuperBillCartSummary({
             <Paper variant="outlined" sx={{ p: 2, bgcolor: '#f8fafc', borderRadius: 3 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="body2" color="text.secondary">Sub Total</Typography>
-                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>₹{subtotal.toFixed(2)}</Typography>
+                <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>₹{displaySubtotal.toFixed(2)}</Typography>
               </Box>
 
               {/* Place of Supply (GST Type) */}
@@ -402,20 +406,29 @@ export default function SuperBillCartSummary({
                   {taxType === 'inter' ? (
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                       <Typography variant="caption" color="text.secondary">IGST Tax</Typography>
-                      <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{taxAmount.toFixed(2)}</Typography>
+                      <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{igstAmount.toFixed(2)}</Typography>
                     </Box>
                   ) : (
                     <>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                         <Typography variant="caption" color="text.secondary">CGST Tax</Typography>
-                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{(taxAmount / 2).toFixed(2)}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{cgstAmount.toFixed(2)}</Typography>
                       </Box>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                         <Typography variant="caption" color="text.secondary">SGST Tax</Typography>
-                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{(taxAmount / 2).toFixed(2)}</Typography>
+                        <Typography variant="caption" sx={{ fontWeight: 700 }}>₹{sgstAmount.toFixed(2)}</Typography>
                       </Box>
                     </>
                   )}
+                </Box>
+              )}
+
+              {roundOff !== 0 && (
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary">Round Off</Typography>
+                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                    {roundOff > 0 ? `+₹${roundOff.toFixed(2)}` : `-₹${Math.abs(roundOff).toFixed(2)}`}
+                  </Typography>
                 </Box>
               )}
 

@@ -13,7 +13,7 @@ import {
   Alert
 } from '@mui/material';
 import { Close as CloseIcon, FlashOn as FlashOnIcon, FlashOff as FlashOffIcon, Cameraswitch as CameraSwitchIcon } from '@mui/icons-material';
-import { CheckCircle2, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Keyboard } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 // Audio feedback synthesizers using Web Audio API
@@ -65,6 +65,8 @@ export default function WebBarcodeScannerModal({
   const [hasTorch, setHasTorch] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [recentScan, setRecentScan] = useState(null); // { code, message, success: boolean }
+  const [manualCode, setManualCode] = useState('');
+  const manualInputRef = useRef(null);
 
   const html5QrCodeRef = useRef(null);
   const isScannerRunningRef = useRef(false);
@@ -76,6 +78,7 @@ export default function WebBarcodeScannerModal({
     if (open) {
       setErrorMsg('');
       setRecentScan(null);
+      setManualCode('');
       Html5Qrcode.getCameras()
         .then((devices) => {
           if (devices && devices.length) {
@@ -272,20 +275,34 @@ export default function WebBarcodeScannerModal({
     onClose();
   };
 
+  const handleManualSubmit = (e) => {
+    if (e) e.preventDefault();
+    const clean = manualCode.trim();
+    if (!clean) return;
+
+    handleDecodedBarcode(clean);
+    setManualCode('');
+    if (manualInputRef.current) {
+      manualInputRef.current.focus();
+    }
+  };
+
   return (
     <Dialog
       open={open}
       onClose={handleCloseDialog}
       maxWidth="sm"
       fullWidth
-      PaperProps={{
-        sx: {
-          borderRadius: 4,
-          overflow: 'hidden',
-          bgcolor: '#0F172A',
-          color: '#F8FAFC',
-          border: '1px solid #334155',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
+      slotProps={{
+        paper: {
+          sx: {
+            borderRadius: 4,
+            overflow: 'hidden',
+            bgcolor: '#0F172A',
+            color: '#F8FAFC',
+            border: '1px solid #334155',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)'
+          }
         }
       }}
     >
@@ -411,6 +428,76 @@ export default function WebBarcodeScannerModal({
             </Box>
           </Box>
         )}
+
+        {/* Manual Serial Number & Barcode Entry Option */}
+        <Box
+          component="form"
+          onSubmit={handleManualSubmit}
+          sx={{
+            width: '100%',
+            maxWidth: 380,
+            mt: 2,
+            p: 1.5,
+            borderRadius: 2.5,
+            bgcolor: '#1E293B',
+            border: '1px solid #334155',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="caption" sx={{ color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, display: 'flex', alignItems: 'center', gap: 0.75, fontSize: '0.72rem' }}>
+              <Keyboard size={14} color="#38BDF8" /> Enter Serial Number / Barcode Manually
+            </Typography>
+            <Typography variant="caption" sx={{ color: '#64748B', fontSize: '0.68rem', fontWeight: 600 }}>
+              Press Enter ↵
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <input
+              ref={manualInputRef}
+              type="text"
+              value={manualCode}
+              onChange={(e) => setManualCode(e.target.value)}
+              placeholder="e.g. 8-digit Serial (11905666) or Barcode..."
+              autoComplete="off"
+              style={{
+                flex: 1,
+                padding: '9px 12px',
+                borderRadius: '8px',
+                backgroundColor: '#0F172A',
+                border: '1px solid #475569',
+                color: '#F8FAFC',
+                fontSize: '13px',
+                fontWeight: '600',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+              onFocus={(e) => e.target.style.borderColor = '#38BDF8'}
+              onBlur={(e) => e.target.style.borderColor = '#475569'}
+            />
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={!manualCode.trim()}
+              sx={{
+                bgcolor: '#0284C7',
+                '&:hover': { bgcolor: '#0369A1' },
+                '&.Mui-disabled': { bgcolor: '#334155', color: '#64748B' },
+                color: '#ffffff',
+                fontWeight: 800,
+                fontSize: '12px',
+                textTransform: 'none',
+                px: 2,
+                borderRadius: 2,
+                whiteSpace: 'nowrap'
+              }}
+            >
+              Add Item
+            </Button>
+          </Box>
+        </Box>
 
         {/* Controls Bar */}
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, mt: 2, width: '100%' }}>

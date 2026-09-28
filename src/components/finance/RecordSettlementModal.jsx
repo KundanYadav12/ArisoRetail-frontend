@@ -180,7 +180,7 @@ export default function RecordSettlementModal({
                 fullWidth
                 value={formData.settlement_date}
                 onChange={e => setFormData(prev => ({ ...prev, settlement_date: e.target.value }))}
-                InputLabelProps={{ shrink: true }}
+                slotProps={{ inputLabel: { shrink: true } }}
                 required
               />
 

@@ -100,7 +100,7 @@ export default function DeliveryChallanVoucherModal({
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' } }}
+      slotProps={{ paper: { sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' } } }}
     >
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1, borderBottom: '1px solid #e2e8f0' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>

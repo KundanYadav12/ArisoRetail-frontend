@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar, Typography, Button, IconButton, useMediaQuery, Menu, MenuItem, Chip } from '@mui/material';
+import {
+  ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar,
+  Typography, Button, IconButton, useMediaQuery, Menu, MenuItem, Chip,
+  Tooltip, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider
+} from '@mui/material';
 // Clean Vite HMR trigger
 import MenuIcon from '@mui/icons-material/Menu';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
@@ -22,7 +26,7 @@ import POSScreen from './pages/POS';
 import CashierDashboard from './pages/CashierDashboard';
 import DayEndDashboard from './components/day_end/DayEndDashboard';
 import PaymentReconciliationSuite from './components/finance/PaymentReconciliationSuite';
-import { ArrowRightLeft } from 'lucide-react';
+import { ArrowRightLeft, Tag, ChevronDown, MoreHorizontal, X } from 'lucide-react';
 import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
 import SuperBillItems from './pages/SuperBillItems';
@@ -72,8 +76,11 @@ export default function App() {
   const [taxType, setTaxType] = useState('intra');
   const [receiptSettings, setReceiptSettings] = useState(null);
 
-  const [anchorElNav, setAnchorElNav] = useState(null);
-  const isMobile = useMediaQuery('(max-width:900px)');
+  const [anchorElUserMenu, setAnchorElUserMenu] = useState(null);
+  const [anchorElMore, setAnchorElMore] = useState(null);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const isMobile = useMediaQuery('(max-width:899px)');
+  const isMidScreen = useMediaQuery('(min-width:900px) and (max-width:1279px)');
 
   const [netStatus, setNetStatus] = useState({
     isOnline: true,
@@ -273,22 +280,156 @@ export default function App() {
     localStorage.setItem('pos_focus_mode', isFocus ? 'true' : 'false');
   };
 
+  const userRole = (user?.role || '').toLowerCase();
+  const isSuperAdmin = userRole === 'super_admin' || userRole === 'superadmin';
+  const isAdminOrManager = userRole === 'admin' || userRole === 'manager';
+  const isSalesman = userRole === 'salesman';
+  const isWarehouseManager = userRole === 'warehouse_manager';
+
+  const userPerms = React.useMemo(() => {
+    if (Array.isArray(user?.permissions) && user.permissions.length > 0) return user.permissions;
+    if (isSuperAdmin || userRole === 'admin') return ['all'];
+    if (userRole === 'manager') return [
+      'pos_billing', 'order_history', 'sales_orders', 'customers',
+      'menu_items', 'categories', 'inventory', 'warehouse_dashboard', 'inventory_catalog',
+      'warehouses', 'rack_management', 'stock_transfer', 'stock_receiving', 'stock_count',
+      'stock_adjustment', 'stock_requests', 'stock_ledger', 'warehouse_reports',
+      'reports', 'item_sales_report', 'bank_accounts', 'expenses', 'day_end',
+      'payment_reconciliation', 'suppliers', 'printers', 'gst', 'settings'
+    ];
+    if (userRole === 'salesman') return ['pos_billing', 'sales_orders', 'customers', 'inventory', 'order_history'];
+    if (userRole === 'warehouse_manager') return [
+      'inventory', 'warehouse_dashboard', 'inventory_catalog', 'warehouses',
+      'rack_management', 'stock_transfer', 'stock_receiving', 'stock_count',
+      'stock_adjustment', 'stock_requests', 'stock_ledger', 'warehouse_reports',
+      'suppliers', 'item_sales_report', 'sales_orders', 'customers'
+    ];
+    return ['pos_billing', 'order_history', 'day_end', 'customers'];
+  }, [user?.permissions, userRole, isSuperAdmin]);
+
+  const hasPosPermission = !isSuperAdmin && (userPerms.includes('pos_billing') || userPerms.includes('all'));
+  const hasDayEndPermission = !isSuperAdmin && (isAdminOrManager || userPerms.includes('day_end') || userPerms.includes('all'));
+  const hasReconciliationPermission = !isSuperAdmin && (isAdminOrManager || userPerms.includes('payment_reconciliation') || userPerms.includes('all'));
+  const hasAdminPanelPermission = !isSuperAdmin && (isAdminOrManager || userPerms.some(p => [
+    'menu_items', 'categories', 'printers', 'reports', 'item_sales_report', 'inventory',
+    'gst', 'settings', 'profile', 'staff', 'order_history', 'sales_orders', 'customers',
+    'bank_accounts', 'expenses', 'day_end', 'payment_reconciliation', 'suppliers', 'serial_numbers'
+  ].includes(p)));
+  const hasSerialNumbersPermission = !isSuperAdmin && (user?.feature_serial_numbers !== false) && (userRole === 'admin' || userPerms.includes('serial_numbers') || userPerms.includes('all'));
+  const hasCashierShiftPermission = !isSuperAdmin && !isSalesman && !isWarehouseManager;
+
+  const navItems = React.useMemo(() => {
+    return [
+      isSuperAdmin && {
+        id: 'superadmin',
+        label: 'Super Admin',
+        icon: <SecurityOutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('superadmin')
+      },
+      isWarehouseManager && {
+        id: 'warehouse',
+        label: 'Warehouse Suite',
+        icon: <Inventory2OutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('warehouse')
+      },
+      hasPosPermission && {
+        id: 'pos',
+        label: 'POS Screen',
+        icon: <ShoppingCartOutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('pos')
+      },
+      isSalesman && {
+        id: 'inventory',
+        label: 'Stock Inventory',
+        icon: <Inventory2OutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('inventory')
+      },
+      (!isSuperAdmin && user?.feature_superbill && !isSalesman && !isWarehouseManager) && {
+        id: 'superbill_billing',
+        label: 'SuperBill Billing',
+        icon: <ElectricBoltOutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('superbill_billing')
+      },
+      (!isSuperAdmin && user?.feature_superbill && !isSalesman && !isWarehouseManager) && {
+        id: 'superbill_items',
+        label: 'SuperBill Items',
+        icon: <Inventory2OutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('superbill_items')
+      },
+      hasCashierShiftPermission && {
+        id: 'cashier',
+        label: 'Cashier Shift',
+        icon: <PointOfSaleOutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('cashier')
+      },
+      hasAdminPanelPermission && {
+        id: 'admin',
+        label: 'Admin Panel',
+        icon: <AdminPanelSettingsOutlinedIcon fontSize="small" />,
+        onClick: () => setCurrentView('admin')
+      },
+      hasDayEndPermission && {
+        id: 'day_end',
+        label: 'Day End',
+        icon: <VerifiedIcon fontSize="small" />,
+        onClick: () => setCurrentView('day_end')
+      },
+      hasReconciliationPermission && {
+        id: 'payment_reconciliation',
+        label: 'Reconciliation',
+        icon: <ArrowRightLeft size={16} />,
+        onClick: () => setCurrentView('payment_reconciliation')
+      },
+      hasSerialNumbersPermission && {
+        id: 'serial_numbers',
+        label: 'Serial Numbers',
+        icon: <Tag size={16} />,
+        onClick: () => setCurrentView('serial_numbers')
+      }
+    ].filter(Boolean);
+  }, [
+    isSuperAdmin, isWarehouseManager, hasPosPermission, isSalesman,
+    user?.feature_superbill, hasCashierShiftPermission, hasAdminPanelPermission,
+    hasDayEndPermission, hasReconciliationPermission, hasSerialNumbersPermission
+  ]);
+
+  const { visibleNavItems, overflowNavItems } = React.useMemo(() => {
+    const maxVisibleOnMid = 3;
+    if (!isMidScreen || navItems.length <= 4) {
+      return { visibleNavItems: navItems, overflowNavItems: [] };
+    }
+    const activeIndex = navItems.findIndex(i => i.id === currentView);
+    if (activeIndex >= maxVisibleOnMid) {
+      const visible = [...navItems.slice(0, maxVisibleOnMid - 1), navItems[activeIndex]];
+      const overflow = navItems.filter(item => !visible.some(v => v.id === item.id));
+      return { visibleNavItems: visible, overflowNavItems: overflow };
+    }
+    return {
+      visibleNavItems: navItems.slice(0, maxVisibleOnMid),
+      overflowNavItems: navItems.slice(maxVisibleOnMid)
+    };
+  }, [navItems, isMidScreen, currentView]);
+
   if (!token || !user) {
     return (
       <NotificationProvider>
         <ThemeProvider theme={muiTheme}>
           <CssBaseline />
-          <Login onLoginSuccess={(u, t) => { setUser(u); setToken(t); }} />
+          <Login onLoginSuccess={(u, t) => {
+            setUser(u);
+            setToken(t);
+            if (u.role === 'super_admin' || u.role === 'superadmin') {
+              setCurrentView('superadmin');
+            } else if (u.role === 'warehouse_manager') {
+              setCurrentView('warehouse');
+            } else {
+              setCurrentView('pos');
+            }
+          }} />
         </ThemeProvider>
       </NotificationProvider>
     );
   }
-
-  const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'superadmin';
-  const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
-  const isSalesman = user?.role === 'salesman';
-  const isWarehouseManager = user?.role === 'warehouse_manager';
-  const hasPosPermission = !isWarehouseManager || (Array.isArray(user?.permissions) && (user.permissions.includes('pos_billing') || user.permissions.includes('all')));
 
   return (
     <LanguageProvider>
@@ -312,324 +453,563 @@ export default function App() {
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
           {/* Header Bar */}
           {!posFocusMode && (
-            <AppBar position="static" color="default" elevation={1} sx={{ borderBottom: 1, borderColor: 'divider' }}>
-              <Toolbar sx={{ justifyContent: 'space-between', minHeight: { xs: 46, sm: 56, xl: 80 }, py: { xs: 0.5, sm: 1 }, px: { xs: 1, sm: 2, xl: 4 }, gap: 1 }}>
-                
-                {/* Brand Title */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.75, sm: 1.5, xl: 2 }, flexShrink: 1, minWidth: 0, maxWidth: { xs: 200, sm: 320, md: 500 } }}>
+            <AppBar
+              position="static"
+              color="default"
+              elevation={0}
+              sx={{
+                bgcolor: 'background.paper',
+                borderBottom: '1px solid',
+                borderColor: 'divider',
+                zIndex: (theme) => theme.zIndex.appBar
+              }}
+            >
+              <Toolbar
+                variant="dense"
+                disableGutters
+                sx={{
+                  height: { xs: 52, md: 56 },
+                  minHeight: { xs: 52, md: 56 },
+                  maxHeight: { xs: 52, md: 56 },
+                  px: { xs: 1.5, sm: 2, lg: 3 },
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: { xs: 1, sm: 1.5, lg: 2 }
+                }}
+              >
+                {/* 1. Left Side: Brand Logo & Full Business Name */}
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1.25,
+                    flexShrink: 0,
+                    cursor: 'pointer',
+                    userSelect: 'none'
+                  }}
+                  onClick={() => {
+                    if (hasPosPermission) setCurrentView('pos');
+                    else if (isSuperAdmin) setCurrentView('superadmin');
+                  }}
+                >
                   <Box
                     component="img"
-                    src={resolveImageUrl(user?.restaurant_logo_url) || retailLogo}
-                    alt="Ariso POS"
+                    src={isSuperAdmin ? retailLogo : (resolveImageUrl(user?.restaurant_logo_url) || retailLogo)}
+                    alt="Ariso Retail"
                     sx={{
-                      width: { xs: 28, sm: 34, xl: 42 },
-                      height: { xs: 28, sm: 34, xl: 42 },
+                      width: { xs: 28, md: 32 },
+                      height: { xs: 28, md: 32 },
                       borderRadius: 1.5,
                       objectFit: 'contain',
                       border: '1px solid',
                       borderColor: 'divider',
-                      flexShrink: 0
+                      p: 0.25,
+                      bgcolor: '#ffffff'
                     }}
                     onError={(e) => { e.target.src = retailLogo; }}
                   />
                   <Typography
-                    variant="h6"
-                    title={user?.restaurant_name || 'Ariso Retail Flagship'}
+                    variant="subtitle1"
                     sx={{
                       fontWeight: 800,
-                      fontSize: { xs: '0.95rem', sm: '1.1rem', xl: '1.6rem' },
-                      color: 'primary.main',
+                      fontSize: { xs: '0.88rem', sm: '1rem' },
+                      color: 'text.primary',
                       whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis'
+                      letterSpacing: '-0.02em',
+                      maxWidth: { xs: 150, sm: 240, md: 'none' },
+                      overflow: { xs: 'hidden', md: 'visible' },
+                      textOverflow: { xs: 'ellipsis', md: 'clip' }
                     }}
                   >
-                    {user?.restaurant_name || 'Ariso Retail Flagship'}
+                    {isSuperAdmin ? 'Ariso Retail Enterprise' : (user?.restaurant_name || 'Ariso Retail Flagship')}
                   </Typography>
+                  {isSuperAdmin && (
+                    <Chip
+                      label="SUPER ADMIN"
+                      color="secondary"
+                      size="small"
+                      icon={<SecurityOutlinedIcon fontSize="small" />}
+                      sx={{ fontWeight: 800, fontSize: '0.65rem', height: 22, ml: 0.5, display: { xs: 'none', sm: 'inline-flex' } }}
+                    />
+                  )}
                 </Box>
 
-                {/* Navigation Menu (Responsive: ☰ Hamburger on Mobile, Inline Tabs on Desktop) */}
-                {/* Desktop inline tabs */}
+                {/* 2. Center: Desktop Navigation Bar (nowrap, compact, aligned icons) */}
                 {!isMobile && (
-                  <Box sx={{ display: 'flex', gap: { xs: 1, xl: 2.5 } }}>
-                    {isWarehouseManager && (
-                      <Button
-                        variant={currentView === 'warehouse' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('warehouse')}
-                        startIcon={<Inventory2OutlinedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Warehouse Suite
-                      </Button>
-                    )}
-                    {(!isWarehouseManager || hasPosPermission) && (
-                      <Button
-                        variant={currentView === 'pos' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('pos')}
-                        startIcon={<ShoppingCartOutlinedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        POS Screen
-                      </Button>
-                    )}
-                    {isSalesman && (
-                      <Button
-                        variant={currentView === 'inventory' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('inventory')}
-                        startIcon={<Inventory2OutlinedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Stock Inventory
-                      </Button>
-                    )}
-                    {!isSalesman && !isWarehouseManager && (
-                      <Button
-                        variant={currentView === 'cashier' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('cashier')}
-                        startIcon={<PointOfSaleOutlinedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Cashier Shift
-                      </Button>
-                    )}
-                    {isAdminOrManager && (
-                      <Button
-                        variant={currentView === 'admin' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('admin')}
-                        startIcon={<AdminPanelSettingsOutlinedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Admin Panel
-                      </Button>
-                    )}
-                    {isAdminOrManager && (
-                      <Button
-                        variant={currentView === 'day_end' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('day_end')}
-                        startIcon={<VerifiedIcon fontSize="small" />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Day End
-                      </Button>
-                    )}
-                    {isAdminOrManager && (
-                      <Button
-                        variant={currentView === 'payment_reconciliation' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('payment_reconciliation')}
-                        startIcon={<ArrowRightLeft size={18} />}
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Reconciliation
-                      </Button>
-                    )}
-                    {isSuperAdmin && (
-                      <Button
-                        variant={currentView === 'superadmin' ? 'contained' : 'text'}
-                        onClick={() => setCurrentView('superadmin')}
-                        startIcon={<SecurityOutlinedIcon fontSize="small" />}
-                        color="secondary"
-                        sx={{ fontWeight: 'bold', fontSize: { xs: '0.875rem', xl: '1.2rem' } }}
-                      >
-                        Super Admin
-                      </Button>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: { md: 0.75, lg: 1 },
+                      flex: 1,
+                      justifyContent: 'center',
+                      minWidth: 0,
+                      overflow: 'hidden'
+                    }}
+                  >
+                    {visibleNavItems.map(item => {
+                      const isActive = currentView === item.id;
+                      return (
+                        <Button
+                          key={item.id}
+                          onClick={item.onClick}
+                          startIcon={item.icon}
+                          sx={{
+                            height: 34,
+                            minHeight: 34,
+                            px: { md: 1.2, lg: 1.6 },
+                            borderRadius: '8px',
+                            textTransform: 'none',
+                            whiteSpace: 'nowrap',
+                            fontSize: '0.84rem',
+                            fontWeight: isActive ? 700 : 500,
+                            color: isActive
+                              ? '#ea580c'
+                              : (themeMode === 'dark' ? '#94a3b8' : '#475569'),
+                            bgcolor: isActive
+                              ? (themeMode === 'dark' ? 'rgba(234, 88, 12, 0.16)' : 'rgba(234, 88, 12, 0.08)')
+                              : 'transparent',
+                            border: '1px solid',
+                            borderColor: isActive
+                              ? (themeMode === 'dark' ? 'rgba(234, 88, 12, 0.35)' : 'rgba(234, 88, 12, 0.22)')
+                              : 'transparent',
+                            boxShadow: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 0.75,
+                            flexShrink: 0,
+                            transition: 'all 0.15s ease-in-out',
+                            '&:hover': {
+                              bgcolor: isActive
+                                ? (themeMode === 'dark' ? 'rgba(234, 88, 12, 0.22)' : 'rgba(234, 88, 12, 0.14)')
+                                : (themeMode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)'),
+                              color: isActive ? '#ea580c' : (themeMode === 'dark' ? '#f8fafc' : '#0f172a'),
+                              borderColor: isActive
+                                ? (themeMode === 'dark' ? 'rgba(234, 88, 12, 0.45)' : 'rgba(234, 88, 12, 0.32)')
+                                : 'transparent'
+                            },
+                            '& .MuiButton-startIcon': {
+                              mr: 0.25,
+                              ml: 0,
+                              color: isActive ? '#ea580c' : (themeMode === 'dark' ? '#94a3b8' : '#64748b'),
+                              display: 'flex',
+                              alignItems: 'center'
+                            }
+                          }}
+                        >
+                          {item.label}
+                        </Button>
+                      );
+                    })}
+
+                    {/* Responsive "More" Dropdown on mid-size screens */}
+                    {overflowNavItems.length > 0 && (
+                      <>
+                        <Button
+                          onClick={(e) => setAnchorElMore(e.currentTarget)}
+                          endIcon={<ChevronDown size={14} />}
+                          sx={{
+                            height: 34,
+                            minHeight: 34,
+                            px: 1.25,
+                            borderRadius: '8px',
+                            textTransform: 'none',
+                            whiteSpace: 'nowrap',
+                            fontSize: '0.84rem',
+                            fontWeight: 600,
+                            color: overflowNavItems.some(i => i.id === currentView) ? '#ea580c' : 'text.secondary',
+                            bgcolor: overflowNavItems.some(i => i.id === currentView) ? 'rgba(234, 88, 12, 0.08)' : 'transparent',
+                            border: '1px solid',
+                            borderColor: overflowNavItems.some(i => i.id === currentView) ? 'rgba(234, 88, 12, 0.22)' : 'transparent',
+                            flexShrink: 0,
+                            '&:hover': { bgcolor: 'action.hover' }
+                          }}
+                        >
+                          More
+                        </Button>
+                        <Menu
+                          anchorEl={anchorElMore}
+                          open={Boolean(anchorElMore)}
+                          onClose={() => setAnchorElMore(null)}
+                          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                          transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                          slotProps={{
+                            paper: {
+                              elevation: 4,
+                              sx: { minWidth: 180, borderRadius: 2, mt: 0.5, p: 0.5 }
+                            }
+                          }}
+                        >
+                          {overflowNavItems.map(item => (
+                            <MenuItem
+                              key={item.id}
+                              onClick={() => { item.onClick(); setAnchorElMore(null); }}
+                              sx={{
+                                borderRadius: 1.5,
+                                py: 1,
+                                px: 1.5,
+                                fontWeight: currentView === item.id ? 700 : 500,
+                                fontSize: '0.85rem',
+                                color: currentView === item.id ? '#ea580c' : 'text.primary',
+                                bgcolor: currentView === item.id ? 'rgba(234, 88, 12, 0.08)' : 'transparent',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 1.25,
+                                '&:hover': {
+                                  bgcolor: currentView === item.id ? 'rgba(234, 88, 12, 0.14)' : 'action.hover'
+                                }
+                              }}
+                            >
+                              {item.icon} {item.label}
+                            </MenuItem>
+                          ))}
+                        </Menu>
+                      </>
                     )}
                   </Box>
                 )}
 
-                {/* Hamburger menu trigger icon (accessible on all viewports) */}
-                <Box>
+                {/* 3. Right Side: Desktop (Status, User Menu, Theme, Logout) */}
+                <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
+                  {/* Network / Offline Sync Status */}
+                  <Box
+                    onClick={() => { if (netStatus.pendingCount > 0) SyncService.syncPendingOrders(token); }}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                      px: 1.2,
+                      py: 0.4,
+                      borderRadius: 4,
+                      bgcolor: netStatus.isOnline
+                        ? (netStatus.pendingCount > 0 ? 'warning.light' : (themeMode === 'dark' ? 'rgba(34, 197, 94, 0.15)' : '#ecfdf5'))
+                        : (themeMode === 'dark' ? 'rgba(239, 68, 68, 0.15)' : '#fef2f2'),
+                      border: '1px solid',
+                      borderColor: netStatus.isOnline
+                        ? (netStatus.pendingCount > 0 ? 'warning.main' : (themeMode === 'dark' ? 'rgba(34, 197, 94, 0.3)' : '#bbf7d0'))
+                        : (themeMode === 'dark' ? 'rgba(239, 68, 68, 0.3)' : '#fecaca'),
+                      cursor: netStatus.pendingCount > 0 ? 'pointer' : 'default',
+                      userSelect: 'none'
+                    }}
+                    title={netStatus.isOnline ? (netStatus.pendingCount > 0 ? 'Click to sync pending orders' : 'System Online') : 'System Offline (Local DB)'}
+                  >
+                    <Box
+                      sx={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        bgcolor: netStatus.isOnline ? (netStatus.pendingCount > 0 ? '#f59e0b' : '#16a34a') : '#dc2626'
+                      }}
+                    />
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.74rem',
+                        color: netStatus.isOnline ? (netStatus.pendingCount > 0 ? '#b45309' : '#15803d') : '#b91c1c'
+                      }}
+                    >
+                      {netStatus.isSyncing ? 'Syncing...' : (netStatus.pendingCount > 0 ? `${netStatus.pendingCount} P` : (netStatus.isOnline ? 'Online' : 'Offline'))}
+                    </Typography>
+                  </Box>
+
+                  {/* User Profile trigger with dropdown */}
+                  <Box
+                    onClick={(e) => setAnchorElUserMenu(e.currentTarget)}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.75,
+                      cursor: 'pointer',
+                      px: 1,
+                      py: 0.4,
+                      borderRadius: 1.5,
+                      border: '1px solid transparent',
+                      transition: 'all 0.15s ease',
+                      '&:hover': { bgcolor: 'action.hover', borderColor: 'divider' }
+                    }}
+                  >
+                    <Box sx={{ textAlign: 'right', display: 'flex', flexDirection: 'column' }}>
+                      <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.82rem', lineHeight: 1.2, color: 'text.primary', whiteSpace: 'nowrap' }}>
+                        {user?.name || (isSuperAdmin ? 'Super Administrator' : 'User')}
+                      </Typography>
+                      <Typography variant="caption" sx={{ fontWeight: 600, fontSize: '0.68rem', textTransform: 'uppercase', color: isSuperAdmin ? 'secondary.main' : 'text.secondary', whiteSpace: 'nowrap' }}>
+                        {isSuperAdmin ? 'Super Admin' : (user?.role === 'warehouse_manager' ? 'Warehouse Manager' : (user?.role || 'Staff'))}
+                      </Typography>
+                    </Box>
+                    <ChevronDown size={14} color="#64748b" />
+                  </Box>
+
+                  {/* User Settings Dropdown */}
+                  <Menu
+                    anchorEl={anchorElUserMenu}
+                    open={Boolean(anchorElUserMenu)}
+                    onClose={() => setAnchorElUserMenu(null)}
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                    transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+                    slotProps={{
+                      paper: {
+                        elevation: 4,
+                        sx: { minWidth: 220, borderRadius: 2, mt: 0.5, p: 0.5 }
+                      }
+                    }}
+                  >
+                    <Box sx={{ px: 2, py: 1.25, bgcolor: 'action.hover', borderRadius: 1.5, mb: 0.5 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                        {user?.name || (isSuperAdmin ? 'Super Administrator' : 'User')}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: isSuperAdmin ? 'secondary.main' : '#ea580c', fontWeight: 700, textTransform: 'uppercase' }}>
+                        {isSuperAdmin ? 'Super Admin Console' : (user?.role === 'warehouse_manager' ? 'Warehouse Manager' : (user?.role || 'Staff'))}
+                      </Typography>
+                      {!isSuperAdmin && user?.assigned_warehouse_name && (
+                        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.72rem', mt: 0.25 }}>
+                          🏬 {user.assigned_warehouse_name}
+                        </Typography>
+                      )}
+                    </Box>
+                    <MenuItem onClick={() => { setAnchorElUserMenu(null); setLanguageModalVisible(true); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem' }}>
+                      <LanguageOutlinedIcon fontSize="small" /> Language
+                    </MenuItem>
+                    <MenuItem onClick={() => { setAnchorElUserMenu(null); setKeyboardHelpVisible(true); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem' }}>
+                      <KeyboardOutlinedIcon fontSize="small" /> Keyboard Shortcuts
+                    </MenuItem>
+                    <MenuItem onClick={() => { toggleTheme(); setAnchorElUserMenu(null); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem' }}>
+                      {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
+                      {themeMode === 'light' ? 'Dark Mode' : 'Light Mode'}
+                    </MenuItem>
+                    <Divider sx={{ my: 0.5 }} />
+                    <MenuItem onClick={() => { setAnchorElUserMenu(null); handleLogout(); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem', color: 'error.main', fontWeight: 600 }}>
+                      <LogOutIcon fontSize="small" /> Logout
+                    </MenuItem>
+                  </Menu>
+
+                  {/* Dark Mode Toggle Quick Icon */}
+                  <Tooltip title={themeMode === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode'} arrow>
+                    <IconButton
+                      onClick={toggleTheme}
+                      size="small"
+                      sx={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: '8px',
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        color: 'text.secondary',
+                        '&:hover': { bgcolor: 'action.hover', color: 'text.primary' }
+                      }}
+                    >
+                      {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
+                    </IconButton>
+                  </Tooltip>
+
+                  {/* Direct Logout Icon Button */}
+                  <Tooltip title="Logout / End Session" arrow>
+                    <IconButton
+                      onClick={handleLogout}
+                      size="small"
+                      sx={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: '8px',
+                        color: '#ef4444',
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        '&:hover': { bgcolor: '#fef2f2', borderColor: '#fca5a5' }
+                      }}
+                    >
+                      <LogOutIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+
+                {/* 4. Right Side: Mobile (Only Essentials: Online Badge + 44px Hamburger Button) */}
+                <Box sx={{ display: { xs: 'flex', md: 'none' }, alignItems: 'center', gap: 1 }}>
+                  {/* Compact Status Dot */}
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.5,
+                      px: 0.9,
+                      py: 0.35,
+                      borderRadius: 4,
+                      bgcolor: netStatus.isOnline
+                        ? (netStatus.pendingCount > 0 ? 'warning.light' : (themeMode === 'dark' ? 'rgba(34, 197, 94, 0.15)' : '#ecfdf5'))
+                        : (themeMode === 'dark' ? 'rgba(239, 68, 68, 0.15)' : '#fef2f2'),
+                      border: '1px solid',
+                      borderColor: netStatus.isOnline
+                        ? (netStatus.pendingCount > 0 ? 'warning.main' : (themeMode === 'dark' ? 'rgba(34, 197, 94, 0.3)' : '#bbf7d0'))
+                        : (themeMode === 'dark' ? 'rgba(239, 68, 68, 0.3)' : '#fecaca')
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        bgcolor: netStatus.isOnline ? (netStatus.pendingCount > 0 ? '#f59e0b' : '#16a34a') : '#dc2626'
+                      }}
+                    />
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.68rem',
+                        color: netStatus.isOnline ? (netStatus.pendingCount > 0 ? '#b45309' : '#15803d') : '#b91c1c'
+                      }}
+                    >
+                      {netStatus.isOnline ? 'Online' : 'Offline'}
+                    </Typography>
+                  </Box>
+
+                  {/* 44px Hamburger Touch Target Button */}
                   <IconButton
-                    onClick={(e) => setAnchorElNav(e.currentTarget)}
-                    color="inherit"
+                    onClick={() => setMobileDrawerOpen(true)}
                     sx={{
                       width: 44,
                       height: 44,
                       borderRadius: '10px',
                       border: '1px solid',
                       borderColor: 'divider',
-                      bgcolor: 'background.paper'
+                      bgcolor: 'background.paper',
+                      color: 'text.primary',
+                      '&:hover': { bgcolor: 'action.hover' }
                     }}
                   >
-                    <MenuIcon />
-                  </IconButton>
-                  <Menu
-                    anchorEl={anchorElNav}
-                    open={Boolean(anchorElNav)}
-                    onClose={() => setAnchorElNav(null)}
-                    anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                    transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-                    slotProps={{
-                      paper: {
-                        elevation: 4,
-                        sx: { minWidth: 220, borderRadius: 2, mt: 1 }
-                      }
-                    }}
-                  >
-                    {isWarehouseManager && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('warehouse'); setAnchorElNav(null); }}
-                        selected={currentView === 'warehouse'}
-                        sx={{ fontWeight: currentView === 'warehouse' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <Inventory2OutlinedIcon fontSize="small" /> Warehouse Suite
-                      </MenuItem>
-                    )}
-                    {(!isWarehouseManager || hasPosPermission) && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('pos'); setAnchorElNav(null); }}
-                        selected={currentView === 'pos'}
-                        sx={{ fontWeight: currentView === 'pos' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <ShoppingCartOutlinedIcon fontSize="small" /> POS Screen
-                      </MenuItem>
-                    )}
-                    {isSalesman && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('inventory'); setAnchorElNav(null); }}
-                        selected={currentView === 'inventory'}
-                        sx={{ fontWeight: currentView === 'inventory' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <Inventory2OutlinedIcon fontSize="small" /> Stock Inventory
-                      </MenuItem>
-                    )}
-                    {(user?.feature_superbill || isSuperAdmin) && !isSalesman && !isWarehouseManager && (
-                      <>
-                        <MenuItem
-                          onClick={() => { setCurrentView('superbill_billing'); setAnchorElNav(null); }}
-                          selected={currentView === 'superbill_billing'}
-                          sx={{ fontWeight: currentView === 'superbill_billing' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                        >
-                          <ElectricBoltOutlinedIcon fontSize="small" /> SuperBill Billing
-                        </MenuItem>
-                        <MenuItem
-                          onClick={() => { setCurrentView('superbill_items'); setAnchorElNav(null); }}
-                          selected={currentView === 'superbill_items'}
-                          sx={{ fontWeight: currentView === 'superbill_items' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                        >
-                          <Inventory2OutlinedIcon fontSize="small" /> SuperBill Items
-                        </MenuItem>
-                      </>
-                    )}
-                    {!isSalesman && !isWarehouseManager && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('cashier'); setAnchorElNav(null); }}
-                        selected={currentView === 'cashier'}
-                        sx={{ fontWeight: currentView === 'cashier' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <PointOfSaleOutlinedIcon fontSize="small" /> Cashier Shift
-                      </MenuItem>
-                    )}
-                    {isAdminOrManager && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('admin'); setAnchorElNav(null); }}
-                        selected={currentView === 'admin'}
-                        sx={{ fontWeight: currentView === 'admin' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <AdminPanelSettingsOutlinedIcon fontSize="small" /> Admin Panel
-                      </MenuItem>
-                    )}
-                    {isAdminOrManager && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('day_end'); setAnchorElNav(null); }}
-                        selected={currentView === 'day_end'}
-                        sx={{ fontWeight: currentView === 'day_end' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <VerifiedIcon fontSize="small" /> Day End Closing
-                      </MenuItem>
-                    )}
-                    {isAdminOrManager && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('payment_reconciliation'); setAnchorElNav(null); }}
-                        selected={currentView === 'payment_reconciliation'}
-                        sx={{ fontWeight: currentView === 'payment_reconciliation' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <ArrowRightLeft size={18} /> Payment Reconciliation
-                      </MenuItem>
-                    )}
-                    {isSuperAdmin && (
-                      <MenuItem
-                        onClick={() => { setCurrentView('superadmin'); setAnchorElNav(null); }}
-                        selected={currentView === 'superadmin'}
-                        sx={{ fontWeight: currentView === 'superadmin' ? 800 : 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                      >
-                        <SecurityOutlinedIcon fontSize="small" /> Super Admin
-                      </MenuItem>
-                    )}
-                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
-                    <MenuItem
-                      onClick={() => { setAnchorElNav(null); setLanguageModalVisible(true); }}
-                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                    >
-                      <LanguageOutlinedIcon fontSize="small" /> Language
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => { setAnchorElNav(null); setKeyboardHelpVisible(true); }}
-                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                    >
-                      <KeyboardOutlinedIcon fontSize="small" /> Keyboard Shortcuts
-                    </MenuItem>
-                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
-                    <MenuItem
-                      onClick={() => { toggleTheme(); setAnchorElNav(null); }}
-                      sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                    >
-                      {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
-                      {themeMode === 'light' ? 'Dark Mode' : 'Light Mode'}
-                    </MenuItem>
-                    <Box sx={{ my: 1, borderTop: 1, borderColor: 'divider' }} />
-                    <MenuItem
-                      onClick={() => { setAnchorElNav(null); handleLogout(); }}
-                      sx={{ color: 'error.main', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1.5 }}
-                    >
-                      <LogOutIcon fontSize="small" /> Logout
-                    </MenuItem>
-                  </Menu>
-                </Box>
-
-                {/* User Profile & Actions */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.5, sm: 1.5, xl: 3 }, flexShrink: 0 }}>
-                  
-                  {/* Network/Offline Sync Indicator */}
-                  {netStatus.isOnline ? (
-                    <Chip
-                      label={netStatus.isSyncing ? "Syncing..." : (netStatus.pendingCount > 0 ? `${netStatus.pendingCount} Pending` : "Online")}
-                      color={netStatus.isSyncing ? "info" : (netStatus.pendingCount > 0 ? "warning" : "success")}
-                      size="small"
-                      onClick={() => { if (netStatus.pendingCount > 0) SyncService.syncPendingOrders(token); }}
-                      sx={{ fontWeight: 'bold', cursor: netStatus.pendingCount > 0 ? 'pointer' : 'default' }}
-                      title={netStatus.pendingCount > 0 ? "Click to Sync Pending Bills Now" : "System Online"}
-                    />
-                  ) : (
-                    <Chip
-                      label={`Offline (${netStatus.pendingCount} Pending)`}
-                      color="error"
-                      size="small"
-                      sx={{ fontWeight: 'bold' }}
-                      title="System Offline - Working Locally"
-                    />
-                  )}
-
-                  <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'right' }}>
-                    <Typography variant="body2" sx={{ fontWeight: 700, fontSize: { xs: '0.875rem', xl: '1.2rem' } }}>{user?.name || 'User'}</Typography>
-                    <Typography variant="caption" color="primary" sx={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: { xs: '0.75rem', xl: '1rem' } }}>
-                      {user?.role === 'warehouse_manager' ? 'Warehouse Manager' : (user?.role || 'Staff')}
-                    </Typography>
-                    {user?.assigned_warehouse_name && (
-                      <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.7rem', fontWeight: 600 }}>
-                        🏬 {user.assigned_warehouse_name}
-                      </Typography>
-                    )}
-                  </Box>
-
-
-                  <IconButton onClick={handleLogout} color="error" title="End Session" size="small">
-                    <LogOutIcon fontSize="small" />
+                    <MenuIcon fontSize="small" />
                   </IconButton>
                 </Box>
-
               </Toolbar>
             </AppBar>
           )}
+
+          {/* Mobile Navigation Drawer (Full touch targets, no text clipping) */}
+          <Drawer
+            anchor="right"
+            open={mobileDrawerOpen}
+            onClose={() => setMobileDrawerOpen(false)}
+            slotProps={{
+              paper: {
+                sx: { width: 290, maxWidth: '85vw', display: 'flex', flexDirection: 'column' }
+              }
+            }}
+          >
+            {/* Drawer Header */}
+            <Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box
+                  component="img"
+                  src={isSuperAdmin ? retailLogo : (resolveImageUrl(user?.restaurant_logo_url) || retailLogo)}
+                  alt="Ariso"
+                  sx={{ width: 26, height: 26, borderRadius: 1 }}
+                />
+                <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                  {isSuperAdmin ? 'Ariso Retail' : (user?.restaurant_name || 'Ariso Retail Flagship')}
+                </Typography>
+              </Box>
+              <IconButton size="small" onClick={() => setMobileDrawerOpen(false)} sx={{ width: 36, height: 36 }}>
+                <X size={18} />
+              </IconButton>
+            </Box>
+
+            {/* Mobile User Profile Card */}
+            <Box sx={{ p: 2, bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
+              <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                {user?.name || (isSuperAdmin ? 'Super Administrator' : 'User')}
+              </Typography>
+              <Typography variant="caption" sx={{ color: isSuperAdmin ? 'secondary.main' : '#ea580c', fontWeight: 700, textTransform: 'uppercase' }}>
+                {isSuperAdmin ? 'Super Admin Console' : (user?.role === 'warehouse_manager' ? 'Warehouse Manager' : (user?.role || 'Staff'))}
+              </Typography>
+              {!isSuperAdmin && user?.assigned_warehouse_name && (
+                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.72rem', mt: 0.25 }}>
+                  🏬 {user.assigned_warehouse_name}
+                </Typography>
+              )}
+            </Box>
+
+            {/* Mobile Navigation List */}
+            <List sx={{ px: 1, py: 1.5, flex: 1, overflowY: 'auto' }}>
+              {navItems.map(item => {
+                const isActive = currentView === item.id;
+                return (
+                  <ListItem key={item.id} disablePadding sx={{ mb: 0.5 }}>
+                    <ListItemButton
+                      onClick={() => {
+                        item.onClick();
+                        setMobileDrawerOpen(false);
+                      }}
+                      sx={{
+                        minHeight: 44,
+                        borderRadius: 2,
+                        fontWeight: isActive ? 700 : 500,
+                        color: isActive ? '#c2410c' : 'text.primary',
+                        bgcolor: isActive ? 'rgba(234, 88, 12, 0.09)' : 'transparent',
+                        border: '1px solid',
+                        borderColor: isActive ? 'rgba(234, 88, 12, 0.22)' : 'transparent',
+                        '&:hover': {
+                          bgcolor: isActive ? 'rgba(234, 88, 12, 0.14)' : 'action.hover'
+                        }
+                      }}
+                    >
+                      <ListItemIcon sx={{ minWidth: 36, color: isActive ? '#ea580c' : 'text.secondary' }}>
+                        {item.icon}
+                      </ListItemIcon>
+                      <ListItemText
+                        primary={item.label}
+                        primaryTypographyProps={{
+                          fontSize: '0.9rem',
+                          fontWeight: isActive ? 700 : 500
+                        }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                );
+              })}
+            </List>
+
+            {/* Mobile Drawer Footer Utilities & Logout */}
+            <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              <Button
+                fullWidth
+                variant="text"
+                startIcon={<LanguageOutlinedIcon fontSize="small" />}
+                onClick={() => { setMobileDrawerOpen(false); setLanguageModalVisible(true); }}
+                sx={{ minHeight: 44, justifyContent: 'flex-start', color: 'text.primary', textTransform: 'none' }}
+              >
+                Language
+              </Button>
+              <Button
+                fullWidth
+                variant="text"
+                startIcon={<KeyboardOutlinedIcon fontSize="small" />}
+                onClick={() => { setMobileDrawerOpen(false); setKeyboardHelpVisible(true); }}
+                sx={{ minHeight: 44, justifyContent: 'flex-start', color: 'text.primary', textTransform: 'none' }}
+              >
+                Keyboard Shortcuts
+              </Button>
+              <Button
+                fullWidth
+                variant="text"
+                startIcon={themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
+                onClick={() => { toggleTheme(); setMobileDrawerOpen(false); }}
+                sx={{ minHeight: 44, justifyContent: 'flex-start', color: 'text.primary', textTransform: 'none' }}
+              >
+                {themeMode === 'light' ? 'Dark Mode' : 'Light Mode'}
+              </Button>
+              <Divider sx={{ my: 0.5 }} />
+              <Button
+                fullWidth
+                variant="outlined"
+                color="error"
+                startIcon={<LogOutIcon fontSize="small" />}
+                onClick={() => { setMobileDrawerOpen(false); handleLogout(); }}
+                sx={{ minHeight: 44, justifyContent: 'flex-start', textTransform: 'none', fontWeight: 700 }}
+              >
+                Logout
+              </Button>
+            </Box>
+          </Drawer>
 
           {/* View Content */}
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
@@ -716,6 +1096,22 @@ export default function App() {
             {currentView === 'superadmin' && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <SuperAdminPanel token={token} />
+              </Box>
+            )}
+            {currentView === 'serial_numbers' && hasSerialNumbersPermission && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <AdminPanel user={user} token={token} initialTab={18} />
+              </Box>
+            )}
+            {currentView === 'serial_numbers' && !hasSerialNumbersPermission && (
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 4, textAlign: 'center' }}>
+                <Typography variant="h5" color="error" sx={{ fontWeight: 800, mb: 1 }}>Access Denied</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 460, mb: 3 }}>
+                  Product Serial Number Tracking is disabled for this store or account by the Super Administrator.
+                </Typography>
+                <Button variant="contained" onClick={() => setCurrentView(isSuperAdmin ? 'superadmin' : (isAdminOrManager ? 'admin' : 'pos'))}>
+                  Return to Dashboard
+                </Button>
               </Box>
             )}
           </Box>

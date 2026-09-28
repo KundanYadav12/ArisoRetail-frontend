@@ -233,15 +233,20 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
         </div>
       `;
     } else {
-      const halfTax = (totalTax / 2).toFixed(2);
+      const cgstVal = order.cgst_amount !== undefined && order.cgst_amount !== null
+        ? parseFloat(order.cgst_amount).toFixed(2)
+        : (totalTax / 2).toFixed(2);
+      const sgstVal = order.sgst_amount !== undefined && order.sgst_amount !== null
+        ? parseFloat(order.sgst_amount).toFixed(2)
+        : (totalTax / 2).toFixed(2);
       taxSplitHtml = `
         <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700; margin-top: 1.5px;">
           <span>CGST:</span>
-          <span style="white-space: nowrap; padding-right: 2px;">₹${halfTax}</span>
+          <span style="white-space: nowrap; padding-right: 2px;">₹${cgstVal}</span>
         </div>
         <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700; margin-top: 1.5px;">
           <span>SGST:</span>
-          <span style="white-space: nowrap; padding-right: 2px;">₹${halfTax}</span>
+          <span style="white-space: nowrap; padding-right: 2px;">₹${sgstVal}</span>
         </div>
       `;
     }
@@ -561,9 +566,14 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
     if (order.tax_type === 'inter') {
       cmds += `IGST:`.padEnd(cols - 12, ' ') + `Rs.${taxVal}`.padStart(12, ' ') + '\n';
     } else {
-      const halfTax = (parseFloat(taxVal) / 2).toFixed(2);
-      cmds += `CGST:`.padEnd(cols - 12, ' ') + `Rs.${halfTax}`.padStart(12, ' ') + '\n';
-      cmds += `SGST:`.padEnd(cols - 12, ' ') + `Rs.${halfTax}`.padStart(12, ' ') + '\n';
+      const cgstVal = order.cgst_amount !== undefined && order.cgst_amount !== null
+        ? parseFloat(order.cgst_amount).toFixed(2)
+        : (parseFloat(taxVal) / 2).toFixed(2);
+      const sgstVal = order.sgst_amount !== undefined && order.sgst_amount !== null
+        ? parseFloat(order.sgst_amount).toFixed(2)
+        : (parseFloat(taxVal) / 2).toFixed(2);
+      cmds += `CGST:`.padEnd(cols - 12, ' ') + `Rs.${cgstVal}`.padStart(12, ' ') + '\n';
+      cmds += `SGST:`.padEnd(cols - 12, ' ') + `Rs.${sgstVal}`.padStart(12, ' ') + '\n';
     }
   }
 
@@ -802,10 +812,57 @@ export function generateLocalEscPosKot(order, items, kotSettings = null) {
 
   cmds += doubleDivider;
 
+
   if (s.kot_footer_note) {
     cmds += CMD_ALIGN_CENTER + s.kot_footer_note + '\n';
   }
   cmds += '\n\n\n' + CMD_CUT;
 
   return cmds;
+}
+
+/**
+ * Triggers standard browser print dialog silently via an invisible off-screen iframe.
+ * Never opens a blank tab (about:blank), never triggers popup blockers, and never leaves
+ * the cashier staring at a stuck or buffering white screen.
+ */
+export function printHtmlSilentlyViaIframe(htmlContent) {
+  if (typeof document === 'undefined') return;
+
+  try {
+    let iframe = document.getElementById('ariso-silent-print-frame');
+    if (!iframe) {
+      iframe = document.createElement('iframe');
+      iframe.id = 'ariso-silent-print-frame';
+      iframe.setAttribute('aria-hidden', 'true');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      iframe.style.opacity = '0';
+      iframe.style.pointerEvents = 'none';
+      iframe.style.zIndex = '-9999';
+      document.body.appendChild(iframe);
+    }
+
+    const doc = iframe.contentWindow || iframe.contentDocument;
+    const iframeDoc = doc.document || doc;
+    iframeDoc.open();
+    iframeDoc.write(htmlContent);
+    iframeDoc.close();
+
+    // Give iframe DOM, styles, and web fonts a short moment to render before calling print
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (printErr) {
+        console.warn('[printHtmlSilentlyViaIframe error]', printErr);
+      }
+    }, 250);
+  } catch (err) {
+    console.error('[printHtmlSilentlyViaIframe fatal]', err);
+  }
 }

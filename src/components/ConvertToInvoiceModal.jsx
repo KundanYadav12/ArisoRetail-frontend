@@ -161,7 +161,7 @@ export default function ConvertToInvoiceModal({
       onClose={onClose}
       maxWidth="md"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 3, maxHeight: '92vh' } }}
+      slotProps={{ paper: { sx: { borderRadius: 3, maxHeight: '92vh' } } }}
     >
       <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1, borderBottom: '1px solid #e2e8f0' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -233,7 +233,7 @@ export default function ConvertToInvoiceModal({
                             <TextField
                               size="small"
                               type="number"
-                              inputProps={{ min: 0, max: it.pending_qty, step: 'any' }}
+                              slotProps={{ htmlInput: { min: 0, max: it.pending_qty, step: 'any' } }}
                               value={it.invoicing_qty}
                               onChange={e => handleQtyChange(idx, e.target.value)}
                               sx={{ width: 90 }}

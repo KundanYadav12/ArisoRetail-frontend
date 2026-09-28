@@ -41,10 +41,30 @@ export default function SalesOrderModal({
   const { notify } = useNotify();
   const isEditing = Boolean(editOrder);
 
-  // Document Type & Warehouse State
+  const storedUser = React.useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user') || '{}');
+    } catch {
+      return {};
+    }
+  }, []);
+
   const [docType, setDocType] = useState('sales_order'); // 'sales_order' | 'estimate'
   const [warehouses, setWarehouses] = useState([]);
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState('');
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState(storedUser?.assigned_warehouse_id || '');
+
+  // Menu Items & GST Settings
+  const [internalMenuItems, setInternalMenuItems] = useState(menuItems || []);
+  const [internalCategories, setInternalCategories] = useState(categories || []);
+  const [gstMode, setGstMode] = useState('excluded');
+
+  useEffect(() => {
+    if (menuItems && menuItems.length > 0) setInternalMenuItems(menuItems);
+  }, [menuItems]);
+
+  useEffect(() => {
+    if (categories && categories.length > 0) setInternalCategories(categories);
+  }, [categories]);
 
   // Form State
   const [parties, setParties] = useState([]);
@@ -98,14 +118,45 @@ export default function SalesOrderModal({
 
   const [submitting, setSubmitting] = useState(false);
 
-  // Load parties and warehouses on open
+  // Load parties, warehouses, settings and menu items on open
   useEffect(() => {
     if (open) {
       loadParties();
       loadChargePresets();
       loadWarehouses();
+      loadSettingsAndMenu();
     }
   }, [open]);
+
+  const loadSettingsAndMenu = async () => {
+    try {
+      const sRes = await apiFetch('/api/receipt-settings');
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        setGstMode(sData.gst_mode || 'excluded');
+      }
+    } catch (_) {}
+
+    if (!menuItems || menuItems.length === 0) {
+      try {
+        const mRes = await apiFetch('/api/menu');
+        if (mRes.ok) {
+          const mData = await mRes.json();
+          setInternalMenuItems(Array.isArray(mData) ? mData : (mData.items || []));
+        }
+      } catch (_) {}
+    }
+
+    if (!categories || categories.length === 0) {
+      try {
+        const cRes = await apiFetch('/api/categories');
+        if (cRes.ok) {
+          const cData = await cRes.json();
+          setInternalCategories(Array.isArray(cData) ? cData : []);
+        }
+      } catch (_) {}
+    }
+  };
 
   // Handle editOrder or initialParty initialization
   useEffect(() => {
@@ -201,8 +252,12 @@ export default function SalesOrderModal({
         const list = Array.isArray(data) ? data : (data.warehouses || []);
         setWarehouses(list);
         if (!selectedWarehouseId && list.length > 0) {
-          const def = list.find(w => w.is_default === 1) || list[0];
-          setSelectedWarehouseId(def.id);
+          if (storedUser?.assigned_warehouse_id) {
+            setSelectedWarehouseId(storedUser.assigned_warehouse_id);
+          } else {
+            const def = list.find(w => w.is_default === 1) || list[0];
+            setSelectedWarehouseId(def.id);
+          }
         }
       }
     } catch (err) {
@@ -356,17 +411,19 @@ export default function SalesOrderModal({
     setItems(prev => {
       const updated = [...prev];
       if (product) {
-        const cat = categories.find(c => c.id === product.category_id);
-        const isWeight = product.is_weight_based === 1 || product.unit === 'KG' || product.unit === 'GM';
+        const cat = internalCategories.find(c => c.id === product.category_id);
+        const isWeight = product.is_weight_based === 1 || product.unit === 'KG' || product.unit === 'GM' || product.unit === 'kg';
+        const parsedPrice = parseFloat(product.price !== undefined ? product.price : (product.selling_price || product.unit_price || 0));
+        const parsedGst = parseFloat(product.gst_rate !== undefined ? product.gst_rate : (product.tax_rate || 0));
         updated[index] = {
           ...updated[index],
           menu_item_id: product.id,
           name: product.name,
           category_id: product.category_id || '',
           category_name: cat ? cat.name : (product.category_name || ''),
-          price: parseFloat(product.price || 0),
-          unit: product.unit || (isWeight ? 'KG' : 'PCS'),
-          gst_rate: parseFloat(product.gst_rate || 0),
+          price: isNaN(parsedPrice) ? 0 : parsedPrice,
+          unit: product.unit ? product.unit.toUpperCase() : (isWeight ? 'KG' : 'PCS'),
+          gst_rate: isNaN(parsedGst) ? 0 : parsedGst,
           quantity: updated[index].quantity || 1
         };
       } else {
@@ -384,8 +441,8 @@ export default function SalesOrderModal({
     });
   };
 
-  // Calculations per row
-  const calculateRow = (item) => {
+  // Calculations per row (supporting tax-exclusive and tax-inclusive GST mode)
+  const calculateRow = (item, mode = gstMode) => {
     const qty = parseFloat(item.quantity) || 0;
     const price = parseFloat(item.price) || 0;
     const baseTotal = qty * price;
@@ -398,10 +455,22 @@ export default function SalesOrderModal({
     }
     discount = Math.min(discount, baseTotal);
 
-    const taxable = Math.max(0, baseTotal - discount);
+    const netLine = Math.max(0, baseTotal - discount);
     const taxRate = parseFloat(item.gst_rate) || 0;
-    const tax = parseFloat(((taxable * taxRate) / 100).toFixed(2));
-    const total = parseFloat((taxable + tax).toFixed(2));
+
+    let taxable = netLine;
+    let tax = 0;
+    let total = netLine;
+
+    if (mode === 'included' && taxRate > 0) {
+      taxable = parseFloat((netLine / (1 + taxRate / 100)).toFixed(2));
+      tax = parseFloat((netLine - taxable).toFixed(2));
+      total = parseFloat(netLine.toFixed(2));
+    } else {
+      taxable = parseFloat(netLine.toFixed(2));
+      tax = parseFloat(((taxable * taxRate) / 100).toFixed(2));
+      total = parseFloat((taxable + tax).toFixed(2));
+    }
 
     return { baseTotal, discount, taxable, tax, total };
   };
@@ -471,7 +540,7 @@ export default function SalesOrderModal({
     let totalTax = 0;
 
     items.forEach(it => {
-      const row = calculateRow(it);
+      const row = calculateRow(it, gstMode);
       subtotal += row.baseTotal;
       totalDiscount += row.discount;
       totalTaxable += row.taxable;
@@ -489,7 +558,7 @@ export default function SalesOrderModal({
       totalAdditionalCharges: parseFloat(totalAdditionalCharges.toFixed(2)),
       grandTotal
     };
-  }, [items, additionalCharges]);
+  }, [items, additionalCharges, gstMode]);
 
   // Submit Handler
   const handleSubmit = async () => {
@@ -507,15 +576,15 @@ export default function SalesOrderModal({
     setSubmitting(true);
     try {
       const formattedItems = items.map(it => {
-        const row = calculateRow(it);
+        const row = calculateRow(it, gstMode);
         const isWeight = ['KG', 'GM', 'LTR', 'ML'].includes(it.unit);
         return {
           menu_item_id: it.menu_item_id || null,
           name: it.name.trim(),
           category_id: it.category_id || null,
-          unit_price: parseFloat(it.price),
-          price: parseFloat(it.price),
-          quantity: isWeight ? 1 : Math.round(parseFloat(it.quantity)),
+          unit_price: parseFloat(it.price || 0),
+          price: parseFloat(it.price || 0),
+          quantity: isWeight ? 1 : Math.round(parseFloat(it.quantity || 1)),
           item_weight: isWeight ? parseFloat(it.quantity) : null,
           weight_unit: it.unit,
           unit: it.unit,
@@ -555,6 +624,7 @@ export default function SalesOrderModal({
         order_status: 'pending',
         is_sales_order: isEst ? 0 : 1,
         is_estimate: isEst ? 1 : 0,
+        document_type: isEst ? 'estimate' : 'sales_order',
         warehouse_id: selectedWarehouseId || null
       };
 
@@ -604,8 +674,10 @@ export default function SalesOrderModal({
         onClose={onClose}
         maxWidth="lg"
         fullWidth
-        PaperProps={{
-          sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' }
+        slotProps={{
+          paper: {
+            sx: { borderRadius: 3, maxHeight: '92vh', overflowY: 'auto' }
+          }
         }}
       >
         <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pb: 1, borderBottom: '1px solid #e2e8f0' }}>
@@ -734,6 +806,7 @@ export default function SalesOrderModal({
                   <Select
                     value={selectedWarehouseId}
                     label="Fulfilling Warehouse / Branch"
+                    disabled={Boolean(storedUser?.assigned_warehouse_id)}
                     onChange={e => setSelectedWarehouseId(e.target.value)}
                   >
                     <MenuItem value="">-- Default Branch Warehouse --</MenuItem>
@@ -926,7 +999,7 @@ export default function SalesOrderModal({
                 </TableHead>
                 <TableBody>
                   {items.map((it, idx) => {
-                    const rowCalc = calculateRow(it);
+                    const rowCalc = calculateRow(it, gstMode);
                     return (
                       <TableRow key={idx}>
                         {/* Item Selection / Autocomplete */}
@@ -934,10 +1007,10 @@ export default function SalesOrderModal({
                           <Autocomplete
                             size="small"
                             freeSolo
-                            options={menuItems}
+                            options={internalMenuItems}
                             getOptionKey={(opt) => typeof opt === 'string' ? opt : (opt.id ? `item-${opt.id}` : (opt.name || ''))}
                             getOptionLabel={opt => typeof opt === 'string' ? opt : (opt.name || '')}
-                            value={it.name}
+                            value={it.name || ''}
                             onChange={(e, val) => {
                               if (typeof val === 'string') {
                                 handleItemFieldChange(idx, 'name', val);
@@ -945,12 +1018,23 @@ export default function SalesOrderModal({
                                 handleProductSelect(idx, val);
                               }
                             }}
-                            onInputChange={(e, val) => handleItemFieldChange(idx, 'name', val)}
+                            onInputChange={(e, val, reason) => {
+                              if (reason === 'input' || reason === 'clear') {
+                                handleItemFieldChange(idx, 'name', val);
+                              }
+                            }}
                             renderOption={(props, option) => {
                               const { key, ...restProps } = props;
                               return (
                                 <li key={typeof option === 'string' ? option : (option.id ? `item-opt-${option.id}` : key)} {...restProps}>
-                                  {typeof option === 'string' ? option : option.name}
+                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                    <Typography variant="body2">{typeof option === 'string' ? option : option.name}</Typography>
+                                    {typeof option === 'object' && (option.price !== undefined || option.selling_price !== undefined) && (
+                                      <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, ml: 1 }}>
+                                        ₹{parseFloat(option.price !== undefined ? option.price : (option.selling_price || 0)).toFixed(2)}
+                                      </Typography>
+                                    )}
+                                  </Box>
                                 </li>
                               );
                             }}
@@ -972,13 +1056,13 @@ export default function SalesOrderModal({
                               value={it.category_id || ''}
                               onChange={e => {
                                 const cId = e.target.value;
-                                const catObj = categories.find(c => c.id === cId);
+                                const catObj = internalCategories.find(c => c.id === cId);
                                 handleItemFieldChange(idx, 'category_id', cId);
                                 handleItemFieldChange(idx, 'category_name', catObj ? catObj.name : '');
                               }}
                             >
                               <MenuItem value="">General</MenuItem>
-                              {categories.map(c => (
+                              {internalCategories.map(c => (
                                 <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
                               ))}
                             </Select>
@@ -990,9 +1074,14 @@ export default function SalesOrderModal({
                           <TextField
                             size="small"
                             type="number"
-                            inputProps={{ min: 0.001, step: 'any' }}
-                            value={it.quantity}
-                            onChange={e => handleItemFieldChange(idx, 'quantity', e.target.value)}
+                            slotProps={{ htmlInput: { min: 0.001, step: 'any' } }}
+                            value={it.quantity ?? ''}
+                            onFocus={e => e.target.select()}
+                            onChange={e => {
+                              let val = e.target.value;
+                              if (/^0[0-9]+/.test(val)) val = val.replace(/^0+/, '') || '0';
+                              handleItemFieldChange(idx, 'quantity', val);
+                            }}
                           />
                         </TableCell>
 
@@ -1015,9 +1104,14 @@ export default function SalesOrderModal({
                           <TextField
                             size="small"
                             type="number"
-                            inputProps={{ min: 0, step: '0.01' }}
-                            value={it.price}
-                            onChange={e => handleItemFieldChange(idx, 'price', e.target.value)}
+                            slotProps={{ htmlInput: { min: 0, step: '0.01' } }}
+                            value={it.price ?? ''}
+                            onFocus={e => e.target.select()}
+                            onChange={e => {
+                              let val = e.target.value;
+                              if (/^0[0-9]+/.test(val)) val = val.replace(/^0+/, '') || '0';
+                              handleItemFieldChange(idx, 'price', val);
+                            }}
                           />
                         </TableCell>
 
@@ -1027,9 +1121,14 @@ export default function SalesOrderModal({
                             <TextField
                               size="small"
                               type="number"
-                              inputProps={{ min: 0, step: 'any' }}
-                              value={it.discount_value}
-                              onChange={e => handleItemFieldChange(idx, 'discount_value', e.target.value)}
+                              slotProps={{ htmlInput: { min: 0, step: 'any' } }}
+                              value={it.discount_value ?? ''}
+                              onFocus={e => e.target.select()}
+                              onChange={e => {
+                                let val = e.target.value;
+                                if (/^0[0-9]+/.test(val)) val = val.replace(/^0+/, '') || '0';
+                                handleItemFieldChange(idx, 'discount_value', val);
+                              }}
                               sx={{ width: 65 }}
                             />
                             <Select
@@ -1127,7 +1226,7 @@ export default function SalesOrderModal({
                           setNewChargeAmount(val);
                         }}
                         onFocus={e => e.target.select()}
-                        inputProps={{ min: 0, step: 'any' }}
+                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
                         sx={{ width: 100 }}
                       />
                       <Button
@@ -1181,10 +1280,12 @@ export default function SalesOrderModal({
                               handleChargeAmountChange(idx, 0);
                             }
                           }}
-                          InputProps={{
-                            startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                          slotProps={{
+                            input: {
+                              startAdornment: <InputAdornment position="start">₹</InputAdornment>
+                            },
+                            htmlInput: { min: 0, step: 'any' }
                           }}
-                          inputProps={{ min: 0, step: 'any' }}
                           sx={{ width: 120 }}
                         />
                         <IconButton size="small" color="error" onClick={() => handleRemoveCharge(idx)}>
@@ -1257,12 +1358,14 @@ export default function SalesOrderModal({
                   </Box>
                 </Box>
 
-                <Box sx={{ mt: 2, p: 1.5, bgcolor: '#fef3c7', borderRadius: 2, border: '1px solid #fde68a' }}>
-                  <Typography variant="caption" sx={{ color: '#92400e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <AlertCircle size={14} /> Inventory Notice:
+                <Box sx={{ mt: 2, p: 1.5, bgcolor: isEst ? '#ede9fe' : '#fef3c7', borderRadius: 2, border: `1px solid ${isEst ? '#ddd6fe' : '#fde68a'}` }}>
+                  <Typography variant="caption" sx={{ color: isEst ? '#6d28d9' : '#92400e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <AlertCircle size={14} /> {isEst ? 'Quotation / Estimate Notice:' : 'Inventory Notice:'}
                   </Typography>
-                  <Typography variant="caption" sx={{ color: '#78350f', display: 'block', mt: 0.25 }}>
-                    Submitting this sales order places it in <b>Pending</b> status and automatically reserves stock, preventing overselling. Stock will be physically deducted upon conversion to Invoice.
+                  <Typography variant="caption" sx={{ color: isEst ? '#5b21b6' : '#78350f', display: 'block', mt: 0.25 }}>
+                    {isEst
+                      ? 'Submitting this estimate drafts a formal customer quotation. Stock is NOT reserved. Inventory will only be reserved when converted to a Sales Order.'
+                      : 'Submitting this sales order places it in Pending status and automatically reserves stock, preventing overselling. Stock will be physically deducted upon conversion to Invoice.'}
                   </Typography>
                 </Box>
               </Paper>
@@ -1278,12 +1381,20 @@ export default function SalesOrderModal({
           <Button
             onClick={handleSubmit}
             variant="contained"
-            color="primary"
             disabled={submitting}
             startIcon={submitting ? <CircularProgress size={16} color="inherit" /> : <Check size={18} />}
-            sx={{ fontWeight: 800, px: 3 }}
+            sx={{
+              fontWeight: 800,
+              px: 3,
+              bgcolor: isEst ? '#7c3aed' : 'primary.main',
+              '&:hover': { bgcolor: isEst ? '#6d28d9' : 'primary.dark' }
+            }}
           >
-            {submitting ? 'Saving Order...' : (isEditing ? 'Update Sales Order' : 'Create Sales Order')}
+            {submitting
+              ? (isEst ? 'Saving Estimate...' : 'Saving Order...')
+              : (isEditing
+                ? (isEst ? 'Update Estimate' : 'Update Sales Order')
+                : (isEst ? 'Save Estimate' : 'Create Sales Order'))}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1294,7 +1405,7 @@ export default function SalesOrderModal({
         onClose={() => setQuickPartyOpen(false)}
         maxWidth="xs"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 2.5 } }}
+        slotProps={{ paper: { sx: { borderRadius: 2.5 } } }}
       >
         <DialogTitle sx={{ fontWeight: 800 }}>Quick Add Party</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: 1 }}>
