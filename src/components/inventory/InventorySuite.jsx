@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
+import { useDataRefresh } from '../../context/DataRefreshContext';
 import { getISTDateString } from '../../utils/dateUtils';
 
 // Import Modular Modals
@@ -46,6 +47,7 @@ export default function InventorySuite({
   hideTabs = false
 }) {
   const notify = useNotify();
+  const { stockVersion, inventoryVersion } = useDataRefresh();
 
   // Resolve user state from prop or localStorage
   const activeUser = currentUser || (() => {
@@ -73,6 +75,10 @@ export default function InventorySuite({
     }
     return 'all';
   });
+
+  const activeWarehouses = useMemo(() => {
+    return (warehouses || []).filter(w => !w.status || w.status === 'active');
+  }, [warehouses]);
 
   // Determine subtabs list with permission keys
   const availableSubTabs = useMemo(() => [
@@ -218,6 +224,9 @@ export default function InventorySuite({
   const [singleAdjustQty, setSingleAdjustQty] = useState('');
   const [singleAdjustReason, setSingleAdjustReason] = useState('');
   const [savingSingleAdjust, setSavingSingleAdjust] = useState(false);
+  const [singleAdjustWarehouseId, setSingleAdjustWarehouseId] = useState('');
+  const [singleAdjustWarehouseStocks, setSingleAdjustWarehouseStocks] = useState([]);
+  const [loadingItemWarehouseStocks, setLoadingItemWarehouseStocks] = useState(false);
 
   const [logsItem, setLogsItem] = useState(null);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
@@ -571,18 +580,70 @@ export default function InventorySuite({
     else if (subTab === 'ledger') fetchLedger();
   }, [subTab, fetchDashboardMetrics, fetchCatalog, fetchWarehouses, fetchRequests, fetchTransfers, fetchSuppliers, fetchPurchases, fetchAdjustments, fetchLedger]);
 
+  // Re-fetch current sub-tab data whenever server broadcasts a stock/inventory change
+  useEffect(() => {
+    if (stockVersion > 0 || inventoryVersion > 0) {
+      if (subTab === 'overview') fetchDashboardMetrics();
+      else if (subTab === 'catalog') fetchCatalog();
+      else if (subTab === 'adjustments') fetchAdjustments();
+      else if (subTab === 'ledger') fetchLedger();
+      // Always refresh dashboard metrics so KPIs stay current
+      fetchDashboardMetrics();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockVersion, inventoryVersion]);
+
   /* -------------------------------------------------------------------------
      LEGACY SINGLE ITEM ADJUST & LOGS HANDLERS
      ------------------------------------------------------------------------- */
-  const handleOpenSingleAdjust = (item) => {
+  const handleOpenSingleAdjust = async (item) => {
     setSingleAdjustItem(item);
     setSingleAdjustType('add');
     setSingleAdjustQty('');
     setSingleAdjustReason('');
+    setSingleAdjustWarehouseStocks([]);
+
+    // Determine initial preselected warehouse
+    let preselectedWhId = '';
+    if (selectedWarehouseFilter !== 'all' && activeWarehouses.some(w => String(w.id) === String(selectedWarehouseFilter))) {
+      preselectedWhId = String(selectedWarehouseFilter);
+    } else if (activeWarehouses.length === 1) {
+      preselectedWhId = String(activeWarehouses[0].id);
+    }
+
+    setSingleAdjustWarehouseId(preselectedWhId);
     setSingleAdjustOpen(true);
+
+    // Fetch live warehouse breakdown for this item
+    const itemId = item.id || item.menu_item_id;
+    if (itemId) {
+      setLoadingItemWarehouseStocks(true);
+      try {
+        const res = await apiFetch(`/api/inventory/items/${itemId}/warehouse-stocks`);
+        if (res.ok) {
+          const whStocks = await res.json();
+          setSingleAdjustWarehouseStocks(whStocks || []);
+          // Auto-select if only 1 warehouse returned and none preselected yet
+          if (!preselectedWhId && whStocks && whStocks.length === 1) {
+            setSingleAdjustWarehouseId(String(whStocks[0].warehouse_id));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load item warehouse stocks:', err);
+      } finally {
+        setLoadingItemWarehouseStocks(false);
+      }
+    }
   };
 
   const handleSaveSingleAdjust = async () => {
+    const targetWhId = singleAdjustWarehouseId || (activeWarehouses.length === 1 ? String(activeWarehouses[0].id) : '');
+
+    if (activeWarehouses.length > 1 && !targetWhId) {
+      notify.error('Please select a target warehouse/outlet for this adjustment.', 'Validation');
+      return;
+    }
+
     if (!singleAdjustQty || parseFloat(singleAdjustQty) <= 0) {
       notify.error('Please enter a valid adjustment quantity.', 'Validation');
       return;
@@ -594,8 +655,9 @@ export default function InventorySuite({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          menu_item_id: singleAdjustItem.id || singleAdjustItem.menu_item_id,
-          adjustment_type: singleAdjustType,
+          menuItemId: singleAdjustItem.id || singleAdjustItem.menu_item_id,
+          warehouseId: targetWhId ? parseInt(targetWhId, 10) : undefined,
+          adjustmentType: singleAdjustType,
           quantity: parseFloat(singleAdjustQty),
           reason: singleAdjustReason.trim() || 'Manual adjustment'
         })
@@ -604,7 +666,7 @@ export default function InventorySuite({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to adjust stock');
 
-      notify.success('Stock adjusted successfully.', 'Updated');
+      notify.success(data.message || 'Stock adjusted successfully.', 'Updated');
       setSingleAdjustOpen(false);
       fetchCatalog();
       fetchDashboardMetrics();
@@ -2594,6 +2656,89 @@ export default function InventorySuite({
           Adjust Stock: {singleAdjustItem?.name}
         </DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          {/* 1. Target Warehouse Selector */}
+          <FormControl fullWidth size="small" required error={activeWarehouses.length > 1 && !singleAdjustWarehouseId}>
+            <InputLabel id="adjust-stock-warehouse-label">Adjust Stock In (Warehouse / Outlet) *</InputLabel>
+            <Select
+              labelId="adjust-stock-warehouse-label"
+              value={singleAdjustWarehouseId}
+              label="Adjust Stock In (Warehouse / Outlet) *"
+              onChange={e => setSingleAdjustWarehouseId(e.target.value)}
+            >
+              {activeWarehouses.length === 0 ? (
+                <MenuItem value="" disabled>No active warehouses available</MenuItem>
+              ) : (
+                activeWarehouses.map(w => {
+                  const wsInfo = singleAdjustWarehouseStocks.find(s => String(s.warehouse_id) === String(w.id));
+                  const stockDisplay = wsInfo !== undefined ? ` (Current: ${parseFloat(wsInfo.current_stock || 0)} ${singleAdjustItem?.unit || 'pcs'})` : '';
+                  return (
+                    <MenuItem key={w.id} value={String(w.id)}>
+                      {w.name} {w.code ? `[${w.code}]` : ''}{stockDisplay}
+                    </MenuItem>
+                  );
+                })
+              )}
+            </Select>
+          </FormControl>
+
+          {/* 2. Contextual Current Stock Banner for Target Warehouse */}
+          {singleAdjustWarehouseId ? (
+            (() => {
+              const matchedWh = activeWarehouses.find(w => String(w.id) === String(singleAdjustWarehouseId));
+              const wsInfo = singleAdjustWarehouseStocks.find(s => String(s.warehouse_id) === String(singleAdjustWarehouseId));
+              const currentQty = wsInfo !== undefined 
+                ? parseFloat(wsInfo.current_stock || 0)
+                : (selectedWarehouseFilter !== 'all' && singleAdjustItem?.current_stock !== undefined ? parseFloat(singleAdjustItem.current_stock) : '...');
+              const reservedQty = wsInfo !== undefined ? parseFloat(wsInfo.reserved_stock || 0) : 0;
+              const unit = singleAdjustItem?.unit || 'pcs';
+
+              return (
+                <Box sx={{
+                  p: 1.5,
+                  borderRadius: 1.5,
+                  bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : '#f0f7ff',
+                  border: '1px solid',
+                  borderColor: (theme) => theme.palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.3)' : '#bfdbfe',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 0.5
+                }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, color: 'primary.main', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Target Warehouse Stock Context
+                    </Typography>
+                    {loadingItemWarehouseStocks && <CircularProgress size={12} />}
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                      Current Stock in {matchedWh?.name || 'Selected Warehouse'}:
+                    </Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 800, color: typeof currentQty === 'number' && currentQty <= 0 ? 'error.main' : 'success.main' }}>
+                      {currentQty} {unit}
+                    </Typography>
+                    {reservedQty > 0 && (
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                        ({reservedQty} reserved)
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              );
+            })()
+          ) : (
+            <Box sx={{
+              p: 1.25,
+              borderRadius: 1.5,
+              bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(234, 179, 8, 0.1)' : '#fffbeb',
+              border: '1px solid',
+              borderColor: (theme) => theme.palette.mode === 'dark' ? 'rgba(234, 179, 8, 0.3)' : '#fde68a',
+            }}>
+              <Typography variant="caption" sx={{ color: 'warning.dark', fontWeight: 600 }}>
+                ⚠️ Please select a warehouse / outlet above before entering adjustment.
+              </Typography>
+            </Box>
+          )}
+
           <FormControl fullWidth size="small">
             <InputLabel>Adjustment Action</InputLabel>
             <Select
@@ -2629,7 +2774,7 @@ export default function InventorySuite({
           <Button onClick={() => setSingleAdjustOpen(false)}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={savingSingleAdjust}
+            disabled={savingSingleAdjust || !singleAdjustWarehouseId || !singleAdjustQty || parseFloat(singleAdjustQty) <= 0}
             onClick={handleSaveSingleAdjust}
             sx={{ fontWeight: 800 }}
           >

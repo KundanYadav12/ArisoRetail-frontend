@@ -2,14 +2,23 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { CheckCircle2, AlertCircle, AlertTriangle, Info, X, ShieldAlert, ThumbsUp } from 'lucide-react';
 import { Box, Typography, Button, IconButton, Paper, Portal, useMediaQuery } from '@mui/material';
 
-const NotificationContext = createContext(null);
+const defaultNotify = (message, type = 'info', title) => {
+  console.log(`[Notification ${type}]`, title || '', message);
+};
+defaultNotify.success = (message, title) => console.log('[Notification success]', title || '', message);
+defaultNotify.error = (message, title) => console.error('[Notification error]', title || '', message);
+defaultNotify.warning = (message, title) => console.warn('[Notification warning]', title || '', message);
+defaultNotify.info = (message, title) => console.info('[Notification info]', title || '', message);
+defaultNotify.confirmDialog = async () => true;
+defaultNotify.alert = async () => true;
+defaultNotify.alertDialog = async () => true;
+defaultNotify.notify = defaultNotify;
+
+const NotificationContext = createContext(defaultNotify);
 
 export function useNotify() {
   const context = useContext(NotificationContext);
-  if (!context) {
-    throw new Error('useNotify must be used within a NotificationProvider');
-  }
-  return context;
+  return context || defaultNotify;
 }
 
 export function NotificationProvider({ children }) {
@@ -39,6 +48,35 @@ export function NotificationProvider({ children }) {
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
+  const [alertState, setAlertState] = useState(null);
+
+  // Helper for alert dialogs replacing window.alert
+  const alertDialog = ({
+    title = 'Notice',
+    message = '',
+    subtitle = '',
+    buttonText = 'Understood',
+    type = 'warning',
+    details = null,
+    onClose
+  }) => {
+    return new Promise((resolve) => {
+      setAlertState({
+        title,
+        message,
+        subtitle,
+        buttonText,
+        type,
+        details,
+        onClose: () => {
+          setAlertState(null);
+          if (onClose) onClose();
+          resolve(true);
+        }
+      });
+    });
+  };
+
   // Helper for confirm dialogs replacing window.confirm
   const confirmDialog = ({ title = 'Confirm Action', message, confirmText = 'Confirm', cancelText = 'Cancel', isDestructive = true, onConfirm }) => {
     return new Promise((resolve) => {
@@ -64,17 +102,23 @@ export function NotificationProvider({ children }) {
   // Attach properties to notify so both `const { notify } = useNotify()` and `const notify = useNotify()` work
   notify.notify = notify;
   notify.confirmDialog = confirmDialog;
+  notify.alert = alertDialog;
+  notify.alertDialog = alertDialog;
 
-  // Handle ESC key for confirm dialog
+  // Handle ESC / ENTER key for dialogs
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && confirmState) {
+      if ((e.key === 'Escape' || e.key === 'Enter') && alertState) {
+        e.preventDefault();
+        e.stopPropagation();
+        alertState.onClose();
+      } else if (e.key === 'Escape' && confirmState) {
         confirmState.onCancel();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [confirmState]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [alertState, confirmState]);
 
   return (
     <NotificationContext.Provider value={notify}>
@@ -89,8 +133,8 @@ export function NotificationProvider({ children }) {
             right: isMobile ? '50%' : '1.5rem',
             transform: isMobile ? 'translateX(50%)' : 'none',
             width: isMobile ? 'calc(100% - 2rem)' : 'auto',
-            maxWidth: 'min(400px, calc(100vw - 2rem))',
-            zIndex: 9999,
+            maxWidth: 'min(420px, calc(100vw - 2rem))',
+            zIndex: 20000,
             display: 'flex',
             flexDirection: 'column',
             gap: 1.2,
@@ -113,7 +157,7 @@ export function NotificationProvider({ children }) {
               inset: 0,
               bgcolor: 'rgba(15, 23, 42, 0.65)',
               backdropFilter: 'blur(4px)',
-              zIndex: 10000,
+              zIndex: 20001,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -174,6 +218,135 @@ export function NotificationProvider({ children }) {
                   sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 700, px: 2.5, boxShadow: 'none' }}
                 >
                   {confirmState.confirmText}
+                </Button>
+              </Box>
+            </Paper>
+          </Box>
+        </Portal>
+      )}
+
+      {/* PORTAL FOR CUSTOM ALERT / STOCK WARNING MODAL */}
+      {alertState && (
+        <Portal>
+          <Box
+            onClick={alertState.onClose}
+            sx={{
+              position: 'fixed',
+              inset: 0,
+              bgcolor: 'rgba(15, 23, 42, 0.75)',
+              backdropFilter: 'blur(6px)',
+              zIndex: 20002,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: 2,
+              animation: 'fadeIn 0.2s ease-out'
+            }}
+          >
+            <Paper
+              onClick={e => e.stopPropagation()}
+              variant="outlined"
+              sx={{
+                width: '100%',
+                maxWidth: 440,
+                borderRadius: 4,
+                p: 3,
+                bgcolor: '#1e293b',
+                color: '#f8fafc',
+                borderColor: alertState.type === 'error' ? '#ef4444' : '#f59e0b',
+                boxShadow: '0 25px 50px -12px rgba(0,0,0,0.6)',
+                animation: 'scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                '@keyframes scaleIn': {
+                  '0%': { transform: 'scale(0.95)', opacity: 0 },
+                  '100%': { transform: 'scale(1)', opacity: 1 }
+                }
+              }}
+            >
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', mb: 2 }}>
+                <Box
+                  sx={{
+                    p: 1.5,
+                    borderRadius: 3,
+                    bgcolor: alertState.type === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                    color: alertState.type === 'error' ? '#ef4444' : '#f59e0b',
+                    border: '1px solid',
+                    borderColor: alertState.type === 'error' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)',
+                    flexShrink: 0
+                  }}
+                >
+                  <AlertTriangle size={28} />
+                </Box>
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h6" sx={{ fontWeight: 800, color: '#f8fafc', lineHeight: 1.3 }}>
+                    {alertState.title}
+                  </Typography>
+                  <Typography variant="body1" sx={{ mt: 0.5, color: '#cbd5e1', fontWeight: 600, lineHeight: 1.4 }}>
+                    {alertState.message}
+                  </Typography>
+                </Box>
+              </Box>
+
+              {/* Structured Metrics Card for Stock / Quantities */}
+              {alertState.details && (
+                <Box
+                  sx={{
+                    my: 2,
+                    p: 2,
+                    bgcolor: '#0f172a',
+                    borderRadius: 2.5,
+                    border: '1px solid #334155'
+                  }}
+                >
+                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5, mb: 1.5 }}>
+                    <Box sx={{ p: 1.2, bgcolor: '#1e293b', borderRadius: 2, border: '1px solid #334155' }}>
+                      <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 700, display: 'block', textTransform: 'uppercase' }}>
+                        Requested
+                      </Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 800, color: '#f97316', mt: 0.2 }}>
+                        {alertState.details.requested}
+                      </Typography>
+                    </Box>
+                    <Box sx={{ p: 1.2, bgcolor: '#1e293b', borderRadius: 2, border: '1px solid rgba(239, 68, 68, 0.4)' }}>
+                      <Typography variant="caption" sx={{ color: '#ef4444', fontWeight: 700, display: 'block', textTransform: 'uppercase' }}>
+                        Available Stock
+                      </Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 800, color: '#ef4444', mt: 0.2 }}>
+                        {alertState.details.available}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  {(alertState.details.physical || alertState.details.reserved) && (
+                    <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', fontSize: '0.78rem' }}>
+                      ℹ️ {alertState.details.physical || '0.000'} physical stock in inventory • {alertState.details.reserved || '0.000'} reserved in pending orders
+                    </Typography>
+                  )}
+                </Box>
+              )}
+
+              {alertState.subtitle && (
+                <Typography variant="caption" sx={{ color: '#94a3b8', display: 'block', mb: 2 }}>
+                  {alertState.subtitle}
+                </Typography>
+              )}
+
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1.5, mt: 2.5, pt: 2, borderTop: '1px solid #334155' }}>
+                <Button
+                  fullWidth
+                  variant="contained"
+                  onClick={alertState.onClose}
+                  sx={{
+                    borderRadius: 2.5,
+                    textTransform: 'none',
+                    fontWeight: 800,
+                    py: 1.2,
+                    fontSize: '0.95rem',
+                    bgcolor: '#f97316',
+                    '&:hover': { bgcolor: '#ea580c' },
+                    boxShadow: '0 4px 12px rgba(249, 115, 22, 0.3)'
+                  }}
+                >
+                  {alertState.buttonText || 'Understood (Enter / Esc)'}
                 </Button>
               </Box>
             </Paper>

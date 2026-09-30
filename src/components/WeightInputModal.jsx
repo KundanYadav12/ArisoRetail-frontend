@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Scale, ShoppingCart, X } from 'lucide-react';
+import { Scale, ShoppingCart, X, AlertTriangle } from 'lucide-react';
+import { useNotify } from '../context/NotificationContext';
 
 export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, onConfirm, onClose }) {
+  const notify = useNotify();
   const [weightValue, setWeightValue] = useState('1.000');
 
   useEffect(() => {
@@ -19,6 +21,13 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
   const pricePerBaseUnit = parseFloat(product.price || product.selling_price || 0);
   const weightInKg = parseFloat(weightValue || '0');
   const calculatedTotal = (weightInKg * pricePerBaseUnit).toFixed(2);
+
+  // Stock inventory tracking checks
+  const trackStock = product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined;
+  const physicalStock = parseFloat(product.current_stock || 0);
+  const reservedStock = parseFloat(product.reserved_stock || 0);
+  const availableStock = Math.max(0, physicalStock - reservedStock);
+  const isOverStock = trackStock && (weightInKg > availableStock);
 
   const handlePresetSelect = (presetWeight) => {
     setWeightValue(presetWeight);
@@ -39,9 +48,34 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
 
   const handleConfirm = () => {
     if (isNaN(weightInKg) || weightInKg <= 0) {
-      alert('Please enter a valid weight.');
+      notify?.warning('Please enter a valid weight greater than 0 kg.', 'Invalid Weight');
       return;
     }
+
+    if (isOverStock) {
+      notify?.warning(
+        `Requested ${weightInKg.toFixed(3)} kg exceeds available stock (${availableStock.toFixed(3)} kg).`,
+        'Stock Limit Exceeded',
+        5000
+      );
+      notify?.alert({
+        title: 'Insufficient Stock',
+        message: `Cannot add "${product.name}" to cart.`,
+        type: 'warning',
+        buttonText: 'Understood (Enter / Esc)',
+        details: {
+          requested: `${weightInKg.toFixed(3)} kg`,
+          available: `${availableStock.toFixed(3)} kg`,
+          physical: `${physicalStock.toFixed(3)} kg`,
+          reserved: `${reservedStock.toFixed(3)} kg`
+        },
+        subtitle: physicalStock <= 0
+          ? 'This item is currently completely out of stock in your warehouse.'
+          : 'Portions of this stock are reserved by other pending or held orders.'
+      });
+      return;
+    }
+
     onConfirm({
       product,
       weightInKg,
@@ -59,7 +93,24 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         <div style={styles.header}>
           <div>
             <h2 style={styles.productName}>{product.name}</h2>
-            <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</p>
+              {trackStock && (
+                <span
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    fontWeight: '800',
+                    backgroundColor: availableStock <= 0 ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.15)',
+                    color: availableStock <= 0 ? '#ef4444' : '#10b981',
+                    border: `1px solid ${availableStock <= 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.3)'}`
+                  }}
+                >
+                  {availableStock <= 0 ? 'Out of Stock (0 kg)' : `Stock: ${availableStock.toFixed(3)} kg`}
+                </span>
+              )}
+            </div>
           </div>
           <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
         </div>
@@ -69,7 +120,10 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           <label style={styles.label}>Enter Weight (Kg) (F5):</label>
           <div style={styles.inputRow}>
             <input
-              style={styles.input}
+              style={{
+                ...styles.input,
+                border: isOverStock ? '2px solid #ef4444' : '2px solid #F97316'
+              }}
               type="number"
               step="any"
               value={weightValue}
@@ -78,6 +132,26 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
               autoFocus
             />
           </div>
+          {isOverStock && (
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '8px 12px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                color: '#fca5a5',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontSize: '12px',
+                fontWeight: '700'
+              }}
+            >
+              <AlertTriangle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
+              <span>Requested {weightInKg.toFixed(3)} kg exceeds available stock of {availableStock.toFixed(3)} kg</span>
+            </div>
+          )}
         </div>
 
         {/* Preset Quick Buttons */}
@@ -129,8 +203,21 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         {/* Action Buttons */}
         <div style={styles.actionRow}>
           <button type="button" style={styles.cancelBtn} onClick={onClose}>Cancel (Esc)</button>
-          <button type="button" style={{ ...styles.confirmBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} onClick={handleConfirm}>
-            {initialWeightInKg > 0 ? (
+          <button
+            type="button"
+            style={{
+              ...styles.confirmBtn,
+              ...(isOverStock ? { backgroundColor: '#dc2626' } : {}),
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px'
+            }}
+            onClick={handleConfirm}
+          >
+            {isOverStock ? (
+              <><AlertTriangle size={16} /> Exceeds Stock ({availableStock.toFixed(3)} kg max)</>
+            ) : initialWeightInKg > 0 ? (
               <><Scale size={16} /> Update Weight (₹{calculatedTotal})</>
             ) : (
               <><ShoppingCart size={16} /> Add to Cart (Enter)</>
@@ -258,7 +345,9 @@ const styles = {
   presetBtn: {
     backgroundColor: '#334155',
     color: '#F8FAFC',
-    border: '1px solid #475569',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: '#475569',
     padding: '8px 14px',
     borderRadius: '8px',
     fontWeight: '700',

@@ -181,9 +181,9 @@ export const ADMIN_NAV_GROUPS = [
       },
       {
         tabId: 3,
-        label: 'Reports & BI',
+        label: 'All Reports',
         icon: TrendingUp,
-        description: 'Business intelligence and revenue trends'
+        description: 'Financial statements, P&L, Balance Sheet, Cash Flow, BI and sales audits'
       },
       {
         tabId: 4,

@@ -3,6 +3,7 @@ import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField,
 import { Plus, Edit2, Scale, Camera, Smartphone, Trash2, Shield, Settings, FileText, Wifi, List, RefreshCw, Download, Layers, GripVertical, Search, X, Filter, ArrowUpDown, ArrowRightLeft, CheckSquare, Square, Utensils, CheckCircle, XCircle, Printer, Users, UserPlus, Key, ArrowUp, ArrowDown, Boxes, Package, AlertTriangle, TrendingUp, History, FileSpreadsheet, Save, Upload, Image as ImageIcon, Store, QrCode, Tag, ClipboardList, Clock, User, MoreVertical, Share2, Mail, Truck, RotateCcw, Landmark, Receipt, BadgeIndianRupee, Eye, ShoppingCart } from 'lucide-react';
 import { apiFetch, getApiUrl, downloadFile, resolveImageUrl, confirmPendingOrder, cancelPendingOrder } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
+import { useDataRefresh } from '../context/DataRefreshContext';
 import DateRangePicker from '../components/DateRangePicker';
 import GstDashboard from '../components/GstDashboard';
 import ReportsSuite from '../components/reports/ReportsSuite';
@@ -175,6 +176,7 @@ const TAB_PERMISSION_MAP = {
 
 export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView = false, isWarehouseManagerView = false }) {
   const { notify, confirmDialog } = useNotify();
+  const { menuVersion, categoryVersion, stockVersion, orderVersion, inventoryVersion } = useDataRefresh();
   const isSalesman = isSalesmanView || user?.role === 'salesman';
   const isWarehouseManager = isWarehouseManagerView || user?.role === 'warehouse_manager';
 
@@ -227,7 +229,29 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     return permitted.length > 0 ? permitted : [0];
   }, [isSuperAdmin, isAdminOrOwner, user?.permissions, userPermissions, hasUserPermission]);
 
-  const defaultTab = validTabValues.includes(initialTab) ? initialTab : (validTabValues[0] ?? 0);
+  const defaultTab = React.useMemo(() => {
+    if (initialTab !== undefined && initialTab !== null && validTabValues.includes(initialTab)) {
+      return initialTab;
+    }
+    try {
+      const hashQuery = window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '';
+      const params = new URLSearchParams(hashQuery || window.location.search);
+      const urlTab = params.get('tab');
+      if (urlTab !== null && !isNaN(Number(urlTab))) {
+        const numTab = Number(urlTab);
+        if (validTabValues.includes(numTab)) return numTab;
+      }
+    } catch (_) {}
+    try {
+      const savedTab = localStorage.getItem('ariso_admin_active_tab');
+      if (savedTab !== null && !isNaN(Number(savedTab))) {
+        const numTab = Number(savedTab);
+        if (validTabValues.includes(numTab)) return numTab;
+      }
+    } catch (_) {}
+    return validTabValues[0] ?? 0;
+  }, [initialTab, validTabValues]);
+
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   const prevInitialTabRef = React.useRef(initialTab);
@@ -238,10 +262,54 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     }
   }, [initialTab]);
 
+  useEffect(() => {
+    try {
+      if (initialTab === undefined || initialTab === null) {
+        localStorage.setItem('ariso_admin_active_tab', String(activeTab));
+      }
+      const hashBase = window.location.hash.split('?')[0].replace(/^#\/?/, '').trim().toLowerCase();
+      if (hashBase === 'admin') {
+        const newHash = `#/admin?tab=${activeTab}`;
+        if (window.location.hash !== newHash) {
+          window.history.replaceState(null, '', newHash);
+        }
+      }
+    } catch (_) {}
+  }, [activeTab, initialTab]);
+
   const currentTabValue = validTabValues.includes(activeTab) ? activeTab : (validTabValues[0] ?? 0);
 
-  const [inventorySubTab, setInventorySubTab] = useState('overview');
-  const [gstSubTab, setGstSubTab] = useState(0);
+  const [inventorySubTab, setInventorySubTab] = useState(() => {
+    try {
+      const hashQuery = window.location.hash.includes('?') ? window.location.hash.split('?')[1] : '';
+      const params = new URLSearchParams(hashQuery || window.location.search);
+      const urlSubTab = params.get('subtab');
+      if (urlSubTab) return urlSubTab;
+      const saved = localStorage.getItem('ariso_admin_inventory_subtab');
+      if (saved) return saved;
+    } catch (_) {}
+    return 'overview';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ariso_admin_inventory_subtab', inventorySubTab);
+    } catch (_) {}
+  }, [inventorySubTab]);
+
+  const [gstSubTab, setGstSubTab] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ariso_admin_gst_subtab');
+      if (saved !== null && !isNaN(Number(saved))) return Number(saved);
+    } catch (_) {}
+    return 0;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ariso_admin_gst_subtab', String(gstSubTab));
+    } catch (_) {}
+  }, [gstSubTab]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     try {
       const saved = localStorage.getItem('ariso_admin_sidebar_collapsed');
@@ -1111,6 +1179,14 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   useEffect(() => {
     fetchData();
   }, [activeTab, reportPreset, reportDateFrom, reportDateTo, historySearch, historyCashier, historyPaymentMode, historyStatus, historyDateFrom, historyDateTo, historyPage, historyLimit, itemReportPreset, itemReportDateFrom, itemReportDateTo, itemReportCategory, itemReportSearch, itemReportSortBy, itemReportSortOrder, stockCategoryFilter, stockStatusFilter, stockSearch, salesOrderPreset, salesOrderDateFrom, salesOrderDateTo, salesOrderStatus, salesOrderStaff, salesOrderSearch]);
+
+  // Re-fetch when server broadcasts a data change via SSE
+  useEffect(() => {
+    if (menuVersion > 0 || categoryVersion > 0 || stockVersion > 0 || orderVersion > 0 || inventoryVersion > 0) {
+      fetchData();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuVersion, categoryVersion, stockVersion, orderVersion, inventoryVersion]);
 
   const fetchData = async () => {
     setLoading(true);

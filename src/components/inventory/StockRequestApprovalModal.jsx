@@ -72,8 +72,10 @@ export default function StockRequestApprovalModal({ open, onClose, onUpdated, re
 
     // Validate quantities
     const approvedPayload = items.map(it => ({
+      id: it.id,
       item_id: it.id,
       menu_item_id: it.menu_item_id,
+      requested_qty: parseFloat(it.requested_qty || 0),
       approved_qty: it.is_rejected ? 0 : Math.max(0, parseFloat(it.approved_qty || 0)),
       notes: it.notes || ''
     }));
@@ -85,6 +87,7 @@ export default function StockRequestApprovalModal({ open, onClose, onUpdated, re
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notes: notes.trim(),
+          approval_notes: notes.trim(),
           items: approvedPayload
         })
       });
@@ -336,7 +339,15 @@ export default function StockRequestApprovalModal({ open, onClose, onUpdated, re
 
       <DialogActions sx={{ px: 3, py: 1.5, justifyContent: 'space-between' }}>
         <Button onClick={onClose} color="inherit">Close</Button>
-        {request?.status === 'pending' && !showRejectBox && (
+        {request?.status && request.status !== 'pending' && request.status !== 'draft' && (
+          <Chip
+            label={`Request is already ${request.status.replace(/_/g, ' ')}`}
+            color={request.status === 'approved' || request.status === 'received' ? 'success' : 'info'}
+            variant="outlined"
+            sx={{ fontWeight: 700 }}
+          />
+        )}
+        {(request?.status === 'pending' || request?.status === 'draft') && !showRejectBox && (
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <Button
               variant="outlined"

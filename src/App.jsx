@@ -35,12 +35,27 @@ import ChangePasswordModal from './components/ChangePasswordModal';
 import LanguageSelectorModal from './components/LanguageSelectorModal';
 import KeyboardHelpModal from './components/KeyboardHelpModal';
 import { NotificationProvider } from './context/NotificationContext';
+import { DataRefreshProvider } from './context/DataRefreshContext';
 import { apiFetch, resolveImageUrl } from './utils/api';
 import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
 import { SyncService } from './utils/syncService';
 import retailLogo from './assets/retail-logo.png';
+
+const VALID_VIEWS = [
+  'pos',
+  'inventory',
+  'admin',
+  'warehouse',
+  'cashier',
+  'superbill_billing',
+  'superbill_items',
+  'day_end',
+  'payment_reconciliation',
+  'serial_numbers',
+  'superadmin'
+];
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -54,6 +69,27 @@ export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '');
   const [currentView, setCurrentView] = useState(() => {
     try {
+      // 1. Check URL hash (e.g. #/inventory, #/admin, #pos)
+      if (typeof window !== 'undefined' && window.location.hash) {
+        const cleanHash = window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0].trim().toLowerCase();
+        if (cleanHash && VALID_VIEWS.includes(cleanHash)) {
+          return cleanHash;
+        }
+      }
+      // 2. Check query params (?view=admin or ?page=inventory)
+      if (typeof window !== 'undefined' && window.location.search) {
+        const sp = new URLSearchParams(window.location.search);
+        const qp = (sp.get('view') || sp.get('page') || '').toLowerCase().trim();
+        if (qp && VALID_VIEWS.includes(qp)) {
+          return qp;
+        }
+      }
+      // 3. Check localStorage for previously viewed screen
+      const savedView = localStorage.getItem('ARISO_RETAIL_CURRENT_VIEW') || localStorage.getItem('ariso_current_view');
+      if (savedView && VALID_VIEWS.includes(savedView)) {
+        return savedView;
+      }
+      // 4. Role-based fallback
       const saved = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -68,8 +104,25 @@ export default function App() {
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
 
-  // Shared POS / SuperBill Cart & Checkout States
-  const [cart, setCart] = useState([]);
+  // Shared POS / SuperBill Cart & Checkout States (restored on refresh)
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ariso_pos_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (Array.isArray(cart) && cart.length > 0) {
+        localStorage.setItem('ariso_pos_cart', JSON.stringify(cart));
+      } else {
+        localStorage.removeItem('ariso_pos_cart');
+      }
+    } catch (_) {}
+  }, [cart]);
   const [discountType, setDiscountType] = useState('percentage');
   const [discountValue, setDiscountValue] = useState('0');
   const [paymentMode, setPaymentMode] = useState('cash');
@@ -111,10 +164,48 @@ export default function App() {
       localStorage.removeItem('pos_token');
       localStorage.removeItem('pos_refresh_token');
       localStorage.removeItem('pos_user');
+      localStorage.removeItem('ARISO_RETAIL_CURRENT_VIEW');
+      localStorage.removeItem('ariso_current_view');
+      localStorage.removeItem('ariso_admin_active_tab');
+      localStorage.removeItem('ariso_admin_inventory_subtab');
+      localStorage.removeItem('ariso_admin_gst_subtab');
+      localStorage.removeItem('ariso_pos_cart');
+      try {
+        window.history.replaceState(null, '', window.location.pathname);
+      } catch (_) {}
       setUser(null);
       setToken('');
     }
   };
+
+  // Persist currentView and sync URL hash on view change
+  useEffect(() => {
+    if (currentView) {
+      try {
+        localStorage.setItem('ARISO_RETAIL_CURRENT_VIEW', currentView);
+        localStorage.setItem('ariso_current_view', currentView);
+        const currentHashBase = window.location.hash.split('?')[0].replace(/^#\/?/, '').trim().toLowerCase();
+        if (currentHashBase !== currentView) {
+          const searchPart = window.location.hash.includes('?') ? `?${window.location.hash.split('?')[1]}` : '';
+          window.history.replaceState(null, '', `#/${currentView}${searchPart}`);
+        }
+      } catch (e) {}
+    }
+  }, [currentView]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const handleHashChange = () => {
+      try {
+        const cleanHash = window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0].trim().toLowerCase();
+        if (cleanHash && VALID_VIEWS.includes(cleanHash)) {
+          setCurrentView(cleanHash);
+        }
+      } catch (e) {}
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   useEffect(() => {
     const syncSessionAndCatalog = async () => {
@@ -418,13 +509,18 @@ export default function App() {
           <Login onLoginSuccess={(u, t) => {
             setUser(u);
             setToken(t);
-            if (u.role === 'super_admin' || u.role === 'superadmin') {
-              setCurrentView('superadmin');
+            let targetView = 'pos';
+            const cleanHash = window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0].trim().toLowerCase();
+            const savedV = localStorage.getItem('ARISO_RETAIL_CURRENT_VIEW') || localStorage.getItem('ariso_current_view');
+            const candidate = (cleanHash && VALID_VIEWS.includes(cleanHash)) ? cleanHash : (savedV && VALID_VIEWS.includes(savedV) ? savedV : null);
+            if (candidate) {
+              targetView = candidate;
+            } else if (u.role === 'super_admin' || u.role === 'superadmin') {
+              targetView = 'superadmin';
             } else if (u.role === 'warehouse_manager') {
-              setCurrentView('warehouse');
-            } else {
-              setCurrentView('pos');
+              targetView = 'warehouse';
             }
+            setCurrentView(targetView);
           }} />
         </ThemeProvider>
       </NotificationProvider>
@@ -434,6 +530,7 @@ export default function App() {
   return (
     <LanguageProvider>
       <NotificationProvider>
+      <DataRefreshProvider token={token}>
       <ThemeProvider theme={muiTheme}>
         <CssBaseline />
 
@@ -1073,7 +1170,12 @@ export default function App() {
                 <AdminPanel user={user} token={token} initialTab={5} isSalesmanView={true} />
               </Box>
             )}
-            {(currentView === 'warehouse' || (isWarehouseManager && currentView === 'admin')) && (
+            {currentView === 'inventory' && !isSalesman && !isWarehouseManager && (
+              <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                <AdminPanel user={user} token={token} initialTab={5} />
+              </Box>
+            )}
+            {(currentView === 'warehouse' || (isWarehouseManager && (currentView === 'admin' || currentView === 'inventory'))) && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <AdminPanel user={user} token={token} initialTab={5} isWarehouseManagerView={true} />
               </Box>
@@ -1117,7 +1219,9 @@ export default function App() {
           </Box>
         </Box>
       </ThemeProvider>
-    </NotificationProvider>
-  </LanguageProvider>
+      </DataRefreshProvider>
+      </NotificationProvider>
+    </LanguageProvider>
   );
 }
+

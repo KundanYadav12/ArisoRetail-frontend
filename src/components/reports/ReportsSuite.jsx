@@ -33,7 +33,8 @@ import {
   DialogActions,
   Checkbox,
   FormControlLabel,
-  InputAdornment
+  InputAdornment,
+  TableFooter
 } from '@mui/material';
 import {
   TrendingUp,
@@ -60,11 +61,22 @@ import {
   PieChart,
   PlusCircle,
   Trash2,
-  ExternalLink
+  Landmark,
+  Scale,
+  LayoutTemplate,
+  BookOpen,
+  ArrowLeft,
+  HelpCircle,
+  Columns,
+  Star,
+  LayoutGrid,
+  Table as TableIcon,
+  ArrowRight
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
 import { getISTDateString } from '../../utils/dateUtils';
+import FinancialStatementView from './FinancialStatementView';
 
 export default function ReportsSuite({ onOpenOrderDetail = null }) {
   const { notify } = useNotify();
@@ -90,6 +102,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [reportData, setReportData] = useState({ rows: [], summary: {}, dateRange: {} });
+  const [financialViewMode, setFinancialViewMode] = useState('statement'); // 'statement' | 'table'
   const [biDashboardData, setBiDashboardData] = useState(null);
   const [dsrData, setDsrData] = useState(null);
   const [dsrDate, setDsrDate] = useState(() => getISTDateString());
@@ -101,11 +114,63 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
   const [savedReports, setSavedReports] = useState([]);
   const [savingCustomReport, setSavingCustomReport] = useState(false);
 
-  // Initialize Catalog and Dates
+  // Inventory & Filter Specific State
+  const [warehouses, setWarehouses] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [warehouseFilter, setWarehouseFilter] = useState('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [columnVisibility, setColumnVisibility] = useState({});
+  const [columnDialogOpen, setColumnDialogOpen] = useState(false);
+
+  // Cards Catalog & Favorite State
+  const [viewMode, setViewMode] = useState('table'); // 'table' | 'cards'
+  const [cardFilter, setCardFilter] = useState('all'); // 'all' | 'favorites'
+  const [cardSearch, setCardSearch] = useState('');
+  const [favorites, setFavorites] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ariso_favorite_reports');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const toggleFavorite = (reportId, e) => {
+    if (e) e.stopPropagation();
+    setFavorites(prev => {
+      const next = prev.includes(reportId) ? prev.filter(id => id !== reportId) : [...prev, reportId];
+      try {
+        localStorage.setItem('ariso_favorite_reports', JSON.stringify(next));
+      } catch (err) {}
+      return next;
+    });
+  };
+
+  // Initialize Catalog, Dates, and Warehouses/Categories
   useEffect(() => {
     fetchCatalog();
     handlePresetChange('month');
+    fetchMetadata();
   }, []);
+
+  const fetchMetadata = async () => {
+    try {
+      const [wRes, cRes] = await Promise.all([
+        apiFetch('/api/inventory/warehouses'),
+        apiFetch('/api/categories')
+      ]);
+      if (wRes.ok) {
+        const wData = await wRes.json();
+        setWarehouses(wData.warehouses || wData.data || (Array.isArray(wData) ? wData : []));
+      }
+      if (cRes.ok) {
+        const cData = await cRes.json();
+        setCategories(cData.categories || cData.data || (Array.isArray(cData) ? cData : []));
+      }
+    } catch (e) {
+      console.warn('Could not load warehouses or categories for filter options', e);
+    }
+  };
 
   // Fetch report data when activeReportId, filters, or pagination change
   useEffect(() => {
@@ -118,7 +183,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
     } else {
       fetchReportData();
     }
-  }, [activeReportId, selectedDomain, datePreset, dateFrom, dateTo, page, rowsPerPage, paymentModeFilter]);
+  }, [activeReportId, selectedDomain, datePreset, dateFrom, dateTo, page, rowsPerPage, paymentModeFilter, warehouseFilter, categoryFilter]);
 
   const fetchCatalog = async () => {
     try {
@@ -185,6 +250,8 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
       }
       if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
       if (paymentModeFilter !== 'all') url += `&payment_mode=${encodeURIComponent(paymentModeFilter)}`;
+      if (warehouseFilter !== 'all') url += `&warehouse_id=${encodeURIComponent(warehouseFilter)}`;
+      if (categoryFilter !== 'all') url += `&category_id=${encodeURIComponent(categoryFilter)}`;
 
       const res = await apiFetch(url);
       if (res.ok) {
@@ -192,7 +259,9 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
         setReportData({
           rows: data.rows || [],
           summary: data.summary || {},
-          dateRange: data.dateRange || {}
+          dateRange: data.dateRange || {},
+          reconciliation: data.reconciliation || null,
+          structuredData: data.structuredData || null
         });
         setTotalCount(data.pagination?.totalCount || 0);
       } else {
@@ -257,6 +326,8 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
       }
       if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
       if (paymentModeFilter !== 'all') url += `&payment_mode=${encodeURIComponent(paymentModeFilter)}`;
+      if (warehouseFilter !== 'all') url += `&warehouse_id=${encodeURIComponent(warehouseFilter)}`;
+      if (categoryFilter !== 'all') url += `&category_id=${encodeURIComponent(categoryFilter)}`;
 
       const extension = format === 'csv' ? 'csv' : 'xlsx';
       await downloadFile(url, `${activeReportId}_${Date.now()}.${extension}`);
@@ -273,17 +344,72 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
     window.print();
   };
 
+  // 15 Standard Inventory Reports in exact specification order
+  const INVENTORY_REPORT_ORDER = [
+    'inventory_valuation_summary',
+    'inventory_godown_summary',
+    'inventory_categorywise_summary',
+    'inventory_category_mis',
+    'inventory_groupwise_summary',
+    'inventory_negative_stock',
+    'inventory_fifo_lot_tracking',
+    'inventory_stock_summary',
+    'inventory_highest_selling',
+    'inventory_least_selling',
+    'inventory_batch_wise',
+    'inventory_item_stock_levels',
+    'inventory_reorder_suggestions',
+    'inventory_reserved_stock',
+    'inventory_challan_invoice_variance'
+  ];
+
   // Find active report metadata
   const currentReportMeta = catalog.find(c => c.id === activeReportId) || {
     title: activeReportId.replace(/_/g, ' ').toUpperCase(),
     columns: []
   };
 
-  // Reports categorized by domain
-  const domainReports = catalog.filter(c => c.category === selectedDomain);
+  // Reports categorized by domain (enforcing exact 15-report order for inventory)
+  const rawDomainReports = catalog.filter(c => c.category === selectedDomain);
+  const domainReports = selectedDomain === 'inventory'
+    ? [...rawDomainReports].sort((a, b) => {
+        const idxA = INVENTORY_REPORT_ORDER.indexOf(a.id);
+        const idxB = INVENTORY_REPORT_ORDER.indexOf(b.id);
+        if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+        if (idxA !== -1) return -1;
+        if (idxB !== -1) return 1;
+        return 0;
+      })
+    : rawDomainReports;
 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+      {/* Print CSS Stylesheet */}
+      <style>{`
+        @media print {
+          body {
+            background: #ffffff !important;
+            color: #000000 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+          aside, header, nav, .MuiTabs-root, .no-print, button, input, select {
+            display: none !important;
+          }
+          .print-area {
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-shadow: none !important;
+            border: none !important;
+          }
+          @page {
+            size: auto;
+            margin: 12mm;
+          }
+        }
+      `}</style>
+
       {/* Top Header Banner */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
         <Box>
@@ -335,6 +461,19 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
             Print
           </Button>
 
+          {selectedDomain !== 'bi' && selectedDomain !== 'dsr' && selectedDomain !== 'custom' && currentReportMeta.columns?.length > 0 && (
+            <Button
+              variant="outlined"
+              color="primary"
+              size="small"
+              startIcon={<Sliders size={14} />}
+              onClick={() => setColumnDialogOpen(true)}
+              sx={{ fontWeight: 800, textTransform: 'none' }}
+            >
+              Manage Columns
+            </Button>
+          )}
+
           <IconButton
             size="small"
             color="primary"
@@ -349,15 +488,24 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
         </Box>
       </Box>
 
-      {/* Main Navigation Tabs: 10 Report Domains */}
+      {/* Main Navigation Tabs: 11 Report Domains */}
       <Paper variant="outlined" sx={{ borderRadius: 2 }}>
         <Tabs
           value={selectedDomain}
           onChange={(e, val) => {
             setSelectedDomain(val);
             setPage(0);
-            const firstInDomain = catalog.find(c => c.category === val);
-            if (firstInDomain) setActiveReportId(firstInDomain.id);
+            if (val === 'financial') {
+              setActiveReportId('financial_pl_t');
+              if (datePreset === 'month') {
+                handlePresetChange('this_fy');
+              }
+            } else if (val === 'inventory') {
+              setActiveReportId(INVENTORY_REPORT_ORDER[0]);
+            } else {
+              const firstInDomain = catalog.find(c => c.category === val);
+              if (firstInDomain) setActiveReportId(firstInDomain.id);
+            }
           }}
           variant="scrollable"
           scrollButtons="auto"
@@ -374,6 +522,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
             }
           }}
         >
+          <Tab icon={<Landmark size={15} />} iconPosition="start" label="Financial Statements & P&L" value="financial" />
           <Tab icon={<BarChart3 size={15} />} iconPosition="start" label="Executive BI" value="bi" />
           <Tab icon={<Clock size={15} />} iconPosition="start" label="Daily Closing (DSR)" value="dsr" />
           <Tab icon={<ShoppingBag size={15} />} iconPosition="start" label="Sales Reports" value="sales" />
@@ -679,61 +828,262 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
       {/* --- VIEW 3: STANDARD REPORTS VIEW (SALES, PURCHASE, INVENTORY, GST, ETC.) --- */}
       {selectedDomain !== 'bi' && selectedDomain !== 'dsr' && selectedDomain !== 'custom' && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-          {/* Sub-report selector buttons within chosen domain: Clean, non-overlapping responsive pills */}
+          {/* Sub-report Navigation / View Mode Header Bar */}
           <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2.5, bgcolor: 'background.paper', borderColor: 'divider' }}>
-            <Box
-              sx={{
-                display: 'flex',
-                flexWrap: { xs: 'nowrap', md: 'wrap' },
-                gap: 1.25,
-                overflowX: 'auto',
-                py: 0.5,
-                '&::-webkit-scrollbar': { height: 6 },
-                '&::-webkit-scrollbar-thumb': { backgroundColor: 'divider', borderRadius: 3 }
-              }}
-            >
-              {domainReports.map((rep) => {
-                const isActive = activeReportId === rep.id;
-                return (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1.5, mb: viewMode === 'cards' ? 0 : 1 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ display: 'inline-flex', p: 0.5, bgcolor: 'action.hover', borderRadius: 2 }}>
                   <Button
-                    key={rep.id}
                     size="small"
-                    variant={isActive ? 'contained' : 'outlined'}
-                    color={isActive ? 'primary' : 'inherit'}
-                    onClick={() => {
-                      setActiveReportId(rep.id);
-                      setPage(0);
-                    }}
-                    sx={{
-                      fontWeight: isActive ? 800 : 700,
-                      fontSize: '0.8125rem',
-                      textTransform: 'none',
-                      whiteSpace: 'nowrap',
-                      flexShrink: 0,
-                      borderRadius: 6,
-                      px: 2,
-                      py: 0.75,
-                      borderColor: isActive ? 'primary.main' : 'divider',
-                      bgcolor: isActive ? 'primary.main' : 'background.paper',
-                      color: isActive ? 'primary.contrastText' : 'text.secondary',
-                      boxShadow: isActive ? '0 2px 8px rgba(37, 99, 235, 0.25)' : 'none',
-                      '&:hover': {
-                        bgcolor: isActive ? 'primary.dark' : 'action.hover',
-                        color: isActive ? 'primary.contrastText' : 'text.primary',
-                        borderColor: isActive ? 'primary.dark' : 'text.secondary'
-                      },
-                      transition: 'all 0.15s ease'
-                    }}
+                    variant={viewMode === 'cards' ? 'contained' : 'text'}
+                    color={viewMode === 'cards' ? 'primary' : 'inherit'}
+                    startIcon={<LayoutGrid size={15} />}
+                    onClick={() => setViewMode('cards')}
+                    sx={{ fontWeight: 800, fontSize: '0.75rem', textTransform: 'none', px: 1.5, borderRadius: 1.5 }}
                   >
-                    {rep.title}
+                    Report Cards Catalog ({domainReports.length})
                   </Button>
-                );
-              })}
+                  <Button
+                    size="small"
+                    variant={viewMode === 'table' ? 'contained' : 'text'}
+                    color={viewMode === 'table' ? 'primary' : 'inherit'}
+                    startIcon={<TableIcon size={15} />}
+                    onClick={() => setViewMode('table')}
+                    sx={{ fontWeight: 800, fontSize: '0.75rem', textTransform: 'none', px: 1.5, borderRadius: 1.5 }}
+                  >
+                    Table View
+                  </Button>
+                </Box>
+                {selectedDomain === 'inventory' && (
+                  <Chip
+                    label="15 Standard Inventory Reports"
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ fontWeight: 700, fontSize: '0.7rem' }}
+                  />
+                )}
+              </Box>
+
+              {viewMode === 'cards' && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <TextField
+                    size="small"
+                    placeholder="Search report name / keywords..."
+                    value={cardSearch}
+                    onChange={(e) => setCardSearch(e.target.value)}
+                    sx={{ width: { xs: '100%', sm: 260 } }}
+                    slotProps={{
+                      input: {
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <Search size={14} style={{ color: '#94a3b8' }} />
+                          </InputAdornment>
+                        )
+                      }
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    variant={cardFilter === 'favorites' ? 'contained' : 'outlined'}
+                    color={cardFilter === 'favorites' ? 'warning' : 'inherit'}
+                    startIcon={<Star size={14} fill={cardFilter === 'favorites' ? '#ffffff' : '#eab308'} color={cardFilter === 'favorites' ? '#ffffff' : '#eab308'} />}
+                    onClick={() => setCardFilter(prev => prev === 'favorites' ? 'all' : 'favorites')}
+                    sx={{ fontWeight: 800, fontSize: '0.75rem', textTransform: 'none', whiteSpace: 'nowrap' }}
+                  >
+                    Favorites ({domainReports.filter(r => favorites.includes(r.id)).length})
+                  </Button>
+                </Box>
+              )}
             </Box>
+
+            {/* In Table view: show horizontal scrolling pills for all domain reports */}
+            {viewMode === 'table' && (
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexWrap: { xs: 'nowrap', md: 'wrap' },
+                  gap: 1.25,
+                  overflowX: 'auto',
+                  pt: 0.5,
+                  '&::-webkit-scrollbar': { height: 6 },
+                  '&::-webkit-scrollbar-thumb': { backgroundColor: 'divider', borderRadius: 3 }
+                }}
+              >
+                {domainReports.map((rep, idx) => {
+                  const isActive = activeReportId === rep.id;
+                  const isFav = favorites.includes(rep.id);
+                  return (
+                    <Button
+                      key={rep.id}
+                      size="small"
+                      variant={isActive ? 'contained' : 'outlined'}
+                      color={isActive ? 'primary' : 'inherit'}
+                      onClick={() => {
+                        setActiveReportId(rep.id);
+                        setPage(0);
+                      }}
+                      startIcon={
+                        isFav ? (
+                          <Star size={12} fill="#eab308" color="#eab308" />
+                        ) : null
+                      }
+                      sx={{
+                        fontWeight: isActive ? 800 : 700,
+                        fontSize: '0.8125rem',
+                        textTransform: 'none',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                        borderRadius: 6,
+                        px: 2,
+                        py: 0.75,
+                        borderColor: isActive ? 'primary.main' : 'divider',
+                        bgcolor: isActive ? 'primary.main' : 'background.paper',
+                        color: isActive ? 'primary.contrastText' : 'text.secondary',
+                        boxShadow: isActive ? '0 2px 8px rgba(37, 99, 235, 0.25)' : 'none',
+                        '&:hover': {
+                          bgcolor: isActive ? 'primary.dark' : 'action.hover',
+                          color: isActive ? 'primary.contrastText' : 'text.primary',
+                          borderColor: isActive ? 'primary.dark' : 'text.secondary'
+                        },
+                        transition: 'all 0.15s ease'
+                      }}
+                    >
+                      {selectedDomain === 'inventory' ? `${idx + 1}. ${rep.title}` : rep.title}
+                    </Button>
+                  );
+                })}
+              </Box>
+            )}
           </Paper>
 
-          {/* Universal Filter Bar */}
-          <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
+          {/* Cards Catalog Grid (When viewMode === 'cards') */}
+          {viewMode === 'cards' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Grid container spacing={2}>
+                {domainReports
+                  .filter(rep => {
+                    if (cardFilter === 'favorites' && !favorites.includes(rep.id)) return false;
+                    if (cardSearch.trim()) {
+                      const term = cardSearch.toLowerCase();
+                      return rep.title.toLowerCase().includes(term) || (rep.description || '').toLowerCase().includes(term);
+                    }
+                    return true;
+                  })
+                  .map((rep, idx) => {
+                    const isFav = favorites.includes(rep.id);
+                    const orderIndex = selectedDomain === 'inventory'
+                      ? INVENTORY_REPORT_ORDER.indexOf(rep.id) + 1
+                      : idx + 1;
+                    const orderBadge = String(orderIndex > 0 ? orderIndex : idx + 1).padStart(2, '0');
+
+                    return (
+                      <Grid item xs={12} sm={6} md={4} key={rep.id}>
+                        <Card
+                          variant="outlined"
+                          sx={{
+                            borderRadius: 3,
+                            height: '100%',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            p: 2.25,
+                            position: 'relative',
+                            transition: 'all 0.15s ease',
+                            borderColor: activeReportId === rep.id ? 'primary.main' : 'divider',
+                            bgcolor: 'background.paper',
+                            boxShadow: activeReportId === rep.id ? '0 4px 14px rgba(37, 99, 235, 0.12)' : 'none',
+                            '&:hover': {
+                              transform: 'translateY(-2px)',
+                              boxShadow: '0 6px 20px rgba(0, 0, 0, 0.08)',
+                              borderColor: 'primary.light'
+                            }
+                          }}
+                        >
+                          <Box>
+                            {/* Card Top: Order Badge, Category Tag, Favorite Star */}
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Chip
+                                  label={`#${orderBadge}`}
+                                  size="small"
+                                  sx={{
+                                    fontWeight: 900,
+                                    fontSize: '0.75rem',
+                                    bgcolor: 'primary.50',
+                                    color: 'primary.main',
+                                    border: '1px solid',
+                                    borderColor: 'primary.200'
+                                  }}
+                                />
+                                <Chip
+                                  label={rep.category.toUpperCase()}
+                                  size="small"
+                                  variant="outlined"
+                                  sx={{ fontWeight: 700, fontSize: '0.65rem' }}
+                                />
+                              </Box>
+                              <IconButton
+                                size="small"
+                                onClick={(e) => toggleFavorite(rep.id, e)}
+                                title={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                                sx={{
+                                  color: isFav ? '#eab308' : 'text.disabled',
+                                  '&:hover': { color: '#eab308', bgcolor: 'rgba(234, 179, 8, 0.1)' }
+                                }}
+                              >
+                                <Star size={18} fill={isFav ? '#eab308' : 'none'} color={isFav ? '#eab308' : 'currentColor'} />
+                              </IconButton>
+                            </Box>
+
+                            {/* Card Title & Description */}
+                            <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.primary', mb: 0.75, lineHeight: 1.3 }}>
+                              {rep.title}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem', lineHeight: 1.5, mb: 2 }}>
+                              {rep.description || 'Dynamic operational reporting and statutory ledger audit.'}
+                            </Typography>
+                          </Box>
+
+                          {/* Card Footer: Columns Count & View Report Button */}
+                          <Box sx={{ pt: 1.5, borderTop: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                              {rep.columns?.length || 0} Columns
+                            </Typography>
+                            <Button
+                              variant="contained"
+                              size="small"
+                              color="primary"
+                              endIcon={<ArrowRight size={14} />}
+                              onClick={() => {
+                                setActiveReportId(rep.id);
+                                setViewMode('table');
+                                setPage(0);
+                              }}
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: '0.78rem',
+                                textTransform: 'none',
+                                borderRadius: 2,
+                                px: 2,
+                                boxShadow: '0 2px 6px rgba(37, 99, 235, 0.25)'
+                              }}
+                            >
+                              View Report
+                            </Button>
+                          </Box>
+                        </Card>
+                      </Grid>
+                    );
+                  })}
+              </Grid>
+            </Box>
+          )}
+
+          {/* Universal Filter Bar (When viewMode === 'table') */}
+          {viewMode === 'table' && (
+            <>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5 }}>
             <Grid container spacing={1.5} sx={{ alignItems: 'center' }}>
               {/* Date Presets */}
               <Grid item xs={12} sm={6} md={3}>
@@ -804,45 +1154,144 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                 />
               </Grid>
 
-              {/* Payment Filter */}
-              <Grid item xs={6} sm={3} md={2}>
-                <FormControl size="small" fullWidth>
-                  <InputLabel>Payment Mode</InputLabel>
-                  <Select
-                    value={paymentModeFilter}
-                    label="Payment Mode"
-                    onChange={(e) => setPaymentModeFilter(e.target.value)}
-                  >
-                    <MenuItem value="all">All Modes</MenuItem>
-                    <MenuItem value="cash">Cash</MenuItem>
-                    <MenuItem value="upi">UPI / QR</MenuItem>
-                    <MenuItem value="card">Card Swipe</MenuItem>
-                    <MenuItem value="credit">Credit / Due</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
+              {/* Payment Filter (for sales & payments) */}
+              {(selectedDomain === 'sales' || selectedDomain === 'payment') && (
+                <Grid item xs={6} sm={3} md={2}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel>Payment Mode</InputLabel>
+                    <Select
+                      value={paymentModeFilter}
+                      label="Payment Mode"
+                      onChange={(e) => setPaymentModeFilter(e.target.value)}
+                    >
+                      <MenuItem value="all">All Modes</MenuItem>
+                      <MenuItem value="cash">Cash</MenuItem>
+                      <MenuItem value="upi">UPI / QR</MenuItem>
+                      <MenuItem value="card">Card Swipe</MenuItem>
+                      <MenuItem value="credit">Credit / Due</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+
+              {/* Warehouse Filter (for inventory reports) */}
+              {selectedDomain === 'inventory' && warehouses.length > 0 && (
+                <Grid item xs={6} sm={3} md={2}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel>Godown / Warehouse</InputLabel>
+                    <Select
+                      value={warehouseFilter}
+                      label="Godown / Warehouse"
+                      onChange={(e) => setWarehouseFilter(e.target.value)}
+                    >
+                      <MenuItem value="all">All Godowns</MenuItem>
+                      {warehouses.map(w => (
+                        <MenuItem key={w.id} value={w.id}>{w.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
+
+              {/* Category Filter (for inventory reports) */}
+              {selectedDomain === 'inventory' && categories.length > 0 && (
+                <Grid item xs={6} sm={3} md={2}>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel>Category</InputLabel>
+                    <Select
+                      value={categoryFilter}
+                      label="Category"
+                      onChange={(e) => setCategoryFilter(e.target.value)}
+                    >
+                      <MenuItem value="all">All Categories</MenuItem>
+                      {categories.map(c => (
+                        <MenuItem key={c.id} value={c.id}>{c.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                </Grid>
+              )}
             </Grid>
           </Paper>
 
-          {/* Active Report Header & Metadata */}
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', px: 0.5 }}>
-            <Box>
-              <Typography variant="h6" sx={{ fontWeight: 900 }}>
-                {currentReportMeta.title}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {currentReportMeta.description}
-              </Typography>
-            </Box>
-            {reportData.dateRange?.label && (
-              <Chip
-                label={`Period: ${reportData.dateRange.label}`}
+          {/* Active Report Header & Metadata with Catalog Switch & Favorite Star */}
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, px: 0.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Button
                 size="small"
-                color="primary"
                 variant="outlined"
-                sx={{ fontWeight: 700, fontSize: '0.75rem' }}
-              />
-            )}
+                color="inherit"
+                startIcon={<LayoutGrid size={14} />}
+                onClick={() => setViewMode('cards')}
+                sx={{
+                  fontWeight: 800,
+                  textTransform: 'none',
+                  fontSize: '0.75rem',
+                  borderRadius: 2,
+                  px: 1.25,
+                  py: 0.5,
+                  borderColor: 'divider',
+                  bgcolor: 'background.paper'
+                }}
+              >
+                Cards Catalog
+              </Button>
+              <IconButton
+                size="small"
+                onClick={(e) => toggleFavorite(activeReportId, e)}
+                title={favorites.includes(activeReportId) ? 'Remove from favorites' : 'Add to favorites'}
+                sx={{
+                  color: favorites.includes(activeReportId) ? '#eab308' : 'text.disabled',
+                  '&:hover': { color: '#eab308', bgcolor: 'rgba(234, 179, 8, 0.1)' }
+                }}
+              >
+                <Star size={20} fill={favorites.includes(activeReportId) ? '#eab308' : 'none'} color={favorites.includes(activeReportId) ? '#eab308' : 'currentColor'} />
+              </IconButton>
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 900 }}>
+                  {currentReportMeta.title}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {currentReportMeta.description}
+                </Typography>
+              </Box>
+            </Box>
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              {selectedDomain === 'financial' && (
+                <Box sx={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 2, overflow: 'hidden', p: 0.25, bgcolor: '#f1f5f9' }}>
+                  <Button
+                    size="small"
+                    variant={financialViewMode === 'statement' ? 'contained' : 'text'}
+                    color={financialViewMode === 'statement' ? 'primary' : 'inherit'}
+                    onClick={() => setFinancialViewMode('statement')}
+                    startIcon={<BookOpen size={14} />}
+                    sx={{ textTransform: 'none', fontWeight: 800, fontSize: '0.75rem', px: 1.5, py: 0.5 }}
+                  >
+                    Audited Statement
+                  </Button>
+                  <Button
+                    size="small"
+                    variant={financialViewMode === 'table' ? 'contained' : 'text'}
+                    color={financialViewMode === 'table' ? 'primary' : 'inherit'}
+                    onClick={() => setFinancialViewMode('table')}
+                    startIcon={<LayoutTemplate size={14} />}
+                    sx={{ textTransform: 'none', fontWeight: 800, fontSize: '0.75rem', px: 1.5, py: 0.5 }}
+                  >
+                    Ledger Grid
+                  </Button>
+                </Box>
+              )}
+              {reportData.dateRange?.label && (
+                <Chip
+                  label={`Period: ${reportData.dateRange.label}`}
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  sx={{ fontWeight: 700, fontSize: '0.75rem' }}
+                />
+              )}
+            </Box>
           </Box>
 
           {/* Summary Metric Ribbon (when available) */}
@@ -911,98 +1360,549 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.netGstPayable.toFixed(2)}</Typography>
                   </Grid>
                 )}
+                {reportData.summary.grossProfit !== undefined && (
+                  <Grid item xs={6} sm={4} md={2}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Gross Profit</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.grossProfit >= 0 ? 'success.main' : 'error.main' }}>
+                      ₹{reportData.summary.grossProfit.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.netProfit !== undefined && (
+                  <Grid item xs={6} sm={4} md={2}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Net Profit</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.netProfit >= 0 ? 'success.main' : 'error.main' }}>
+                      ₹{reportData.summary.netProfit.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalAssets !== undefined && (
+                  <Grid item xs={6} sm={4} md={2}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Assets</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>
+                      ₹{reportData.summary.totalAssets.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalLiabilities !== undefined && (
+                  <Grid item xs={6} sm={4} md={2}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Liabilities</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'info.main' }}>
+                      ₹{reportData.summary.totalLiabilities.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.closingBalance !== undefined && (
+                  <Grid item xs={6} sm={4} md={2}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Closing Cash/Bank</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>
+                      ₹{reportData.summary.closingBalance.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+
+                {/* --- Inventory Report Metrics --- */}
+                {reportData.summary.totalStockOnHand !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Stock On Hand</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>{reportData.summary.totalStockOnHand}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalQuantity !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Quantity</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>{reportData.summary.totalQuantity}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalItems !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Catalog Items</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalItems}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalGodowns !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Godowns</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalGodowns}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalCategories !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Categories</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalCategories}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalGroups !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Item Groups</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalGroups}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalOpening !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Opening Stock</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalOpening}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalIn !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total IN</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>+{reportData.summary.totalIn}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalOut !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total OUT</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>-{reportData.summary.totalOut}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalClosing !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Closing Stock</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>{reportData.summary.totalClosing}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalDifference !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Variance / Diff</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.totalDifference !== 0 ? 'warning.main' : 'success.main' }}>
+                      {reportData.summary.totalDifference}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalQuantitySold !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Quantity Sold</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>{reportData.summary.totalQuantitySold}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.itemsRequiringReorder !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reorder Needed</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>{reportData.summary.itemsRequiringReorder}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalSuggestedQuantity !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Suggested Reorder</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalSuggestedQuantity}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalEstimatedCost !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Estimated Cost</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.totalEstimatedCost.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalReorderValue !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reorder Value</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{reportData.summary.totalReorderValue.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalStockShortfall !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Stock Shortfall</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>{reportData.summary.totalStockShortfall}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.negativeItemsCount !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Negative Items</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.negativeItemsCount > 0 ? 'error.main' : 'success.main' }}>
+                      {reportData.summary.negativeItemsCount}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalDeficitQuantity !== undefined && reportData.summary.totalDeficitQuantity !== 0 && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Deficit Qty</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>{reportData.summary.totalDeficitQuantity}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalDeficitValue !== undefined && reportData.summary.totalDeficitValue !== 0 && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Deficit Value</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>₹{reportData.summary.totalDeficitValue.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalLots !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Tracked Lots</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalLots}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalRemainingQty !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Remaining Lot Qty</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>{reportData.summary.totalRemainingQty}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalLotAssetValue !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Lot Asset Value</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.totalLotAssetValue.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalBatches !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Batches Tracked</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalBatches}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.itemsWithReservations !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reserved Items</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>{reportData.summary.itemsWithReservations}</Typography>
+                  </Grid>
+                )}
+                {(reportData.summary.totalReservedStock !== undefined || reportData.summary.totalReservedQuantity !== undefined) && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reserved Stock</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>
+                      {reportData.summary.totalReservedStock ?? reportData.summary.totalReservedQuantity}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalReservedValue !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reserved Value</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{reportData.summary.totalReservedValue.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalAvailableStock !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Available Stock</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>{reportData.summary.totalAvailableStock}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalChallans !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Challans</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalChallans}</Typography>
+                  </Grid>
+                )}
+                {(reportData.summary.totalChallanQuantity !== undefined || reportData.summary.totalChallanQty !== undefined) && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Challan Qty</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalChallanQuantity ?? reportData.summary.totalChallanQty}</Typography>
+                  </Grid>
+                )}
+                {(reportData.summary.totalInvoicedQuantity !== undefined || reportData.summary.totalInvoicedQty !== undefined) && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Invoiced Qty</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalInvoicedQuantity ?? reportData.summary.totalInvoicedQty}</Typography>
+                  </Grid>
+                )}
+                {(reportData.summary.totalVarianceQuantity !== undefined || reportData.summary.totalVarianceQty !== undefined) && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Variance Qty</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: (reportData.summary.totalVarianceQuantity ?? reportData.summary.totalVarianceQty) !== 0 ? 'warning.main' : 'success.main' }}>
+                      {reportData.summary.totalVarianceQuantity ?? reportData.summary.totalVarianceQty}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.matchedCount !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Matched Challans</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>{reportData.summary.matchedCount}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalVarianceAmount !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Variance Amount</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.totalVarianceAmount !== 0 ? 'warning.main' : 'success.main' }}>
+                      ₹{reportData.summary.totalVarianceAmount.toFixed(2)}
+                    </Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalPurchaseCost !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Purchase Cost</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>₹{reportData.summary.totalPurchaseCost.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalSalesRevenue !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Sales Revenue</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>₹{reportData.summary.totalSalesRevenue.toFixed(2)}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.totalCatalogItems !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Catalog Items</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>{reportData.summary.totalCatalogItems}</Typography>
+                  </Grid>
+                )}
+                {reportData.summary.zeroSalesItemsInBatch !== undefined && (
+                  <Grid item xs={6} sm={4} md={1.7}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Zero Sales Items</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>{reportData.summary.zeroSalesItemsInBatch}</Typography>
+                  </Grid>
+                )}
               </Grid>
             </Paper>
           )}
 
-          {/* Interactive Report Data Table */}
-          <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}>
-            <TableContainer sx={{ maxHeight: 600 }}>
-              <Table size="small" stickyHeader>
-                <TableHead sx={{ bgcolor: 'action.hover' }}>
-                  <TableRow>
-                    {currentReportMeta.columns.map((col) => (
-                      <TableCell
-                        key={col.key}
-                        align={col.align || 'left'}
-                        sx={{ fontWeight: 800, fontSize: '0.8rem', whiteSpace: 'nowrap' }}
-                      >
-                        {col.header}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {loading ? (
-                    <TableRow>
-                      <TableCell colSpan={currentReportMeta.columns.length || 6} align="center" sx={{ py: 6 }}>
-                        <CircularProgress size={28} />
-                      </TableCell>
-                    </TableRow>
-                  ) : reportData.rows && reportData.rows.length > 0 ? (
-                    reportData.rows.map((row, rIdx) => (
-                      <TableRow key={rIdx} hover>
-                        {currentReportMeta.columns.map((col) => {
-                          const val = row[col.key];
-                          const isCurrency = col.isCurrency;
-
-                          return (
+          {/* Main Statement / Table Display Area */}
+          <Box className="print-area">
+            {selectedDomain === 'financial' && financialViewMode === 'statement' && reportData.structuredData ? (
+              <FinancialStatementView
+                reportId={activeReportId}
+                structuredData={reportData.structuredData}
+                rows={reportData.rows}
+                summary={reportData.summary}
+                reconciliation={reportData.reconciliation}
+              />
+            ) : (
+              <Paper variant="outlined" sx={{ borderRadius: 2.5, overflow: 'hidden' }}>
+                <TableContainer sx={{ maxHeight: 600, overflowX: 'auto', '&::-webkit-scrollbar': { height: 7, width: 7 }, '&::-webkit-scrollbar-thumb': { backgroundColor: 'divider', borderRadius: 4 } }}>
+                  <Table size="small" stickyHeader>
+                    <TableHead sx={{ bgcolor: 'action.hover' }}>
+                      <TableRow>
+                        {(() => {
+                          const hiddenKeys = columnVisibility[activeReportId] || [];
+                          const visibleCols = currentReportMeta.columns.filter(c => !hiddenKeys.includes(c.key));
+                          return visibleCols.map((col) => (
                             <TableCell
                               key={col.key}
                               align={col.align || 'left'}
-                              sx={{
-                                fontWeight: col.isLink ? 800 : 500,
-                                color: col.isLink ? 'primary.main' : 'inherit',
-                                cursor: col.isLink ? 'pointer' : 'default'
-                              }}
-                              onClick={() => {
-                                if (col.isLink && onOpenOrderDetail && row.order_id) {
-                                  onOpenOrderDetail(row.order_id);
-                                }
-                              }}
+                              sx={{ fontWeight: 800, fontSize: '0.8rem', whiteSpace: 'nowrap' }}
                             >
-                              {isCurrency && val !== undefined && val !== null ? (
-                                `₹${parseFloat(val || 0).toFixed(2)}`
-                              ) : col.key === 'stock_status' ? (
-                                <Chip
-                                  label={val}
-                                  size="small"
-                                  color={val === 'Out of Stock' ? 'error' : val === 'Low Stock' ? 'warning' : 'success'}
-                                  sx={{ fontWeight: 700, fontSize: '0.68rem' }}
-                                />
-                              ) : (
-                                val !== undefined && val !== null ? String(val) : '-'
-                              )}
+                              <Tooltip title={col.header} arrow>
+                                <span>{col.header}</span>
+                              </Tooltip>
                             </TableCell>
-                          );
-                        })}
+                          ));
+                        })()}
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={currentReportMeta.columns.length || 6} align="center" sx={{ py: 6, color: 'text.secondary' }}>
-                        No records found for the selected reporting parameters.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </TableContainer>
+                    </TableHead>
+                    <TableBody>
+                      {loading ? (
+                        <TableRow>
+                          <TableCell colSpan={currentReportMeta.columns.length || 6} align="center" sx={{ py: 6 }}>
+                            <CircularProgress size={28} />
+                          </TableCell>
+                        </TableRow>
+                      ) : reportData.rows && reportData.rows.length > 0 ? (
+                        (() => {
+                          const hiddenKeys = columnVisibility[activeReportId] || [];
+                          const visibleCols = currentReportMeta.columns.filter(c => !hiddenKeys.includes(c.key));
+                          return reportData.rows.map((row, rIdx) => (
+                            <TableRow key={rIdx} hover>
+                              {visibleCols.map((col) => {
+                                const val = row[col.key];
+                                const isCurrency = col.isCurrency;
 
-            {/* Pagination Controls */}
-            <TablePagination
-              rowsPerPageOptions={[15, 25, 50, 100]}
-              component="div"
-              count={totalCount}
-              rowsPerPage={rowsPerPage}
-              page={page}
-              onPageChange={(e, newPage) => setPage(newPage)}
-              onRowsPerPageChange={(e) => {
-                setRowsPerPage(parseInt(e.target.value, 10));
-                setPage(0);
-              }}
-            />
-          </Paper>
+                                return (
+                                  <TableCell
+                                    key={col.key}
+                                    align={col.align || 'left'}
+                                    sx={{
+                                      fontWeight: col.isLink ? 800 : 500,
+                                      color: col.isLink ? 'primary.main' : 'inherit',
+                                      cursor: col.isLink ? 'pointer' : 'default',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                    onClick={() => {
+                                      if (col.isLink && onOpenOrderDetail && row.order_id) {
+                                        onOpenOrderDetail(row.order_id);
+                                      }
+                                    }}
+                                  >
+                                    {isCurrency && val !== undefined && val !== null ? (
+                                      `₹${parseFloat(val || 0).toFixed(2)}`
+                                    ) : col.key === 'stock_status' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Out of Stock' ? 'error' : val === 'Low Stock' ? 'warning' : 'success'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : col.key === 'alert_level' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Critical' ? 'error' : val === 'Warning' ? 'warning' : 'default'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : col.key === 'expiry_status' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Expired' ? 'error' : val === 'Near Expiry' ? 'warning' : 'success'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : col.key === 'lot_status' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Fully Consumed' ? 'default' : val === 'Partially Consumed' ? 'warning' : 'success'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : col.key === 'urgency' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Immediate' ? 'error' : 'warning'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : col.key === 'variance_type' || col.key === 'variance_status' ? (
+                                      <Chip
+                                        label={val}
+                                        size="small"
+                                        color={val === 'Matched' || val === 'Fully Invoiced' ? 'success' : val === 'Over-invoiced' ? 'info' : 'warning'}
+                                        sx={{ fontWeight: 700, fontSize: '0.68rem' }}
+                                      />
+                                    ) : (
+                                      val !== undefined && val !== null ? String(val) : '-'
+                                    )}
+                                  </TableCell>
+                                );
+                              })}
+                            </TableRow>
+                          ));
+                        })()
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={currentReportMeta.columns.length || 6} align="center" sx={{ py: 6, color: 'text.secondary', fontWeight: 600 }}>
+                            No results.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+
+                    {/* Dynamic Total Row in Table Footer */}
+                    {!loading && reportData.rows && (
+                      <TableFooter sx={{ bgcolor: 'action.hover', borderTop: '2px solid', borderColor: 'divider' }}>
+                        <TableRow>
+                          {(() => {
+                            const hiddenKeys = columnVisibility[activeReportId] || [];
+                            const visibleCols = currentReportMeta.columns.filter(c => !hiddenKeys.includes(c.key));
+                            const hasRows = reportData.rows.length > 0;
+
+                            return visibleCols.map((col, idx) => {
+                              const isNumeric = col.isCurrency || [
+                                'quantity', 'stock_on_hand', 'inward_qty', 'consumed_qty', 'balance_qty', 'qty_sold',
+                                'purchase_qty', 'sales_qty', 'challan_qty', 'invoiced_qty', 'variance_qty',
+                                'current_stock', 'suggested_qty', 'suggested_order_qty', 'stock_shortfall',
+                                'reserved_qty', 'dc_qty', 'opening', 'purchase', 'transfer_in', 'excess',
+                                'total_in', 'sales', 'transfer_out', 'shortage', 'total_out', 'closing_stock',
+                                'closing_summary', 'difference', 'item_count', 'orders_count', 'negative_stock_qty'
+                              ].includes(col.key);
+
+                              if (idx === 0) {
+                                return (
+                                  <TableCell key={col.key} align={col.align || 'left'} sx={{ fontWeight: 900, fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
+                                    {hasRows ? `Total (${reportData.rows.length} rows)` : 'Total'}
+                                  </TableCell>
+                                );
+                              }
+
+                              if (!hasRows || !isNumeric) {
+                                return <TableCell key={col.key} align={col.align || 'left'} sx={{ fontWeight: 700 }} />;
+                              }
+
+                              const sum = reportData.rows.reduce((acc, row) => acc + (parseFloat(row[col.key]) || 0), 0);
+
+                              return (
+                                <TableCell
+                                  key={col.key}
+                                  align={col.align || 'left'}
+                                  sx={{
+                                    fontWeight: 900,
+                                    fontSize: '0.82rem',
+                                    whiteSpace: 'nowrap',
+                                    color: sum < 0 ? 'error.main' : 'inherit'
+                                  }}
+                                >
+                                  {col.isCurrency ? `₹${sum.toFixed(2)}` : parseFloat(sum.toFixed(2))}
+                                </TableCell>
+                              );
+                            });
+                          })()}
+                        </TableRow>
+                      </TableFooter>
+                    )}
+                  </Table>
+                </TableContainer>
+
+                {/* Pagination Controls */}
+                <TablePagination
+                  rowsPerPageOptions={[15, 25, 50, 100]}
+                  component="div"
+                  count={totalCount}
+                  rowsPerPage={rowsPerPage}
+                  page={page}
+                  onPageChange={(e, newPage) => setPage(newPage)}
+                  onRowsPerPageChange={(e) => {
+                    setRowsPerPage(parseInt(e.target.value, 10));
+                    setPage(0);
+                  }}
+                />
+              </Paper>
+            )}
+          </Box>
+            </>
+          )}
+          {/* Manage Columns Modal Dialog */}
+          <Dialog open={columnDialogOpen} onClose={() => setColumnDialogOpen(false)} maxWidth="xs" fullWidth>
+            <DialogTitle sx={{ fontWeight: 800, fontSize: '1rem', pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Sliders size={18} /> Manage Columns — {currentReportMeta.title}
+            </DialogTitle>
+            <DialogContent dividers sx={{ maxHeight: 380, overflowY: 'auto' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
+                <Button size="small" onClick={() => setColumnVisibility(prev => ({ ...prev, [activeReportId]: [] }))}>
+                  Show All
+                </Button>
+                <Button
+                  size="small"
+                  color="secondary"
+                  onClick={() => {
+                    setColumnVisibility(prev => {
+                      const next = { ...prev };
+                      delete next[activeReportId];
+                      return next;
+                    });
+                  }}
+                >
+                  Reset Defaults
+                </Button>
+              </Box>
+              {currentReportMeta.columns.map(col => {
+                const hiddenKeys = columnVisibility[activeReportId] || [];
+                const isVisible = !hiddenKeys.includes(col.key);
+                return (
+                  <FormControlLabel
+                    key={col.key}
+                    control={
+                      <Checkbox
+                        checked={isVisible}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setColumnVisibility(prev => {
+                            const curHidden = prev[activeReportId] || [];
+                            const updated = checked
+                              ? curHidden.filter(k => k !== col.key)
+                              : [...curHidden, col.key];
+                            return { ...prev, [activeReportId]: updated };
+                          });
+                        }}
+                        size="small"
+                      />
+                    }
+                    label={<Typography variant="body2" sx={{ fontWeight: 600 }}>{col.header}</Typography>}
+                    sx={{ display: 'block', my: 0.25 }}
+                  />
+                );
+              })}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setColumnDialogOpen(false)} variant="contained" size="small" sx={{ fontWeight: 700 }}>
+                Done
+              </Button>
+            </DialogActions>
+          </Dialog>
         </Box>
       )}
 

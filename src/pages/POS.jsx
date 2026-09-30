@@ -39,6 +39,8 @@ import {
 import ProductStickerModal from '../components/ProductStickerModal';
 import HeldReceiptsModal from '../components/HeldReceiptsModal';
 import { useLanguage } from '../locales/LanguageContext';
+import { useNotify } from '../context/NotificationContext';
+import { useDataRefresh } from '../context/DataRefreshContext';
 import {
   apiFetch,
   fetchMobileMenu,
@@ -91,6 +93,8 @@ export default function POS({
   onManualSync: propManualSync
 }) {
   const { t, language, supportedLanguages } = useLanguage();
+  const notify = useNotify();
+  const { menuVersion, categoryVersion } = useDataRefresh();
 
   // Load User & Token from Props or Isolated ARISO_RETAIL Local Storage
   const [user, setUser] = useState(() => {
@@ -498,6 +502,14 @@ export default function POS({
     };
   }, [token, autoFocusSearch]);
 
+  // Re-fetch catalog whenever server broadcasts a menu or category change
+  useEffect(() => {
+    if (menuVersion > 0 || categoryVersion > 0) {
+      loadData();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuVersion, categoryVersion]);
+
   const loadData = async () => {
     // 1. Instant Local Offline Load from Dexie IndexedDB (< 50ms)
     try {
@@ -771,7 +783,7 @@ export default function POS({
       await loadData();
       await loadPendingOrders();
     } catch (e) {
-      alert('Failed to confirm order: ' + (e.message || 'Unknown error'));
+      notify?.error('Failed to confirm order: ' + (e.message || 'Unknown error'), 'Order Error');
     } finally {
       setConfirmingOrderId(null);
     }
@@ -791,7 +803,7 @@ export default function POS({
       await loadData();
       await loadPendingOrders();
     } catch (e) {
-      alert('Failed to cancel order: ' + (e.message || 'Unknown error'));
+      notify?.error('Failed to cancel order: ' + (e.message || 'Unknown error'), 'Order Error');
     } finally {
       setCancellingOrderId(null);
     }
@@ -886,7 +898,26 @@ export default function POS({
       const inCart = cart.find((item) => isCartItemMatchingProduct(item, product));
       const currentCartQty = inCart ? (parseInt(inCart.quantity, 10) || 1) : 0;
       if (currentCartQty + 1 > available) {
-        alert(`Cannot add "${product.name}". Only ${available} ${product.unit || 'pcs'} available (${physical} physical stock, ${reserved} reserved in pending orders).`);
+        notify?.warning(
+          `Requested qty exceeds available stock of ${available} ${product.unit || 'pcs'}.`,
+          'Stock Limit Reached',
+          5000
+        );
+        notify?.alert({
+          title: 'Insufficient Stock',
+          message: `Cannot add "${product.name}" to cart.`,
+          type: 'warning',
+          buttonText: 'Understood (Enter / Esc)',
+          details: {
+            requested: `${currentCartQty + 1} ${product.unit || 'pcs'}`,
+            available: `${available} ${product.unit || 'pcs'}`,
+            physical: `${physical} ${product.unit || 'pcs'}`,
+            reserved: `${reserved} ${product.unit || 'pcs'}`
+          },
+          subtitle: physical <= 0
+            ? 'This product is currently completely out of stock in your inventory.'
+            : 'Units are reserved by other pending or held orders.'
+        });
         return;
       }
     }
@@ -942,7 +973,26 @@ export default function POS({
       const reserved = parseFloat(product.reserved_stock || 0);
       const available = Math.max(0, physical - reserved);
       if (weightInKg > available) {
-        alert(`Cannot add "${product.name}". Requested ${weightInKg} kg exceeds available stock of ${available.toFixed(3)} kg (${physical.toFixed(3)} physical stock, ${reserved.toFixed(3)} reserved in pending orders).`);
+        notify?.warning(
+          `Requested ${weightInKg.toFixed(3)} kg exceeds available stock of ${available.toFixed(3)} kg.`,
+          'Stock Limit Exceeded',
+          5000
+        );
+        notify?.alert({
+          title: 'Insufficient Stock',
+          message: `Cannot add "${product.name}" to cart.`,
+          type: 'warning',
+          buttonText: 'Understood (Enter / Esc)',
+          details: {
+            requested: `${weightInKg.toFixed(3)} kg`,
+            available: `${available.toFixed(3)} kg`,
+            physical: `${physical.toFixed(3)} kg`,
+            reserved: `${reserved.toFixed(3)} kg`
+          },
+          subtitle: physical <= 0
+            ? 'This product is currently completely out of stock in your warehouse.'
+            : 'Portions of this stock are reserved by other pending or held orders.'
+        });
         return;
       }
     }
@@ -1363,7 +1413,7 @@ export default function POS({
         )
       );
 
-      alert(`Product "${quickEditProduct.name}" updated successfully.`);
+      notify?.success(`Product "${quickEditProduct.name}" updated successfully.`, 'Product Updated');
       setQuickEditProduct(null);
     } catch (err) {
       setQuickEditError(err.message);
@@ -1436,7 +1486,7 @@ export default function POS({
 
     if (effectivePaymentMode === 'credit' || effectivePaymentMode === 'due' || effectivePaymentMode === 'udhar') {
       if (!selectedCustomerId) {
-        alert('Please select a customer for Credit/Udhar sale.');
+        notify?.warning('Please select a customer for Credit/Udhar sale.', 'Customer Required');
         return;
       }
     }
@@ -1590,7 +1640,7 @@ export default function POS({
       }
     } catch (err) {
       console.error('[Complete Sale Error]', err);
-      alert('Error completing sale: ' + (err.message || 'Unknown error'));
+      notify?.error('Error completing sale: ' + (err.message || 'Unknown error'), 'Sale Error');
     } finally {
       setSubmittingSale(false);
       autoFocusSearch();
@@ -1600,7 +1650,7 @@ export default function POS({
   // Hold / Park Active Receipt Handler
   const handleHoldReceipt = async (explicitNotes = null) => {
     if (cart.length === 0) {
-      alert('Cart is empty! Add products before holding a receipt.');
+      notify?.warning('Cart is empty! Add products before holding a receipt.', 'Cart Empty');
       return;
     }
     if (holdingReceipt) return;
@@ -1646,7 +1696,7 @@ export default function POS({
       await loadHeldReceipts();
     } catch (err) {
       console.error('[handleHoldReceipt error]', err);
-      alert('Failed to hold receipt: ' + (err.message || 'Unknown error'));
+      notify?.error('Failed to hold receipt: ' + (err.message || 'Unknown error'), 'Hold Failed');
     } finally {
       setHoldingReceipt(false);
       autoFocusSearch();
@@ -1728,7 +1778,7 @@ export default function POS({
       await loadHeldReceipts();
     } catch (err) {
       console.error('[handleResumeReceipt error]', err);
-      alert('Failed to resume held receipt: ' + (err.message || 'Unknown error'));
+      notify?.error('Failed to resume held receipt: ' + (err.message || 'Unknown error'), 'Resume Failed');
     } finally {
       autoFocusSearch();
     }
@@ -1749,7 +1799,7 @@ export default function POS({
       await loadHeldReceipts();
     } catch (err) {
       console.error('[handleCancelReceipt error]', err);
-      alert('Failed to cancel held receipt: ' + (err.message || 'Unknown error'));
+      notify?.error('Failed to cancel held receipt: ' + (err.message || 'Unknown error'), 'Cancel Failed');
     }
   };
 
@@ -3055,7 +3105,7 @@ export default function POS({
                 <tbody ref={cartTableBodyRef}>
                   {cart.map((item, idx) => {
                     const isSelected = selectedCartIndex === idx;
-                    const itemSku = (item.sku || item.barcode || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.sku || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.barcode || '').trim();
+                    const itemSku = (item.sku || item.barcode || (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id))?.sku || (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id))?.barcode || '').trim();
                     return (
                       <tr
                         key={idx}
@@ -3327,7 +3377,7 @@ export default function POS({
                   <tbody>
                     {cart.map((item, idx) => {
                       const isSelected = selectedCartIndex === idx;
-                      const itemSku = (item.sku || item.barcode || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.sku || products.find(p => (p.id || p.menu_item_id) === item.product_id)?.barcode || '').trim();
+                      const itemSku = (item.sku || item.barcode || (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id))?.sku || (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id))?.barcode || '').trim();
                       return (
                         <tr
                           key={idx}
@@ -4154,7 +4204,7 @@ export default function POS({
                 onClick={() => {
                   setPaymentMode('credit');
                   if (!selectedCustomerId) {
-                    alert('Please select a customer for Credit/Udhar sale.');
+                    notify?.warning('Please select a customer for Credit/Udhar sale.', 'Customer Required');
                   }
                 }}
                 disabled={submittingSale}

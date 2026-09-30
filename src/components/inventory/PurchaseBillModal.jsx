@@ -756,22 +756,36 @@ export default function PurchaseBillModal({
           sx={{
             border: '1px solid #e2e8f0',
             borderRadius: 2,
-            maxHeight: 380,
+            width: '100%',
+            flexShrink: 0,
+            maxHeight: 400,
+            minHeight: items.length === 0 ? 110 : (items.length === 1 ? 130 : 160),
             overflowX: 'auto',
-            overflowY: 'auto'
+            overflowY: 'auto',
+            '&::-webkit-scrollbar': {
+              width: '7px',
+              height: '7px'
+            },
+            '&::-webkit-scrollbar-thumb': {
+              backgroundColor: '#cbd5e1',
+              borderRadius: '4px'
+            },
+            '&::-webkit-scrollbar-thumb:hover': {
+              backgroundColor: '#94a3b8'
+            }
           }}
         >
           <Table size="small" stickyHeader sx={{ minWidth: 860 }}>
             <TableHead sx={{ bgcolor: '#f8fafc' }}>
               <TableRow>
-                <TableCell sx={{ fontWeight: 700, minWidth: 170 }}>Item Name</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 70 }} align="center">Unit</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 110 }} align="right">Qty Received</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 110 }} align="right">Rate (₹)</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 85 }} align="right">GST %</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 190 }} align="center">Batch / Expiry</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 100 }} align="right">Total (₹)</TableCell>
-                <TableCell sx={{ fontWeight: 700, width: 50 }} align="center">Action</TableCell>
+                <TableCell sx={{ fontWeight: 700, minWidth: 170, bgcolor: '#f8fafc' }}>Item Name</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 70, bgcolor: '#f8fafc' }} align="center">Unit</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 110, bgcolor: '#f8fafc' }} align="right">Qty Received</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 110, bgcolor: '#f8fafc' }} align="right">Rate (₹)</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 85, bgcolor: '#f8fafc' }} align="right">GST %</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 190, bgcolor: '#f8fafc' }} align="center">Batch / Expiry</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 100, bgcolor: '#f8fafc' }} align="right">Total (₹)</TableCell>
+                <TableCell sx={{ fontWeight: 700, width: 50, bgcolor: '#f8fafc' }} align="center">Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>

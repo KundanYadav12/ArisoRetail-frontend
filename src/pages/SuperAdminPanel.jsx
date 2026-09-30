@@ -10,7 +10,20 @@ export default function SuperAdminPanel({ token }) {
   const { notify, confirmDialog } = useNotify();
   const isMobile = useMediaQuery('(max-width:960px)');
   const isSmall = useMediaQuery('(max-width:600px)');
-  const [saTab, setSaTab] = useState(0); // 0 = Tenants, 1 = Version & Audit History, 2 = Theme, 3 = AI Config
+  const [saTab, setSaTab] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ariso_sa_tab');
+      return saved !== null && !isNaN(Number(saved)) ? Number(saved) : 0;
+    } catch (_) {
+      return 0;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ariso_sa_tab', String(saTab));
+    } catch (_) {}
+  }, [saTab]);
   const [stats, setStats] = useState(null);
   const [restaurants, setRestaurants] = useState([]);
   const [logs, setLogs] = useState([]);

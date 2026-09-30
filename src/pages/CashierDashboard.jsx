@@ -9,16 +9,31 @@ import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
 import { apiFetch } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
+import { useDataRefresh } from '../context/DataRefreshContext';
 import CashDenominationModal from '../components/day_end/CashDenominationModal';
 import XReportModal from '../components/day_end/XReportModal';
 
 export default function CashierDashboard({ user, token, onLogout }) {
   const { notify, confirmDialog } = useNotify();
+  const { orderVersion } = useDataRefresh();
   
   // Dashboard & Shift state
   const [shiftData, setShiftData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState(0); // 0 = shift metrics, 1 = order history & held tickets
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ariso_cashier_tab');
+      return saved !== null && !isNaN(Number(saved)) ? Number(saved) : 0;
+    } catch (_) {
+      return 0;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ariso_cashier_tab', String(activeTab));
+    } catch (_) {}
+  }, [activeTab]);
 
   // Cashier Order History states
   const [historyOrders, setHistoryOrders] = useState([]);
@@ -70,6 +85,18 @@ export default function CashierDashboard({ user, token, onLogout }) {
       fetchHistory();
     }
   }, [activeTab, historyPage, historyLimit, historySearch]);
+
+  // Real-time update when an order is created/updated on any terminal
+  useEffect(() => {
+    if (orderVersion > 0) {
+      if (activeTab === 0) {
+        fetchShiftSummary();
+      } else if (activeTab === 1) {
+        fetchHistory();
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderVersion]);
 
   const fetchShiftSummary = async () => {
     setLoading(true);
