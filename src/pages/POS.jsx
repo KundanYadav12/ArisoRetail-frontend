@@ -90,7 +90,9 @@ export default function POS({
   setReceiptSettings: sharedSetReceiptSettings,
   onNavigate,
   netStatus: propNetStatus,
-  onManualSync: propManualSync
+  onManualSync: propManualSync,
+  pricingMode: propPricingMode,
+  onPricingModeChange: propOnPricingModeChange
 }) {
   const { t, language, supportedLanguages } = useLanguage();
   const notify = useNotify();
@@ -199,6 +201,64 @@ export default function POS({
   const [localDiscountValue, localSetDiscountValue] = useState('0');
   const discountValue = sharedDiscountValue !== undefined ? sharedDiscountValue : localDiscountValue;
   const setDiscountValue = sharedSetDiscountValue !== undefined ? sharedSetDiscountValue : localSetDiscountValue;
+
+  // Session Pricing Mode: 'retail' | 'wholesale'
+  const [localPricingMode, setLocalPricingMode] = useState(() => {
+    try {
+      return localStorage.getItem('ariso_pricing_mode') || 'retail';
+    } catch {
+      return 'retail';
+    }
+  });
+  const pricingMode = propPricingMode !== undefined ? propPricingMode : localPricingMode;
+
+  const handleSwitchPricingMode = useCallback((newMode) => {
+    if (newMode === pricingMode) return;
+    if (cart && cart.length > 0) {
+      const confirmChange = window.confirm(
+        `Switch pricing mode to ${newMode === 'wholesale' ? 'Wholesale' : 'Retail'}? Items currently in the cart will be repriced to the ${newMode} rates.`
+      );
+      if (!confirmChange) return;
+    }
+    if (propOnPricingModeChange) {
+      propOnPricingModeChange(newMode);
+    } else {
+      setLocalPricingMode(newMode);
+      try {
+        localStorage.setItem('ariso_pricing_mode', newMode);
+        window.dispatchEvent(new CustomEvent('ariso_pricing_mode_change', { detail: { mode: newMode } }));
+      } catch (_) {}
+    }
+  }, [pricingMode, cart, propOnPricingModeChange]);
+
+  // Reprice cart items when pricingMode changes
+  const prevPricingModeRef = useRef(pricingMode);
+  useEffect(() => {
+    if (prevPricingModeRef.current !== pricingMode) {
+      prevPricingModeRef.current = pricingMode;
+      if (cart && cart.length > 0 && menuItems && menuItems.length > 0) {
+        setCart((prevCart) => {
+          return prevCart.map((item) => {
+            const prodId = item.product_id || item.menu_item_id || item.id;
+            const product = menuItems.find((m) => (m.id || m.menu_item_id) === prodId);
+            if (!product) return item;
+            const isWholesale = pricingMode === 'wholesale';
+            const unitPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+              ? parseFloat(product.wholesale_price)
+              : parseFloat(product.price || product.selling_price || 0);
+            const qty = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity) || 1);
+            return {
+              ...item,
+              price: unitPrice,
+              unit_price: unitPrice,
+              base_unit_price: item.is_weight_based ? unitPrice : item.base_unit_price,
+              total_price: (qty * unitPrice).toFixed(2)
+            };
+          });
+        });
+      }
+    }
+  }, [pricingMode, menuItems, cart, setCart]);
 
   // Customer & Store Details (With Autocomplete & Auto-Creation)
   const [customerName, setCustomerName] = useState('');
@@ -887,7 +947,10 @@ export default function POS({
   }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct]);
 
   const addPieceItemToCart = useCallback((product) => {
-    const price = parseFloat(product.price || product.selling_price || 0);
+    const isWholesale = pricingMode === 'wholesale';
+    const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+      ? parseFloat(product.wholesale_price)
+      : parseFloat(product.price || product.selling_price || 0);
     const prodId = product.id || product.menu_item_id || product.product_id;
 
     // Dynamic Available Stock Check (physical current_stock - reserved_stock)
@@ -962,7 +1025,7 @@ export default function POS({
         return [...prevCart, newItem];
       }
     });
-  }, [setCart, cart, isCartItemMatchingProduct]);
+  }, [setCart, cart, isCartItemMatchingProduct, pricingMode]);
 
   const handleWeightConfirm = (weightData) => {
     const { product, weightInKg, displayWeight, unit, pricePerBaseUnit, calculatedTotal } = weightData;
@@ -1060,7 +1123,10 @@ export default function POS({
       });
     } else if (editingCartItem) {
       const product = editingCartItem;
-      const price = parseFloat(product.price || product.selling_price || product.unit_price || 0);
+      const isWholesale = pricingMode === 'wholesale';
+      const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+        ? parseFloat(product.wholesale_price)
+        : parseFloat(product.price || product.selling_price || product.unit_price || 0);
       const prodId = product.id || product.menu_item_id || product.product_id;
 
       const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
@@ -1569,7 +1635,8 @@ export default function POS({
       tax_type: docTax.taxType || taxType,
       salesman_id: (user?.role === 'salesman' || user?.role === 'admin' || user?.role === 'manager') ? user.id : null,
       salesman_name: (user?.role === 'salesman' || user?.role === 'admin' || user?.role === 'manager') ? user.name : null,
-      warehouse_id: user?.assigned_warehouse_id || null
+      warehouse_id: user?.assigned_warehouse_id || null,
+      price_list: pricingMode || 'retail'
     };
 
     try {
@@ -2431,58 +2498,6 @@ export default function POS({
               <Camera size={14} /> Barcode Camera
             </button>
 
-            {/* Live LAN Thermal Printer Status & Test Print */}
-            {(() => {
-              const lanPrn = printersList.find(p => (p.type === 'lan' || p.type === 'network' || !!p.ip_address) && !!p.ip_address);
-              if (!lanPrn) return null;
-              const isPrnOnline = lanPrn.status === 'online';
-              return (
-                <button
-                  type="button"
-                  className="pos-control-pill"
-                  onClick={async () => {
-                    setPrintStatusToast({ type: 'printing', message: `Sending test print to "${lanPrn.name}" (${lanPrn.ip_address})...` });
-                    try {
-                      const res = await apiFetch('/api/printers/test', {
-                        method: 'POST',
-                        body: { id: lanPrn.id, ip_address: lanPrn.ip_address, port: lanPrn.port, name: lanPrn.name, paper_width: lanPrn.paper_width }
-                      });
-                      const data = await res.json();
-                      if (res.ok && (data.status === 'connected' || data.success)) {
-                        setPrintStatusToast({ type: 'success', message: `Printer "${lanPrn.name}" is ONLINE & test receipt printed!` });
-                        setTimeout(() => setPrintStatusToast(null), 4000);
-                        const updated = await fetchPrinters(token);
-                        if (updated?.length > 0) setPrintersList(updated);
-                      } else {
-                        setPrintStatusToast({ type: 'error', message: `Test Failed: ${data.error || 'Printer unreachable'}` });
-                        setTimeout(() => setPrintStatusToast(null), 5000);
-                      }
-                    } catch (e) {
-                      setPrintStatusToast({ type: 'error', message: `Socket Error: ${e.message}` });
-                      setTimeout(() => setPrintStatusToast(null), 5000);
-                    }
-                  }}
-                  style={{
-                    ...styles.controlPill,
-                    backgroundColor: isPrnOnline ? (isDark ? '#064E3B' : '#ECFDF5') : (isDark ? '#7F1D1D' : '#FEF2F2'),
-                    color: isPrnOnline ? (isDark ? '#A7F3D0' : '#059669') : (isDark ? '#FECACA' : '#DC2626'),
-                    borderColor: isPrnOnline ? '#10B981' : '#EF4444',
-                    fontWeight: '700',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px'
-                  }}
-                  title={`LAN Thermal Printer: ${lanPrn.name} (${lanPrn.ip_address}:${lanPrn.port || 9100}) - Status: ${isPrnOnline ? 'ONLINE' : 'OFFLINE'}. Click to run Test Print.`}
-                >
-                  <Printer size={14} />
-                  <span>{lanPrn.name || 'Thermal'} ({lanPrn.ip_address})</span>
-                  <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '4px', backgroundColor: isPrnOnline ? '#10B981' : '#EF4444', color: '#fff' }}>
-                    {isPrnOnline ? 'ONLINE' : 'OFFLINE'}
-                  </span>
-                </button>
-              );
-            })()}
 
             {/* Dynamic Product Stickers Printing Button */}
             <button
@@ -2608,6 +2623,38 @@ export default function POS({
                   {d.label}
                 </button>
               ))}
+            </div>
+
+            {/* Pricing Mode Toggle: Retail vs Wholesale */}
+            <div style={{ ...styles.densityGroup, backgroundColor: colors.bgInput, borderColor: colors.borderColor }} className="pos-pricing-mode-group">
+              <button
+                type="button"
+                id="pos-pricing-retail"
+                style={{
+                  ...styles.densityBtn,
+                  backgroundColor: pricingMode === 'retail' ? colors.accentOrange : 'transparent',
+                  color: pricingMode === 'retail' ? '#FFFFFF' : colors.textSecondary,
+                  fontWeight: pricingMode === 'retail' ? '800' : '600',
+                  padding: '3px 8px'
+                }}
+                onClick={() => handleSwitchPricingMode('retail')}
+              >
+                Retail
+              </button>
+              <button
+                type="button"
+                id="pos-pricing-wholesale"
+                style={{
+                  ...styles.densityBtn,
+                  backgroundColor: pricingMode === 'wholesale' ? '#9333EA' : 'transparent',
+                  color: pricingMode === 'wholesale' ? '#FFFFFF' : colors.textSecondary,
+                  fontWeight: pricingMode === 'wholesale' ? '800' : '600',
+                  padding: '3px 8px'
+                }}
+                onClick={() => handleSwitchPricingMode('wholesale')}
+              >
+                Wholesale
+              </button>
             </div>
 
             {/* Cart Position Toggle */}
@@ -2746,7 +2793,10 @@ export default function POS({
               >
                 {filteredProducts.map((product, idx) => {
                   const isWeight = isProductWeightBased(product);
-                  const price = parseFloat(product.price || product.selling_price || 0);
+                  const isWholesale = pricingMode === 'wholesale';
+                  const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+                    ? parseFloat(product.wholesale_price)
+                    : parseFloat(product.price || product.selling_price || 0);
                   const isMobile = windowWidth < 600;
                   const cardPadding = isMobile
                     ? (densityMode === 'icon' ? '4px 5px' : densityMode === 'compact' ? '6px 7px' : densityMode === 'spacious' ? '12px' : '8px')
@@ -2900,9 +2950,9 @@ export default function POS({
                             minWidth: 0
                           }}>
                             {(() => {
-                              const physical = parseFloat(product.current_stock || 0);
-                              const reserved = parseFloat(product.reserved_stock || 0);
-                              const available = Math.max(0, physical - reserved);
+                              const physical = parseFloat(product.current_stock) || 0;
+                              const reserved = parseFloat(product.reserved_stock) || 0;
+                              const available = Math.max(0, physical - reserved) || 0;
                               const unitStr = (product.base_unit || product.unit || (isWeight ? 'kg' : 'pcs')).toLowerCase();
                               const formattedAvail = isWeight ? (densityMode === 'icon' ? available.toFixed(1) : available.toFixed(3)) : (available % 1 === 0 ? available.toFixed(0) : available.toFixed(2));
                               const formattedRes = isWeight ? (densityMode === 'icon' ? reserved.toFixed(1) : reserved.toFixed(3)) : (reserved % 1 === 0 ? reserved.toFixed(0) : reserved.toFixed(2));
@@ -2967,13 +3017,32 @@ export default function POS({
                           <span style={{
                             ...styles.cardPrice,
                             fontSize: densityMode === 'icon' ? '11px' : (densityMode === 'compact' ? '13px' : '15px'),
-                            color: product.image_url ? '#FB923C' : '#10B981',
+                            color: product.image_url ? '#FB923C' : (pricingMode === 'wholesale' ? '#C084FC' : '#10B981'),
                             textShadow: product.image_url ? '0 1px 3px rgba(0,0,0,0.95)' : 'none',
                             whiteSpace: 'nowrap',
                             flexShrink: 0,
-                            fontWeight: '800'
+                            fontWeight: '800',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
                           }}>
                             ₹{price.toFixed(2)}
+                            {pricingMode === 'wholesale' && (
+                              <span
+                                style={{
+                                  fontSize: densityMode === 'icon' ? '7px' : '8px',
+                                  fontWeight: '900',
+                                  backgroundColor: product.wholesale_price && parseFloat(product.wholesale_price) > 0 ? '#9333EA' : '#6B7280',
+                                  color: '#FFFFFF',
+                                  padding: '1px 3px',
+                                  borderRadius: '3px',
+                                  lineHeight: 1
+                                }}
+                                title={product.wholesale_price && parseFloat(product.wholesale_price) > 0 ? 'Wholesale Price' : 'Fallback to Retail Price'}
+                              >
+                                W
+                              </span>
+                            )}
                           </span>
                           <span style={{
                             ...styles.cardUnit,
@@ -3044,7 +3113,29 @@ export default function POS({
           display: focusMode ? 'none' : (activeMobileTab === 'cart' ? 'flex' : 'flex')
         }} className="pos-cart-panel">
           <div style={styles.cartHeader}>
-            <h2 style={{ ...styles.cartTitle, color: colors.textPrimary, display: 'flex', alignItems: 'center', gap: '8px' }}><ShoppingCart size={18} /> {t('cartTitle')} | Items: {cart.length} | Total Qty: {totalCartCount}</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <h2 style={{ ...styles.cartTitle, color: colors.textPrimary, display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                <ShoppingCart size={18} /> {t('cartTitle')} | Items: {cart.length} | Total Qty: {totalCartCount}
+              </h2>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 7px',
+                  borderRadius: '12px',
+                  fontSize: '10.5px',
+                  fontWeight: '800',
+                  letterSpacing: '0.4px',
+                  textTransform: 'uppercase',
+                  backgroundColor: pricingMode === 'wholesale' ? (isDark ? 'rgba(147, 51, 234, 0.25)' : '#F3E8FF') : (isDark ? 'rgba(234, 88, 12, 0.2)' : '#FFEDD5'),
+                  color: pricingMode === 'wholesale' ? (isDark ? '#C084FC' : '#7E22CE') : (isDark ? '#FB923C' : '#C2410C'),
+                  border: `1px solid ${pricingMode === 'wholesale' ? (isDark ? 'rgba(147, 51, 234, 0.4)' : '#DDD6FE') : (isDark ? 'rgba(234, 88, 12, 0.35)' : '#FDBA74')}`
+                }}
+                title={pricingMode === 'wholesale' ? 'Active: Wholesale Pricing Mode' : 'Active: Retail Pricing Mode'}
+              >
+                {pricingMode === 'wholesale' ? 'Wholesale Rate' : 'Retail Rate'}
+              </span>
+            </div>
             <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
           </div>
 
@@ -3657,6 +3748,7 @@ export default function POS({
       <WeightInputModal
         isOpen={weightModalVisible}
         product={selectedWeightProduct}
+        pricingMode={pricingMode}
         initialWeightInKg={editingCartIndex !== null ? cart[editingCartIndex]?.item_weight : 0}
         onConfirm={handleWeightConfirm}
         onClose={() => setWeightModalVisible(false)}

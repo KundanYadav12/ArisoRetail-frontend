@@ -219,8 +219,15 @@ export default function PurchaseBillModal({
           setAdditionalCharges(parseFloat(prefilledPO.additional_charges || 0));
           setDiscountAmount(parseFloat(prefilledPO.discount_amount || 0));
           setNotes(prefilledPO.notes || '');
-          setExistingBills([]);
-          setItems(Array.isArray(prefilledPO.items) ? prefilledPO.items : []);
+          setItems(Array.isArray(prefilledPO.items) ? prefilledPO.items.map(it => ({
+            ...it,
+            quantity: parseFloat(it.quantity || it.qty_received || 0),
+            rate: parseFloat(it.rate || it.purchase_price || 0),
+            tax_rate: parseFloat(it.tax_rate || it.gst_rate || 0),
+            tax_amount: parseFloat(it.tax_amount || 0),
+            discount_amount: parseFloat(it.discount_amount || 0),
+            total_amount: parseFloat(it.total_amount || it.total_price || (parseFloat(it.quantity || 0) * parseFloat(it.rate || 0)) || 0)
+          })) : []);
         } else {
           // ── New Bill Mode: auto-fetch next bill number & reset fields ──
           setBillNumber('');
@@ -851,7 +858,7 @@ export default function PurchaseBillModal({
                       </Box>
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 700, color: '#0f172a', width: 100 }}>
-                      ₹{row.total_amount.toFixed(2)}
+                      ₹{parseFloat(row.total_amount || 0).toFixed(2)}
                     </TableCell>
                     <TableCell align="center" sx={{ width: 50 }}>
                       <IconButton size="small" color="error" onClick={() => handleRemoveItem(idx)}>

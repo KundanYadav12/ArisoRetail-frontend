@@ -1186,10 +1186,10 @@ export default function InventorySuite({
                   </TableRow>
                 ) : (
                   (stockReportData.items || []).map(row => {
-                    const curStock = parseFloat(row.current_stock || 0);
-                    const resStock = parseFloat(row.reserved_stock || 0);
-                    const availStock = Math.max(0, curStock - resStock);
-                    const lowThresh = parseFloat(row.low_stock_threshold || row.min_stock || 10);
+                    const curStock = parseFloat(row.current_stock) || 0;
+                    const resStock = parseFloat(row.reserved_stock) || 0;
+                    const availStock = Math.max(0, curStock - resStock) || 0;
+                    const lowThresh = parseFloat(row.low_stock_threshold || row.min_stock) || 10;
                     const isOutOfStock = availStock <= 0;
                     const isLowStock = !isOutOfStock && availStock <= lowThresh;
                     const isWeight = row.is_weight_based === 1 || row.unit === 'kg';
@@ -1363,6 +1363,8 @@ export default function InventorySuite({
       {subTab === 'racks' && (
         <WarehouseRacksTab
           warehouses={warehouses}
+          selectedWarehouseId={selectedWarehouseFilter}
+          onWarehouseChange={(newWhId) => setSelectedWarehouseFilter(String(newWhId))}
           defaultWarehouseId={selectedWarehouseFilter !== 'all' ? selectedWarehouseFilter : null}
         />
       )}
@@ -2877,6 +2879,11 @@ export default function InventorySuite({
         open={locationModalOpen}
         onClose={() => setLocationModalOpen(false)}
         product={selectedLocationProduct}
+        warehouses={warehouses}
+        onLocationUpdated={() => {
+          fetchCatalog();
+          fetchDashboardMetrics();
+        }}
       />
     </Box>
   );

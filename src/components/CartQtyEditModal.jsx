@@ -1,5 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Package, Check, X } from 'lucide-react';
+import { Package, Check, X, AlertTriangle } from 'lucide-react';
+import {
+  sanitizePositiveNumberString,
+  handlePositiveNumberKeyDown,
+  handlePositiveNumberPaste,
+  handleSelectAllOnFocus,
+  handleSelectAllOnClick,
+  handleSelectAllOnMouseUp
+} from '../utils/numberInputUtils';
 
 export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onClearCart }) {
   const [qtyValue, setQtyValue] = useState('1');
@@ -8,40 +16,82 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
   useEffect(() => {
     if (isOpen && item) {
       setQtyValue(String(item.quantity || 1));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus();
           inputRef.current.select();
         }
       }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, item]);
 
+  // Handle global F5 shortcut while modal is open to refocus & select input
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleF5 = (e) => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleF5, true);
+    return () => window.removeEventListener('keydown', handleF5, true);
+  }, [isOpen]);
+
   if (!isOpen || !item) return null;
 
-  const numericQty = parseInt(qtyValue, 10);
+  const numericQty = parseFloat(qtyValue || '0');
+  const isQtyEmptyOrZero = qtyValue === '' || qtyValue === '.' || isNaN(numericQty) || numericQty <= 0;
   const unitPrice = parseFloat(item.price || item.unit_price || 0);
-  const calculatedTotal = isNaN(numericQty) || numericQty <= 0 ? '0.00' : (numericQty * unitPrice).toFixed(2);
+  const calculatedTotal = isQtyEmptyOrZero ? '0.00' : (numericQty * unitPrice).toFixed(2);
+
+  const handleQtyChange = (e) => {
+    let raw = e.target.value;
+    if (raw.startsWith('-') || parseFloat(raw) < 0) {
+      raw = '0';
+    }
+    const clean = sanitizePositiveNumberString(raw, true);
+    setQtyValue(clean);
+  };
+
+  const handlePaste = (e) => {
+    handlePositiveNumberPaste(e, (cleaned) => {
+      setQtyValue(cleaned);
+    }, true);
+  };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      handleConfirm();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof onClearCart === 'function') {
-        onClearCart();
-      } else {
-        onClose();
+    handlePositiveNumberKeyDown(e, {
+      allowDecimal: true,
+      onLeadingDot: () => setQtyValue('0.'),
+      onEnter: () => {
+        if (!isQtyEmptyOrZero) {
+          handleConfirm();
+        }
+      },
+      onEscape: () => {
+        if (typeof onClearCart === 'function') {
+          onClearCart();
+        } else {
+          onClose();
+        }
+      },
+      onF5: () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
       }
-    }
+    });
   };
 
   const handleConfirm = () => {
-    if (isNaN(numericQty) || numericQty <= 0) {
-      alert('Please enter a valid quantity greater than 0.');
+    if (isQtyEmptyOrZero) {
       return;
     }
     onConfirm(numericQty);
@@ -49,7 +99,7 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <div>
             <h2 style={{ ...styles.productName, display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -65,18 +115,47 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
           <div style={styles.inputRow}>
             <input
               ref={inputRef}
-              style={styles.input}
+              style={{
+                ...styles.input,
+                border: isQtyEmptyOrZero ? '2px solid #F59E0B' : '2px solid #3b82f6'
+              }}
               type="number"
-              min="1"
-              step="1"
+              min="0"
+              step="any"
               value={qtyValue}
-              onChange={(e) => setQtyValue(e.target.value)}
+              onChange={handleQtyChange}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onFocus={handleSelectAllOnFocus}
+              onClick={handleSelectAllOnClick}
+              onMouseUp={handleSelectAllOnMouseUp}
+              placeholder="0"
+              autoFocus
             />
             <div style={styles.unitBadge}>
               {item.unit || item.base_unit || 'pcs'}
             </div>
           </div>
+          {isQtyEmptyOrZero && (
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.4)',
+                color: '#fcd34d',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: '700'
+              }}
+            >
+              <AlertTriangle size={15} color="#F59E0B" style={{ flexShrink: 0 }} />
+              <span>Please enter a quantity greater than 0 to save</span>
+            </div>
+          )}
         </div>
 
         {/* Quick Stepper Buttons */}
@@ -88,7 +167,10 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
               style={styles.presetBtn}
               onClick={() => {
                 setQtyValue(String(num));
-                if (inputRef.current) inputRef.current.focus();
+                if (inputRef.current) {
+                  inputRef.current.focus();
+                  inputRef.current.select();
+                }
               }}
             >
               {num} {item.unit || item.base_unit || 'pcs'}
@@ -112,8 +194,20 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
         {/* Action Buttons */}
         <div style={styles.actionRow}>
           <button style={styles.cancelBtn} type="button" onClick={onClose}>Cancel</button>
-          <button style={{ ...styles.confirmBtn, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }} type="button" onClick={handleConfirm}>
-            <Check size={16} /> Save Quantity (Enter)
+          <button
+            style={{
+              ...styles.confirmBtn,
+              ...(isQtyEmptyOrZero ? { backgroundColor: '#475569', cursor: 'not-allowed', opacity: 0.6 } : {}),
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px'
+            }}
+            type="button"
+            disabled={isQtyEmptyOrZero}
+            onClick={handleConfirm}
+          >
+            <Check size={16} /> {isQtyEmptyOrZero ? 'Enter Quantity' : 'Save Quantity (Enter)'}
           </button>
         </div>
       </div>

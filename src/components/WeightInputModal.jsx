@@ -1,10 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Scale, ShoppingCart, X, AlertTriangle } from 'lucide-react';
 import { useNotify } from '../context/NotificationContext';
+import {
+  sanitizePositiveNumberString,
+  handlePositiveNumberKeyDown,
+  handlePositiveNumberPaste,
+  handleSelectAllOnFocus,
+  handleSelectAllOnClick,
+  handleSelectAllOnMouseUp
+} from '../utils/numberInputUtils';
 
-export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, onConfirm, onClose }) {
+export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, pricingMode: propPricingMode, onConfirm, onClose }) {
   const notify = useNotify();
   const [weightValue, setWeightValue] = useState('1.000');
+  const inputRef = useRef(null);
 
   useEffect(() => {
     if (isOpen && product) {
@@ -13,41 +22,106 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
       } else {
         setWeightValue('1.000');
       }
+      const timer = setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
     }
   }, [isOpen, product, initialWeightInKg]);
 
+  // Handle global F5 shortcut while modal is open to refocus & select input
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleF5 = (e) => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleF5, true);
+    return () => window.removeEventListener('keydown', handleF5, true);
+  }, [isOpen]);
+
   if (!isOpen || !product) return null;
 
-  const pricePerBaseUnit = parseFloat(product.price || product.selling_price || 0);
-  const weightInKg = parseFloat(weightValue || '0');
-  const calculatedTotal = (weightInKg * pricePerBaseUnit).toFixed(2);
+  const currentPricingMode = propPricingMode || (() => {
+    try {
+      return localStorage.getItem('ariso_pricing_mode') || 'retail';
+    } catch {
+      return 'retail';
+    }
+  })();
+  const pricePerBaseUnit = (currentPricingMode === 'wholesale' && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+    ? parseFloat(product.wholesale_price)
+    : parseFloat(product.price || product.selling_price || 0);
+
+  const numericWeight = parseFloat(weightValue || '0');
+  const isWeightEmptyOrZero = weightValue === '' || weightValue === '.' || isNaN(numericWeight) || numericWeight <= 0;
+  const weightInKg = isWeightEmptyOrZero ? 0 : numericWeight;
+  const calculatedTotal = isWeightEmptyOrZero ? '0.00' : (weightInKg * pricePerBaseUnit).toFixed(2);
 
   // Stock inventory tracking checks
   const trackStock = product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined;
   const physicalStock = parseFloat(product.current_stock || 0);
   const reservedStock = parseFloat(product.reserved_stock || 0);
   const availableStock = Math.max(0, physicalStock - reservedStock);
-  const isOverStock = trackStock && (weightInKg > availableStock);
+  const isOverStock = trackStock && !isWeightEmptyOrZero && (weightInKg > availableStock);
 
   const handlePresetSelect = (presetWeight) => {
     setWeightValue(presetWeight);
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
   };
 
   const isPresetActive = (val) => {
     return parseFloat(weightValue) === parseFloat(val);
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleConfirm();
-    } else if (e.key === 'Escape') {
-      onClose();
+  const handleWeightChange = (e) => {
+    let raw = e.target.value;
+    if (raw.startsWith('-') || parseFloat(raw) < 0) {
+      raw = '0';
     }
+    const clean = sanitizePositiveNumberString(raw, true);
+    setWeightValue(clean);
+  };
+
+  const handlePaste = (e) => {
+    handlePositiveNumberPaste(e, (cleaned) => {
+      setWeightValue(cleaned);
+    }, true);
+  };
+
+  const handleKeyDown = (e) => {
+    handlePositiveNumberKeyDown(e, {
+      allowDecimal: true,
+      onLeadingDot: () => setWeightValue('0.'),
+      onEnter: () => {
+        if (!isWeightEmptyOrZero && !isOverStock) {
+          handleConfirm();
+        }
+      },
+      onEscape: onClose,
+      onF5: () => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }
+    });
   };
 
   const handleConfirm = () => {
-    if (isNaN(weightInKg) || weightInKg <= 0) {
+    if (isWeightEmptyOrZero) {
       notify?.warning('Please enter a valid weight greater than 0 kg.', 'Invalid Weight');
       return;
     }
@@ -88,7 +162,7 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div style={styles.header}>
           <div>
@@ -120,14 +194,25 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           <label style={styles.label}>Enter Weight (Kg) (F5):</label>
           <div style={styles.inputRow}>
             <input
+              ref={inputRef}
               style={{
                 ...styles.input,
-                border: isOverStock ? '2px solid #ef4444' : '2px solid #F97316'
+                border: isOverStock
+                  ? '2px solid #ef4444'
+                  : isWeightEmptyOrZero
+                  ? '2px solid #F59E0B'
+                  : '2px solid #F97316'
               }}
               type="number"
+              min="0"
               step="any"
               value={weightValue}
-              onChange={(e) => setWeightValue(e.target.value)}
+              onChange={handleWeightChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onFocus={handleSelectAllOnFocus}
+              onClick={handleSelectAllOnClick}
+              onMouseUp={handleSelectAllOnMouseUp}
               placeholder="0.000"
               autoFocus
             />
@@ -150,6 +235,26 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
             >
               <AlertTriangle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
               <span>Requested {weightInKg.toFixed(3)} kg exceeds available stock of {availableStock.toFixed(3)} kg</span>
+            </div>
+          )}
+          {isWeightEmptyOrZero && !isOverStock && (
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '6px 12px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.4)',
+                color: '#fcd34d',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: '700'
+              }}
+            >
+              <AlertTriangle size={15} color="#F59E0B" style={{ flexShrink: 0 }} />
+              <span>Please enter a weight greater than 0 kg to add to cart</span>
             </div>
           )}
         </div>
@@ -205,9 +310,11 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           <button type="button" style={styles.cancelBtn} onClick={onClose}>Cancel (Esc)</button>
           <button
             type="button"
+            disabled={isWeightEmptyOrZero || isOverStock}
             style={{
               ...styles.confirmBtn,
               ...(isOverStock ? { backgroundColor: '#dc2626' } : {}),
+              ...(isWeightEmptyOrZero ? { backgroundColor: '#475569', cursor: 'not-allowed', opacity: 0.6 } : {}),
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -217,6 +324,8 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           >
             {isOverStock ? (
               <><AlertTriangle size={16} /> Exceeds Stock ({availableStock.toFixed(3)} kg max)</>
+            ) : isWeightEmptyOrZero ? (
+              <><ShoppingCart size={16} /> Enter Weight (Kg)</>
             ) : initialWeightInKg > 0 ? (
               <><Scale size={16} /> Update Weight (₹{calculatedTotal})</>
             ) : (

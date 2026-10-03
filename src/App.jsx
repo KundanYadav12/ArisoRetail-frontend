@@ -129,6 +129,42 @@ export default function App() {
   const [taxType, setTaxType] = useState('intra');
   const [receiptSettings, setReceiptSettings] = useState(null);
 
+  // Global Session Pricing Mode: 'retail' | 'wholesale'
+  const [pricingMode, setPricingMode] = useState(() => {
+    try {
+      return localStorage.getItem('ariso_pricing_mode') || 'retail';
+    } catch {
+      return 'retail';
+    }
+  });
+
+  const handleGlobalPricingModeChange = (newMode) => {
+    if (newMode === pricingMode) return;
+    if (cart && cart.length > 0) {
+      const confirmChange = window.confirm(
+        `Switch pricing mode to ${newMode === 'wholesale' ? 'Wholesale' : 'Retail'}? Items currently in the cart will be repriced to the ${newMode} rates.`
+      );
+      if (!confirmChange) return;
+    }
+    setPricingMode(newMode);
+    try {
+      localStorage.setItem('ariso_pricing_mode', newMode);
+      window.dispatchEvent(new CustomEvent('ariso_pricing_mode_change', { detail: { mode: newMode } }));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    const handleModeEvent = (e) => {
+      if (e.detail?.mode && e.detail.mode !== pricingMode) {
+        setPricingMode(e.detail.mode);
+      }
+    };
+    window.addEventListener('ariso_pricing_mode_change', handleModeEvent);
+    return () => window.removeEventListener('ariso_pricing_mode_change', handleModeEvent);
+  }, [pricingMode]);
+
   const [anchorElUserMenu, setAnchorElUserMenu] = useState(null);
   const [anchorElMore, setAnchorElMore] = useState(null);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -769,6 +805,65 @@ export default function App() {
 
                 {/* 3. Right Side: Desktop (Status, User Menu, Theme, Logout) */}
                 <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
+                  {/* Pricing Mode Toggle: Retail vs Wholesale */}
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      bgcolor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+                      p: '3px',
+                      borderRadius: '10px',
+                      border: '1px solid',
+                      borderColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)'
+                    }}
+                    title="Pricing Mode for POS Billing and Sales Orders"
+                  >
+                    <Button
+                      size="small"
+                      onClick={() => handleGlobalPricingModeChange('retail')}
+                      sx={{
+                        px: 1.2,
+                        py: 0.25,
+                        minWidth: 'auto',
+                        height: 26,
+                        borderRadius: '8px',
+                        fontSize: '0.72rem',
+                        fontWeight: pricingMode === 'retail' ? 800 : 600,
+                        textTransform: 'none',
+                        bgcolor: pricingMode === 'retail' ? (themeMode === 'dark' ? 'primary.main' : '#ea580c') : 'transparent',
+                        color: pricingMode === 'retail' ? '#fff' : 'text.secondary',
+                        boxShadow: pricingMode === 'retail' ? '0 1px 3px rgba(234, 88, 12, 0.35)' : 'none',
+                        '&:hover': {
+                          bgcolor: pricingMode === 'retail' ? (themeMode === 'dark' ? 'primary.dark' : '#c2410c') : 'action.hover'
+                        }
+                      }}
+                    >
+                      Retail
+                    </Button>
+                    <Button
+                      size="small"
+                      onClick={() => handleGlobalPricingModeChange('wholesale')}
+                      sx={{
+                        px: 1.2,
+                        py: 0.25,
+                        minWidth: 'auto',
+                        height: 26,
+                        borderRadius: '8px',
+                        fontSize: '0.72rem',
+                        fontWeight: pricingMode === 'wholesale' ? 800 : 600,
+                        textTransform: 'none',
+                        bgcolor: pricingMode === 'wholesale' ? '#9333ea' : 'transparent',
+                        color: pricingMode === 'wholesale' ? '#fff' : 'text.secondary',
+                        boxShadow: pricingMode === 'wholesale' ? '0 1px 3px rgba(147, 51, 234, 0.35)' : 'none',
+                        '&:hover': {
+                          bgcolor: pricingMode === 'wholesale' ? '#7e22ce' : 'action.hover'
+                        }
+                      }}
+                    >
+                      Wholesale
+                    </Button>
+                  </Box>
+
                   {/* Network / Offline Sync Status */}
                   <Box
                     onClick={() => { if (netStatus.pendingCount > 0) SyncService.syncPendingOrders(token); }}
@@ -1025,6 +1120,61 @@ export default function App() {
               )}
             </Box>
 
+            {/* Mobile Pricing Mode Switcher */}
+            <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary' }}>
+                Pricing Mode:
+              </Typography>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  bgcolor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
+                  p: '2px',
+                  borderRadius: '8px',
+                  border: '1px solid',
+                  borderColor: themeMode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)'
+                }}
+              >
+                <Button
+                  size="small"
+                  onClick={() => handleGlobalPricingModeChange('retail')}
+                  sx={{
+                    px: 1.2,
+                    py: 0.25,
+                    minWidth: 'auto',
+                    height: 26,
+                    borderRadius: '6px',
+                    fontSize: '0.72rem',
+                    fontWeight: pricingMode === 'retail' ? 800 : 600,
+                    textTransform: 'none',
+                    bgcolor: pricingMode === 'retail' ? '#ea580c' : 'transparent',
+                    color: pricingMode === 'retail' ? '#fff' : 'text.secondary'
+                  }}
+                >
+                  Retail
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => handleGlobalPricingModeChange('wholesale')}
+                  sx={{
+                    px: 1.2,
+                    py: 0.25,
+                    minWidth: 'auto',
+                    height: 26,
+                    borderRadius: '6px',
+                    fontSize: '0.72rem',
+                    fontWeight: pricingMode === 'wholesale' ? 800 : 600,
+                    textTransform: 'none',
+                    bgcolor: pricingMode === 'wholesale' ? '#9333ea' : 'transparent',
+                    color: pricingMode === 'wholesale' ? '#fff' : 'text.secondary'
+                  }}
+                >
+                  Wholesale
+                </Button>
+              </Box>
+            </Box>
+
             {/* Mobile Navigation List */}
             <List sx={{ px: 1, py: 1.5, flex: 1, overflowY: 'auto' }}>
               {navItems.map(item => {
@@ -1129,6 +1279,8 @@ export default function App() {
                 setTaxType={setTaxType}
                 receiptSettings={receiptSettings}
                 setReceiptSettings={setReceiptSettings}
+                pricingMode={pricingMode}
+                onPricingModeChange={handleGlobalPricingModeChange}
                 onNavigate={setCurrentView}
                 netStatus={netStatus}
                 onManualSync={() => SyncService.triggerManualSync(token)}

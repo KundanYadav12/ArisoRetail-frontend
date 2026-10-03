@@ -17,13 +17,41 @@ import RackTransferModal from './RackTransferModal';
 
 export default function WarehouseRacksTab({
   warehouses = [],
+  selectedWarehouseId: controlledWarehouseId = undefined,
+  onWarehouseChange = null,
   defaultWarehouseId = null
 }) {
   const { notify } = useNotify();
 
   const [racks, setRacks] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState(defaultWarehouseId || 'all');
+  const [internalWarehouseId, setInternalWarehouseId] = useState(() => {
+    if (controlledWarehouseId !== undefined && controlledWarehouseId !== null) {
+      return String(controlledWarehouseId);
+    }
+    return String(defaultWarehouseId || 'all');
+  });
+
+  // Effective warehouse ID: use controlled prop if supplied, else fallback to internal state
+  const selectedWarehouseId = (controlledWarehouseId !== undefined && controlledWarehouseId !== null)
+    ? String(controlledWarehouseId)
+    : internalWarehouseId;
+
+  // Sync internal state if controlled prop changes
+  useEffect(() => {
+    if (controlledWarehouseId !== undefined && controlledWarehouseId !== null) {
+      setInternalWarehouseId(String(controlledWarehouseId));
+    }
+  }, [controlledWarehouseId]);
+
+  const handleWarehouseChange = (newVal) => {
+    const strVal = String(newVal);
+    setInternalWarehouseId(strVal);
+    if (onWarehouseChange) {
+      onWarehouseChange(strVal);
+    }
+  };
+
   const [search, setSearch] = useState('');
 
   // Modals
@@ -201,12 +229,12 @@ export default function WarehouseRacksTab({
               <Select
                 value={selectedWarehouseId}
                 label="Filter by Warehouse"
-                onChange={(e) => setSelectedWarehouseId(e.target.value)}
+                onChange={(e) => handleWarehouseChange(e.target.value)}
                 MenuProps={{ PaperProps: { sx: { maxHeight: 280 } } }}
               >
                 <MenuItem value="all">All Warehouses</MenuItem>
                 {warehouses.map(w => (
-                  <MenuItem key={w.id} value={w.id}>{w.name}</MenuItem>
+                  <MenuItem key={w.id} value={String(w.id)}>{w.name}</MenuItem>
                 ))}
               </Select>
             </FormControl>

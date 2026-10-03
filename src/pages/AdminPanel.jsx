@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Tabs, Tab, useMediaQuery, IconButton, CircularProgress, Checkbox, TablePagination, InputAdornment, TableSortLabel, Tooltip, FormControl, InputLabel, Badge, Switch, FormControlLabel, Divider, Alert, Menu, RadioGroup, Radio } from '@mui/material';
+import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Chip, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Tabs, Tab, useMediaQuery, IconButton, CircularProgress, Checkbox, TablePagination, InputAdornment, TableSortLabel, Tooltip, FormControl, InputLabel, Badge, Switch, FormControlLabel, Divider, Alert, Menu, RadioGroup, Radio, Popover } from '@mui/material';
 import { Plus, Edit2, Scale, Camera, Smartphone, Trash2, Shield, Settings, FileText, Wifi, List, RefreshCw, Download, Layers, GripVertical, Search, X, Filter, ArrowUpDown, ArrowRightLeft, CheckSquare, Square, Utensils, CheckCircle, XCircle, Printer, Users, UserPlus, Key, ArrowUp, ArrowDown, Boxes, Package, AlertTriangle, TrendingUp, History, FileSpreadsheet, Save, Upload, Image as ImageIcon, Store, QrCode, Tag, ClipboardList, Clock, User, MoreVertical, Share2, Mail, Truck, RotateCcw, Landmark, Receipt, BadgeIndianRupee, Eye, ShoppingCart } from 'lucide-react';
 import { apiFetch, getApiUrl, downloadFile, resolveImageUrl, confirmPendingOrder, cancelPendingOrder } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
@@ -374,6 +374,168 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [itemReportDateFrom, setItemReportDateFrom] = useState('');
   const [itemReportDateTo, setItemReportDateTo] = useState('');
 
+  // Column-wise filtering for Item-Wise Sales Analytics
+  const initialItemReportColFilters = useMemo(() => ({
+    name: { value: '', mode: 'contains' },
+    category: [],
+    sku: { value: '', mode: 'contains' },
+    qty_sold: { min: '', max: '' },
+    gross_sales: { min: '', max: '' },
+    discount_given: { min: '', max: '' },
+    gst_collected: { min: '', max: '' },
+    net_sales: { min: '', max: '' },
+    avg_selling_price: { min: '', max: '' },
+    last_sold_at: { from: '', to: '' }
+  }), []);
+
+  const [itemReportColFilters, setItemReportColFilters] = useState({
+    name: { value: '', mode: 'contains' },
+    category: [],
+    sku: { value: '', mode: 'contains' },
+    qty_sold: { min: '', max: '' },
+    gross_sales: { min: '', max: '' },
+    discount_given: { min: '', max: '' },
+    gst_collected: { min: '', max: '' },
+    net_sales: { min: '', max: '' },
+    avg_selling_price: { min: '', max: '' },
+    last_sold_at: { from: '', to: '' }
+  });
+  const [colFilterAnchorEl, setColFilterAnchorEl] = useState(null);
+  const [activeFilterCol, setActiveFilterCol] = useState(null);
+
+  const isColFilterActive = (key) => {
+    const f = itemReportColFilters[key];
+    if (!f) return false;
+    if (key === 'name' || key === 'sku') return Boolean(f.value?.trim());
+    if (key === 'category') return Boolean(f.length > 0);
+    if (key === 'last_sold_at') return Boolean(f.from || f.to);
+    return (f.min !== '' && f.min !== undefined) || (f.max !== '' && f.max !== undefined);
+  };
+
+  const activeColFiltersCount = useMemo(() => {
+    return Object.keys(itemReportColFilters).filter(k => isColFilterActive(k)).length;
+  }, [itemReportColFilters]);
+
+  const handleClearColumnFilter = (colKey) => {
+    setItemReportColFilters(prev => ({
+      ...prev,
+      [colKey]: initialItemReportColFilters[colKey]
+    }));
+  };
+
+  const handleClearAllColumnFilters = () => {
+    setItemReportColFilters(initialItemReportColFilters);
+  };
+
+  const itemReportCategoryOptions = useMemo(() => {
+    const list = [...categories.map(c => c.name)];
+    itemReportData.forEach(r => {
+      if (r.category_name && !list.includes(r.category_name)) {
+        list.push(r.category_name);
+      }
+    });
+    return list.filter(Boolean);
+  }, [categories, itemReportData]);
+
+  const filteredItemSales = useMemo(() => {
+    return itemReportData.filter(row => {
+      // 1. Item Name
+      if (itemReportColFilters.name?.value?.trim()) {
+        const q = itemReportColFilters.name.value.trim().toLowerCase();
+        const val = (row.name || '').toLowerCase();
+        if (itemReportColFilters.name.mode === 'starts_with') {
+          if (!val.startsWith(q)) return false;
+        } else {
+          if (!val.includes(q)) return false;
+        }
+      }
+
+      // 2. Category
+      if (itemReportColFilters.category && itemReportColFilters.category.length > 0) {
+        const rowCat = (row.category_name || '').toLowerCase();
+        const match = itemReportColFilters.category.some(catVal => {
+          return String(catVal).toLowerCase() === rowCat || String(catVal) === String(row.category_id);
+        });
+        if (!match) return false;
+      }
+
+      // 3. SKU
+      if (itemReportColFilters.sku?.value?.trim()) {
+        const q = itemReportColFilters.sku.value.trim().toLowerCase();
+        const val = (row.sku || '').toLowerCase();
+        if (itemReportColFilters.sku.mode === 'starts_with') {
+          if (!val.startsWith(q)) return false;
+        } else {
+          if (!val.includes(q)) return false;
+        }
+      }
+
+      // 4. Qty Sold
+      if (itemReportColFilters.qty_sold?.min !== '' && itemReportColFilters.qty_sold?.min !== undefined) {
+        if (Number(row.qty_sold || 0) < Number(itemReportColFilters.qty_sold.min)) return false;
+      }
+      if (itemReportColFilters.qty_sold?.max !== '' && itemReportColFilters.qty_sold?.max !== undefined) {
+        if (Number(row.qty_sold || 0) > Number(itemReportColFilters.qty_sold.max)) return false;
+      }
+
+      // 5. Gross Sales
+      if (itemReportColFilters.gross_sales?.min !== '' && itemReportColFilters.gross_sales?.min !== undefined) {
+        if (Number(row.gross_sales || 0) < Number(itemReportColFilters.gross_sales.min)) return false;
+      }
+      if (itemReportColFilters.gross_sales?.max !== '' && itemReportColFilters.gross_sales?.max !== undefined) {
+        if (Number(row.gross_sales || 0) > Number(itemReportColFilters.gross_sales.max)) return false;
+      }
+
+      // 6. Discount
+      if (itemReportColFilters.discount_given?.min !== '' && itemReportColFilters.discount_given?.min !== undefined) {
+        if (Number(row.discount_given || 0) < Number(itemReportColFilters.discount_given.min)) return false;
+      }
+      if (itemReportColFilters.discount_given?.max !== '' && itemReportColFilters.discount_given?.max !== undefined) {
+        if (Number(row.discount_given || 0) > Number(itemReportColFilters.discount_given.max)) return false;
+      }
+
+      // 7. GST
+      if (itemReportColFilters.gst_collected?.min !== '' && itemReportColFilters.gst_collected?.min !== undefined) {
+        if (Number(row.gst_collected || 0) < Number(itemReportColFilters.gst_collected.min)) return false;
+      }
+      if (itemReportColFilters.gst_collected?.max !== '' && itemReportColFilters.gst_collected?.max !== undefined) {
+        if (Number(row.gst_collected || 0) > Number(itemReportColFilters.gst_collected.max)) return false;
+      }
+
+      // 8. Net Sales
+      if (itemReportColFilters.net_sales?.min !== '' && itemReportColFilters.net_sales?.min !== undefined) {
+        if (Number(row.net_sales || 0) < Number(itemReportColFilters.net_sales.min)) return false;
+      }
+      if (itemReportColFilters.net_sales?.max !== '' && itemReportColFilters.net_sales?.max !== undefined) {
+        if (Number(row.net_sales || 0) > Number(itemReportColFilters.net_sales.max)) return false;
+      }
+
+      // 9. Avg Selling Price
+      if (itemReportColFilters.avg_selling_price?.min !== '' && itemReportColFilters.avg_selling_price?.min !== undefined) {
+        if (Number(row.avg_selling_price || 0) < Number(itemReportColFilters.avg_selling_price.min)) return false;
+      }
+      if (itemReportColFilters.avg_selling_price?.max !== '' && itemReportColFilters.avg_selling_price?.max !== undefined) {
+        if (Number(row.avg_selling_price || 0) > Number(itemReportColFilters.avg_selling_price.max)) return false;
+      }
+
+      // 10. Last Sold Date
+      if (itemReportColFilters.last_sold_at?.from) {
+        if (!row.last_sold_at) return false;
+        const rowDate = new Date(row.last_sold_at);
+        const fromDate = new Date(`${itemReportColFilters.last_sold_at.from}T00:00:00`);
+        if (rowDate < fromDate) return false;
+      }
+      if (itemReportColFilters.last_sold_at?.to) {
+        if (!row.last_sold_at) return false;
+        const rowDate = new Date(row.last_sold_at);
+        const toDate = new Date(`${itemReportColFilters.last_sold_at.to}T23:59:59.999`);
+        if (rowDate > toDate) return false;
+      }
+
+      return true;
+    });
+  }, [itemReportData, itemReportColFilters]);
+
   // Item Sales History Drawer/Modal
   const [selectedReportItem, setSelectedReportItem] = useState(null);
   const [itemHistoryModalOpen, setItemHistoryModalOpen] = useState(false);
@@ -435,6 +597,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [menuTags, setMenuTags] = useState([]);
   const [menuTagInput, setMenuTagInput] = useState('');
   const [menuPurchasePrice, setMenuPurchasePrice] = useState('');
+  const [menuWholesalePrice, setMenuWholesalePrice] = useState('');
   const [menuMrp, setMenuMrp] = useState('');
   const [menuIgstRate, setMenuIgstRate] = useState('5');
   const [menuDiscountType, setMenuDiscountType] = useState('percentage'); // 'percentage' | 'flat'
@@ -891,6 +1054,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [historyCashier, setHistoryCashier] = useState('all');
   const [historyPaymentMode, setHistoryPaymentMode] = useState('all');
   const [historyStatus, setHistoryStatus] = useState('all');
+  const [historyPriceType, setHistoryPriceType] = useState('all');
   const [historyDateFrom, setHistoryDateFrom] = useState('');
   const [historyDateTo, setHistoryDateTo] = useState('');
   const [historyPage, setHistoryPage] = useState(0);
@@ -1178,7 +1342,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
   useEffect(() => {
     fetchData();
-  }, [activeTab, reportPreset, reportDateFrom, reportDateTo, historySearch, historyCashier, historyPaymentMode, historyStatus, historyDateFrom, historyDateTo, historyPage, historyLimit, itemReportPreset, itemReportDateFrom, itemReportDateTo, itemReportCategory, itemReportSearch, itemReportSortBy, itemReportSortOrder, stockCategoryFilter, stockStatusFilter, stockSearch, salesOrderPreset, salesOrderDateFrom, salesOrderDateTo, salesOrderStatus, salesOrderStaff, salesOrderSearch]);
+  }, [activeTab, reportPreset, reportDateFrom, reportDateTo, historySearch, historyCashier, historyPaymentMode, historyStatus, historyPriceType, historyDateFrom, historyDateTo, historyPage, historyLimit, itemReportPreset, itemReportDateFrom, itemReportDateTo, itemReportCategory, itemReportSearch, itemReportSortBy, itemReportSortOrder, stockCategoryFilter, stockStatusFilter, stockSearch, salesOrderPreset, salesOrderDateFrom, salesOrderDateTo, salesOrderStatus, salesOrderStaff, salesOrderSearch]);
 
   // Re-fetch when server broadcasts a data change via SSE
   useEffect(() => {
@@ -1408,6 +1572,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         if (historyCashier !== 'all') url += `&cashier_id=${historyCashier}`;
         if (historyPaymentMode !== 'all') url += `&payment_mode=${historyPaymentMode}`;
         if (historyStatus !== 'all') url += `&order_status=${historyStatus}`;
+        if (historyPriceType !== 'all') url += `&price_type=${historyPriceType}`;
         if (from) url += `&date_from=${encodeURIComponent(from)}`;
         if (to) url += `&date_to=${encodeURIComponent(to)}`;
 
@@ -1923,6 +2088,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuTags([]);
     setMenuTagInput('');
     setMenuPurchasePrice('');
+    setMenuWholesalePrice('');
     setMenuMrp('');
     setMenuIgstRate('5');
     setMenuDiscountType('percentage');
@@ -2011,6 +2177,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuTagInput('');
 
     setMenuPurchasePrice(item.purchase_price !== undefined && item.purchase_price !== null ? item.purchase_price.toString() : '');
+    setMenuWholesalePrice(item.wholesale_price !== undefined && item.wholesale_price !== null ? item.wholesale_price.toString() : '');
     setMenuMrp(item.mrp !== undefined && item.mrp !== null ? item.mrp.toString() : '');
     setMenuIgstRate(item.igst_rate !== undefined && item.igst_rate !== null ? Math.round(parseFloat(item.igst_rate)).toString() : (item.gst_rate ? Math.round(parseFloat(item.gst_rate)).toString() : '5'));
     setMenuDiscountType(item.discount_type || 'percentage');
@@ -2081,6 +2248,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     formData.append('item_group', menuItemGroup);
     formData.append('tags', JSON.stringify(menuTags));
     formData.append('purchase_price', menuPurchasePrice || '0');
+    formData.append('wholesale_price', menuWholesalePrice || '');
     formData.append('mrp', menuMrp || '0');
     formData.append('igst_rate', menuIgstRate || menuGst);
     formData.append('discount_type', menuDiscountType);
@@ -3377,7 +3545,14 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                   onClick={async () => {
                     try {
                       const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
-                      await downloadFile(`/api/reports/item-wise/export-excel?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${getISTDateString()}.xlsx`);
+                      await downloadFile(
+                        `/api/reports/item-wise/export-excel?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`,
+                        `item_sales_report_${getISTDateString()}.xlsx`,
+                        {
+                          method: 'POST',
+                          body: { items: filteredItemSales }
+                        }
+                      );
                       notify.success('Item Sales Excel report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Excel report.', 'Export Error');
@@ -3401,7 +3576,14 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                   onClick={async () => {
                     try {
                       const { from, to } = resolveDateRange(itemReportPreset, itemReportDateFrom, itemReportDateTo);
-                      await downloadFile(`/api/reports/item-wise/export-csv?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`, `item_sales_report_${getISTDateString()}.csv`);
+                      await downloadFile(
+                        `/api/reports/item-wise/export-csv?preset=${itemReportPreset}&date_from=${from}&date_to=${to}&category_id=${itemReportCategory}&search=${encodeURIComponent(itemReportSearch)}&sort_by=${itemReportSortBy}&sort_order=${itemReportSortOrder}`,
+                        `item_sales_report_${getISTDateString()}.csv`,
+                        {
+                          method: 'POST',
+                          body: { items: filteredItemSales }
+                        }
+                      );
                       notify.success('Item Sales CSV report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download CSV report.', 'Export Error');
@@ -3502,13 +3684,13 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               </Grid>
             </Paper>
 
-            {/* Item Sales Summary Cards */}
+            {/* Item Sales Summary Cards (Reflects Filtered Rows) */}
             <Grid container spacing={2}>
               <Grid size={{ xs: 6, sm: 3 }}>
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, bgcolor: 'background.paper' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Items Sold</Typography>
                   <Typography variant="h6" sx={{ fontWeight: 800, color: 'primary.main', mt: 0.5 }}>
-                    {itemReportData.reduce((sum, i) => sum + parseInt(i.qty_sold || 0), 0)} pcs
+                    {filteredItemSales.reduce((sum, i) => sum + parseInt(i.qty_sold || 0), 0)} pcs
                   </Typography>
                 </Paper>
               </Grid>
@@ -3516,7 +3698,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, bgcolor: 'background.paper' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Gross Sales</Typography>
                   <Typography variant="h6" sx={{ fontWeight: 800, mt: 0.5 }}>
-                    Rs. {itemReportData.reduce((sum, i) => sum + parseFloat(i.gross_sales || 0), 0).toFixed(2)}
+                    Rs. {filteredItemSales.reduce((sum, i) => sum + parseFloat(i.gross_sales || 0), 0).toFixed(2)}
                   </Typography>
                 </Paper>
               </Grid>
@@ -3524,7 +3706,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, bgcolor: 'background.paper' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Discounts</Typography>
                   <Typography variant="h6" color="warning.main" sx={{ fontWeight: 800, mt: 0.5 }}>
-                    Rs. {itemReportData.reduce((sum, i) => sum + parseFloat(i.discount_given || 0), 0).toFixed(2)}
+                    Rs. {filteredItemSales.reduce((sum, i) => sum + parseFloat(i.discount_given || 0), 0).toFixed(2)}
                   </Typography>
                 </Paper>
               </Grid>
@@ -3532,28 +3714,116 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, bgcolor: 'background.paper' }}>
                   <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Net Revenue</Typography>
                   <Typography variant="h6" color="secondary.main" sx={{ fontWeight: 800, mt: 0.5 }}>
-                    Rs. {itemReportData.reduce((sum, i) => sum + parseFloat(i.net_sales || 0), 0).toFixed(2)}
+                    Rs. {filteredItemSales.reduce((sum, i) => sum + parseFloat(i.net_sales || 0), 0).toFixed(2)}
                   </Typography>
                 </Paper>
               </Grid>
             </Grid>
+
+            {/* Table Filter Stats & Global Reset Bar */}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 0.5, flexWrap: 'wrap', gap: 1 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 700 }}>
+                Showing {filteredItemSales.length} {filteredItemSales.length === 1 ? 'item' : 'items'}
+                {activeColFiltersCount > 0 && ` (filtered from ${itemReportData.length} total)`}
+              </Typography>
+
+              {activeColFiltersCount > 0 && (
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<RotateCcw size={13} />}
+                  onClick={handleClearAllColumnFilters}
+                  sx={{ fontWeight: 800, fontSize: '0.75rem', py: 0.35, px: 1.5, borderRadius: 2, textTransform: 'none' }}
+                >
+                  Clear All Column Filters ({activeColFiltersCount})
+                </Button>
+              )}
+            </Box>
 
             {/* Main Data Table */}
             <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3, border: 1, borderColor: 'divider' }}>
               <Table size="small">
                 <TableHead sx={{ bgcolor: 'action.hover' }}>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 800 }}>Item Name</TableCell>
-                    <TableCell sx={{ fontWeight: 800 }}>Category</TableCell>
-                    <TableCell sx={{ fontWeight: 800 }}>SKU</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>Qty Sold</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>Gross Sales</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>Discount</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>GST</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>Net Sales</TableCell>
-                    <TableCell align="right" sx={{ fontWeight: 800 }}>Avg Selling Price</TableCell>
-                    <TableCell sx={{ fontWeight: 800 }}>Last Sold</TableCell>
-                    <TableCell align="center" sx={{ fontWeight: 800 }}>History</TableCell>
+                    {(() => {
+                      const renderColHeader = (colKey, label, align = 'left', filterable = true) => {
+                        const active = filterable && isColFilterActive(colKey);
+                        return (
+                          <TableCell
+                            key={colKey}
+                            align={align}
+                            sx={{
+                              fontWeight: 800,
+                              whiteSpace: 'nowrap',
+                              userSelect: 'none',
+                              bgcolor: active ? 'rgba(25, 118, 210, 0.08)' : 'inherit'
+                            }}
+                          >
+                            <Box
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: align === 'right' ? 'flex-end' : align === 'center' ? 'center' : 'flex-start',
+                                gap: 0.5,
+                                width: '100%'
+                              }}
+                            >
+                              <span>{label}</span>
+                              {filterable && (
+                                <Tooltip title={active ? `Filter Active on ${label} (Click to edit)` : `Filter by ${label}`}>
+                                  <IconButton
+                                    size="small"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (activeFilterCol === colKey && Boolean(colFilterAnchorEl)) {
+                                        setColFilterAnchorEl(null);
+                                        setActiveFilterCol(null);
+                                      } else {
+                                        setColFilterAnchorEl(e.currentTarget);
+                                        setActiveFilterCol(colKey);
+                                      }
+                                    }}
+                                    sx={{
+                                      p: 0.35,
+                                      color: active ? 'primary.main' : 'text.disabled',
+                                      bgcolor: active ? 'rgba(25, 118, 210, 0.15)' : 'transparent',
+                                      '&:hover': {
+                                        color: 'primary.main',
+                                        bgcolor: active ? 'rgba(25, 118, 210, 0.25)' : 'action.hover'
+                                      },
+                                      borderRadius: 1
+                                    }}
+                                  >
+                                    <Filter
+                                      size={13}
+                                      style={{
+                                        fill: active ? 'currentColor' : 'none',
+                                        strokeWidth: active ? 2.5 : 2
+                                      }}
+                                    />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </Box>
+                          </TableCell>
+                        );
+                      };
+
+                      return [
+                        renderColHeader('name', 'Item Name', 'left', true),
+                        renderColHeader('category', 'Category', 'left', true),
+                        renderColHeader('sku', 'SKU', 'left', true),
+                        renderColHeader('qty_sold', 'Qty Sold', 'right', true),
+                        renderColHeader('gross_sales', 'Gross Sales', 'right', true),
+                        renderColHeader('discount_given', 'Discount', 'right', true),
+                        renderColHeader('gst_collected', 'GST', 'right', true),
+                        renderColHeader('net_sales', 'Net Sales', 'right', true),
+                        renderColHeader('avg_selling_price', 'Avg Selling Price', 'right', true),
+                        renderColHeader('last_sold_at', 'Last Sold', 'left', true),
+                        renderColHeader('history', 'History', 'center', false)
+                      ];
+                    })()}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -3563,14 +3833,32 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         <CircularProgress size={30} />
                       </TableCell>
                     </TableRow>
-                  ) : itemReportData.length === 0 ? (
+                  ) : filteredItemSales.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={11} align="center" sx={{ py: 4, color: 'text.secondary' }}>
-                        No item sales data found for the selected filters.
+                        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {itemReportData.length > 0
+                              ? 'No items match the active column filters.'
+                              : 'No item sales data found for the selected filters.'}
+                          </Typography>
+                          {activeColFiltersCount > 0 && (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="warning"
+                              startIcon={<RotateCcw size={14} />}
+                              onClick={handleClearAllColumnFilters}
+                              sx={{ textTransform: 'none', fontWeight: 700, mt: 0.5 }}
+                            >
+                              Reset Column Filters
+                            </Button>
+                          )}
+                        </Box>
                       </TableCell>
                     </TableRow>
                   ) : (
-                    itemReportData.map((row, idx) => (
+                    filteredItemSales.map((row, idx) => (
                       <TableRow key={idx} hover>
                         <TableCell sx={{ fontWeight: 700 }}>
                           <Button
@@ -3606,6 +3894,315 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </TableBody>
               </Table>
             </TableContainer>
+
+            {/* Lightweight Popover for Column-Wise Filtering */}
+            <Popover
+              open={Boolean(colFilterAnchorEl && activeFilterCol)}
+              anchorEl={colFilterAnchorEl}
+              onClose={() => {
+                setColFilterAnchorEl(null);
+                setActiveFilterCol(null);
+              }}
+              anchorOrigin={{
+                vertical: 'bottom',
+                horizontal: ['qty_sold', 'gross_sales', 'discount_given', 'gst_collected', 'net_sales', 'avg_selling_price'].includes(activeFilterCol) ? 'right' : 'left'
+              }}
+              transformOrigin={{
+                vertical: 'top',
+                horizontal: ['qty_sold', 'gross_sales', 'discount_given', 'gst_collected', 'net_sales', 'avg_selling_price'].includes(activeFilterCol) ? 'right' : 'left'
+              }}
+              slotProps={{
+                paper: {
+                  sx: {
+                    p: 2,
+                    width: activeFilterCol === 'category' ? 320 : 280,
+                    maxWidth: '92vw',
+                    borderRadius: 2.5,
+                    boxShadow: 8,
+                    border: 1,
+                    borderColor: 'divider',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 1.5
+                  }
+                }
+              }}
+            >
+              {/* Popover Header */}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                  <Filter size={15} color="#1976d2" />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                    {activeFilterCol === 'name' && 'Filter Item Name'}
+                    {activeFilterCol === 'category' && 'Filter Category'}
+                    {activeFilterCol === 'sku' && 'Filter SKU'}
+                    {activeFilterCol === 'qty_sold' && 'Filter Qty Sold'}
+                    {activeFilterCol === 'gross_sales' && 'Filter Gross Sales'}
+                    {activeFilterCol === 'discount_given' && 'Filter Discount'}
+                    {activeFilterCol === 'gst_collected' && 'Filter GST'}
+                    {activeFilterCol === 'net_sales' && 'Filter Net Sales'}
+                    {activeFilterCol === 'avg_selling_price' && 'Filter Avg Price'}
+                    {activeFilterCol === 'last_sold_at' && 'Filter Last Sold'}
+                  </Typography>
+                </Box>
+                <IconButton size="small" onClick={() => { setColFilterAnchorEl(null); setActiveFilterCol(null); }}>
+                  <X size={16} />
+                </IconButton>
+              </Box>
+
+              <Divider />
+
+              {/* Text Filter: Name & SKU */}
+              {(activeFilterCol === 'name' || activeFilterCol === 'sku') && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Condition</InputLabel>
+                    <Select
+                      value={itemReportColFilters[activeFilterCol]?.mode || 'contains'}
+                      label="Condition"
+                      onChange={(e) => {
+                        const mode = e.target.value;
+                        setItemReportColFilters(prev => ({
+                          ...prev,
+                          [activeFilterCol]: { ...prev[activeFilterCol], mode }
+                        }));
+                      }}
+                    >
+                      <MenuItem value="contains">Contains</MenuItem>
+                      <MenuItem value="starts_with">Starts with</MenuItem>
+                    </Select>
+                  </FormControl>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    autoFocus
+                    placeholder={activeFilterCol === 'name' ? 'Filter item name...' : 'Filter SKU...'}
+                    value={itemReportColFilters[activeFilterCol]?.value || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setItemReportColFilters(prev => ({
+                        ...prev,
+                        [activeFilterCol]: { ...prev[activeFilterCol], value: val }
+                      }));
+                    }}
+                  />
+                </Box>
+              )}
+
+              {/* Category Multi-Select Filter */}
+              {activeFilterCol === 'category' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+                      {itemReportColFilters.category?.length || 0} of {itemReportCategoryOptions.length} selected
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                      <Button
+                        size="small"
+                        sx={{ fontSize: '0.7rem', py: 0.2, minWidth: 'auto', px: 0.8 }}
+                        onClick={() => {
+                          setItemReportColFilters(prev => ({
+                            ...prev,
+                            category: [...itemReportCategoryOptions]
+                          }));
+                        }}
+                      >
+                        All
+                      </Button>
+                      <Button
+                        size="small"
+                        color="inherit"
+                        sx={{ fontSize: '0.7rem', py: 0.2, minWidth: 'auto', px: 0.8 }}
+                        onClick={() => {
+                          setItemReportColFilters(prev => ({
+                            ...prev,
+                            category: []
+                          }));
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </Box>
+                  </Box>
+
+                  <Box sx={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0.5, border: 1, borderColor: 'divider', borderRadius: 1.5, p: 0.5 }}>
+                    {itemReportCategoryOptions.length === 0 ? (
+                      <Typography variant="caption" color="text.secondary" sx={{ p: 1, textAlign: 'center' }}>No categories available</Typography>
+                    ) : (
+                      itemReportCategoryOptions.map((catName) => {
+                        const isChecked = itemReportColFilters.category?.includes(catName);
+                        return (
+                          <Box
+                            key={catName}
+                            onClick={() => {
+                              setItemReportColFilters(prev => {
+                                const current = prev.category || [];
+                                const next = current.includes(catName)
+                                  ? current.filter(c => c !== catName)
+                                  : [...current, catName];
+                                return { ...prev, category: next };
+                              });
+                            }}
+                            sx={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 1,
+                              p: 0.5,
+                              borderRadius: 1,
+                              cursor: 'pointer',
+                              '&:hover': { bgcolor: 'action.hover' },
+                              bgcolor: isChecked ? 'action.selected' : 'transparent'
+                            }}
+                          >
+                            <Checkbox size="small" checked={isChecked} sx={{ p: 0.25 }} />
+                            <Typography variant="body2" sx={{ fontSize: '0.825rem', fontWeight: isChecked ? 700 : 500 }}>
+                              {catName}
+                            </Typography>
+                          </Box>
+                        );
+                      })
+                    )}
+                  </Box>
+                </Box>
+              )}
+
+              {/* Numeric Range Filter */}
+              {['qty_sold', 'gross_sales', 'discount_given', 'gst_collected', 'net_sales', 'avg_selling_price'].includes(activeFilterCol) && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  {activeFilterCol === 'discount_given' && (
+                    <Button
+                      size="small"
+                      variant={itemReportColFilters.discount_given?.min === '0.01' && !itemReportColFilters.discount_given?.max ? 'contained' : 'outlined'}
+                      color="warning"
+                      onClick={() => {
+                        if (itemReportColFilters.discount_given?.min === '0.01' && !itemReportColFilters.discount_given?.max) {
+                          setItemReportColFilters(prev => ({
+                            ...prev,
+                            discount_given: { min: '', max: '' }
+                          }));
+                        } else {
+                          setItemReportColFilters(prev => ({
+                            ...prev,
+                            discount_given: { min: '0.01', max: '' }
+                          }));
+                        }
+                      }}
+                      sx={{ fontSize: '0.75rem', py: 0.3, textTransform: 'none', fontWeight: 700 }}
+                    >
+                      Quick: Discount &gt; 0
+                    </Button>
+                  )}
+
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Min"
+                      placeholder="0"
+                      value={itemReportColFilters[activeFilterCol]?.min ?? ''}
+                      onChange={(e) => {
+                        const min = e.target.value;
+                        setItemReportColFilters(prev => ({
+                          ...prev,
+                          [activeFilterCol]: { ...prev[activeFilterCol], min }
+                        }));
+                      }}
+                      slotProps={{ htmlInput: { step: 'any' } }}
+                    />
+                    <Typography variant="caption" color="text.secondary">to</Typography>
+                    <TextField
+                      size="small"
+                      type="number"
+                      label="Max"
+                      placeholder="Max"
+                      value={itemReportColFilters[activeFilterCol]?.max ?? ''}
+                      onChange={(e) => {
+                        const max = e.target.value;
+                        setItemReportColFilters(prev => ({
+                          ...prev,
+                          [activeFilterCol]: { ...prev[activeFilterCol], max }
+                        }));
+                      }}
+                      slotProps={{ htmlInput: { step: 'any' } }}
+                    />
+                  </Box>
+                </Box>
+              )}
+
+              {/* Date Range Filter: Last Sold */}
+              {activeFilterCol === 'last_sold_at' && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  <TextField
+                    size="small"
+                    type="date"
+                    label="From Date"
+                    value={itemReportColFilters.last_sold_at?.from || ''}
+                    onChange={(e) => {
+                      const from = e.target.value;
+                      setItemReportColFilters(prev => ({
+                        ...prev,
+                        last_sold_at: { ...prev.last_sold_at, from }
+                      }));
+                    }}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    fullWidth
+                  />
+                  <TextField
+                    size="small"
+                    type="date"
+                    label="To Date"
+                    value={itemReportColFilters.last_sold_at?.to || ''}
+                    onChange={(e) => {
+                      const to = e.target.value;
+                      setItemReportColFilters(prev => ({
+                        ...prev,
+                        last_sold_at: { ...prev.last_sold_at, to }
+                      }));
+                    }}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    fullWidth
+                  />
+                </Box>
+              )}
+
+              <Divider />
+
+              {/* Popover Footer */}
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 0.5 }}>
+                <Button
+                  size="small"
+                  color="error"
+                  onClick={() => handleClearColumnFilter(activeFilterCol)}
+                  disabled={!isColFilterActive(activeFilterCol)}
+                  sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem' }}
+                >
+                  Clear
+                </Button>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  {activeColFiltersCount > 1 && (
+                    <Button
+                      size="small"
+                      color="warning"
+                      onClick={handleClearAllColumnFilters}
+                      sx={{ textTransform: 'none', fontSize: '0.75rem' }}
+                    >
+                      Clear All
+                    </Button>
+                  )}
+                  <Button
+                    size="small"
+                    variant="contained"
+                    onClick={() => {
+                      setColFilterAnchorEl(null);
+                      setActiveFilterCol(null);
+                    }}
+                    sx={{ textTransform: 'none', fontWeight: 700, fontSize: '0.75rem' }}
+                  >
+                    Done
+                  </Button>
+                </Box>
+              </Box>
+            </Popover>
           </Box>
         )}
 
@@ -5232,7 +5829,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                   onClick={async () => {
                     try {
                       const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
-                      await downloadFile(`/api/orders/history/export-excel?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${getISTDateString()}.xlsx`);
+                      await downloadFile(`/api/orders/history/export-excel?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&price_type=${historyPriceType}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${getISTDateString()}.xlsx`);
                       notify.success('Order History Excel report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Order History Excel report.', 'Export Error');
@@ -5256,7 +5853,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                   onClick={async () => {
                     try {
                       const { from, to } = resolveDateRange(historyPreset, historyDateFrom, historyDateTo);
-                      await downloadFile(`/api/orders/history/export-csv?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${getISTDateString()}.csv`);
+                      await downloadFile(`/api/orders/history/export-csv?preset=${historyPreset}&order_status=${historyStatus}&payment_mode=${historyPaymentMode}&price_type=${historyPriceType}&cashier_id=${historyCashier}&date_from=${from}&date_to=${to}&search=${encodeURIComponent(historySearch)}`, `order_history_${getISTDateString()}.csv`);
                       notify.success('Order History CSV report downloaded.', 'Export Complete');
                     } catch (err) {
                       notify.error(err.message || 'Failed to download Order History CSV report.', 'Export Error');
@@ -5292,7 +5889,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Grid>
 
                 {/* Search Bar */}
-                <Grid size={{ xs: 12, sm: 4 }}>
+                <Grid size={{ xs: 12, sm: 2.8 }}>
                   <TextField
                     fullWidth
                     size="small"
@@ -5303,7 +5900,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Grid>
 
                 {/* Cashier Dropdown */}
-                <Grid size={{ xs: 6, sm: 2.4 }}>
+                <Grid size={{ xs: 6, sm: 2 }}>
                   <FormControl fullWidth size="small">
                     <InputLabel>Cashier</InputLabel>
                     <Select
@@ -5318,7 +5915,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Grid>
 
                 {/* Payment Mode Dropdown */}
-                <Grid size={{ xs: 6, sm: 2.4 }}>
+                <Grid size={{ xs: 6, sm: 1.8 }}>
                   <FormControl fullWidth size="small">
                     <InputLabel>Payment</InputLabel>
                     <Select
@@ -5338,7 +5935,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Grid>
 
                 {/* Status Dropdown */}
-                <Grid size={{ xs: 6, sm: 1.6 }}>
+                <Grid size={{ xs: 6, sm: 1.8 }}>
                   <FormControl fullWidth size="small">
                     <InputLabel>Status</InputLabel>
                     <Select
@@ -5354,8 +5951,24 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                   </FormControl>
                 </Grid>
 
+                {/* Price Type / Pricing Dropdown */}
+                <Grid size={{ xs: 6, sm: 2.2 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Pricing</InputLabel>
+                    <Select
+                      value={historyPriceType}
+                      label="Pricing"
+                      onChange={e => { setHistoryPriceType(e.target.value); setHistoryPage(0); }}
+                    >
+                      <MenuItem value="all">All Pricing</MenuItem>
+                      <MenuItem value="retail">Retail Only</MenuItem>
+                      <MenuItem value="wholesale">Wholesale Only</MenuItem>
+                    </Select>
+                  </FormControl>
+                </Grid>
+
                 {/* Reset Button */}
-                <Grid size={{ xs: 6, sm: 1.6 }}>
+                <Grid size={{ xs: 12, sm: 1.4 }}>
                   <Button
                     variant="outlined"
                     color="inherit"
@@ -5367,6 +5980,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                       setHistoryCashier('all');
                       setHistoryPaymentMode('all');
                       setHistoryStatus('all');
+                      setHistoryPriceType('all');
                       setHistoryDateFrom('');
                       setHistoryDateTo('');
                       setHistoryPage(0);
@@ -5385,6 +5999,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 <TableHead sx={{ bgcolor: 'action.hover' }}>
                   <TableRow>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Invoice #</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Price Type</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Cashier</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Date / Time</TableCell>
                     <TableCell sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Customer Info</TableCell>
@@ -5400,7 +6015,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 <TableBody>
                   {historyOrders.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={11} align="center" sx={{ py: 4, fontWeight: 700, color: 'text.secondary' }}>
+                      <TableCell colSpan={12} align="center" sx={{ py: 4, fontWeight: 700, color: 'text.secondary' }}>
                         No orders match filters in retention window.
                       </TableCell>
                     </TableRow>
@@ -5408,6 +6023,35 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                     historyOrders.map(order => (
                       <TableRow key={order.id} hover>
                         <TableCell sx={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{order.unique_order_number}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          {(order.price_list || '').toLowerCase() === 'wholesale' ? (
+                            <Chip
+                              label="Wholesale"
+                              size="small"
+                              sx={{
+                                bgcolor: '#7c3aed',
+                                color: '#ffffff',
+                                fontWeight: 800,
+                                fontSize: '0.68rem',
+                                height: 22
+                              }}
+                            />
+                          ) : (
+                            <Chip
+                              label="Retail"
+                              size="small"
+                              variant="outlined"
+                              sx={{
+                                color: '#ea580c',
+                                borderColor: '#fdba74',
+                                bgcolor: 'rgba(234, 88, 12, 0.06)',
+                                fontWeight: 700,
+                                fontSize: '0.68rem',
+                                height: 22
+                              }}
+                            />
+                          )}
+                        </TableCell>
                         <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{order.cashier_name}</TableCell>
                         <TableCell sx={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{new Date(order.created_at).toLocaleString()}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>
@@ -5544,16 +6188,31 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                             </Typography>
                           )}
                         </Box>
-                        <Box sx={{ textAlign: 'right' }}>
+                        <Box sx={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.5 }}>
                           <Typography variant="subtitle2" color="primary.main" sx={{ fontWeight: 800, fontSize: '1rem' }}>
                             Rs. {parseFloat(order.total_amount).toFixed(2)}
                           </Typography>
-                          <Chip
-                            label={order.order_status}
-                            size="small"
-                            color={order.order_status === 'completed' ? 'success' : order.order_status === 'cancelled' ? 'error' : 'warning'}
-                            sx={{ fontWeight: 700, textTransform: 'capitalize', fontSize: '10px', height: 20, mt: 0.25 }}
-                          />
+                          <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                            <Chip
+                              label={(order.price_list || '').toLowerCase() === 'wholesale' ? 'Wholesale' : 'Retail'}
+                              size="small"
+                              sx={{
+                                fontWeight: 800,
+                                fontSize: '9px',
+                                height: 18,
+                                bgcolor: (order.price_list || '').toLowerCase() === 'wholesale' ? '#7c3aed' : 'rgba(234, 88, 12, 0.1)',
+                                color: (order.price_list || '').toLowerCase() === 'wholesale' ? '#fff' : '#ea580c',
+                                border: '1px solid',
+                                borderColor: (order.price_list || '').toLowerCase() === 'wholesale' ? '#6d28d9' : '#fdba74'
+                              }}
+                            />
+                            <Chip
+                              label={order.order_status}
+                              size="small"
+                              color={order.order_status === 'completed' ? 'success' : order.order_status === 'cancelled' ? 'error' : 'warning'}
+                              sx={{ fontWeight: 700, textTransform: 'capitalize', fontSize: '10px', height: 20 }}
+                            />
+                          </Box>
                         </Box>
                       </Box>
 
@@ -6785,6 +7444,18 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         onChange={e => setMenuPrice(e.target.value)}
                         required
                         placeholder="Enter Sales Price"
+                      />
+
+                      {/* Wholesale Price (Optional) */}
+                      <TextField
+                        label="Wholesale Price"
+                        type="number"
+                        size="small"
+                        fullWidth
+                        value={menuWholesalePrice}
+                        onChange={e => setMenuWholesalePrice(e.target.value)}
+                        placeholder="Enter Wholesale Price (Optional)"
+                        helperText="Optional — falls back to Sales Price if blank"
                       />
 
                       {/* Purchase Price */}

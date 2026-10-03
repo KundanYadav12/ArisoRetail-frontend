@@ -522,7 +522,7 @@ export default function ProductStickerModal({
                           {it.name}
                         </div>
                         <div style={{ fontSize: '11px', color: '#64748B' }}>
-                          ₹{itPrices.salePrice.toFixed(2)} • SKU: {it.sku || it.barcode || 'N/A'}
+                          ₹{parseFloat(itPrices?.salePrice || 0).toFixed(2)} • SKU: {it.sku || it.barcode || 'N/A'}
                           {resolveItemSize(it, config) ? ` • Size: ${resolveItemSize(it, config)}` : ''}
                           {resolveItemColor(it, config) ? ` • Color: ${resolveItemColor(it, config)}` : ''}
                         </div>

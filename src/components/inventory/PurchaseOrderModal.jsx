@@ -574,10 +574,10 @@ export default function PurchaseOrderModal({
                       />
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 600, color: '#64748b' }}>
-                      ₹{row.tax_amount.toFixed(2)}
+                      ₹{parseFloat(row.tax_amount || 0).toFixed(2)}
                     </TableCell>
                     <TableCell align="right" sx={{ fontWeight: 700, color: '#0f172a' }}>
-                      ₹{row.total_amount.toFixed(2)}
+                      ₹{parseFloat(row.total_amount || 0).toFixed(2)}
                     </TableCell>
                     <TableCell align="center">
                       <IconButton size="small" color="error" onClick={() => handleRemoveItem(idx)}>

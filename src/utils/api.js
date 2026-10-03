@@ -304,9 +304,9 @@ export async function apiFetch(url, options = {}) {
 /**
  * Triggers an authenticated file download using apiFetch (with automatic JWT token refresh).
  */
-export async function downloadFile(endpoint, defaultFilename = 'export.xlsx') {
+export async function downloadFile(endpoint, defaultFilename = 'export.xlsx', options = {}) {
   try {
-    const response = await apiFetch(endpoint);
+    const response = await apiFetch(endpoint, options);
     if (!response.ok) {
       let errMessage = 'Failed to download file.';
       try {

@@ -350,7 +350,7 @@ export default function PurchaseReturnModal({
                         />
                       </TableCell>
                       <TableCell align="right" sx={{ fontWeight: 700, color: '#dc2626' }}>
-                        ₹{row.total_amount.toFixed(2)}
+                        ₹{parseFloat(row.total_amount || 0).toFixed(2)}
                       </TableCell>
                       <TableCell align="center">
                         <IconButton size="small" color="error" onClick={() => handleRemoveItem(idx)}>
@@ -367,7 +367,7 @@ export default function PurchaseReturnModal({
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', p: 1 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-            Total Return Value: <span style={{ color: '#dc2626' }}>₹{grandTotal.toFixed(2)}</span>
+            Total Return Value: <span style={{ color: '#dc2626' }}>₹{parseFloat(grandTotal || 0).toFixed(2)}</span>
           </Typography>
         </Box>
       </DialogContent>

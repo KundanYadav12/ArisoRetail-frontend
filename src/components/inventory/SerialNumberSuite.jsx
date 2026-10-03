@@ -5,13 +5,13 @@ import {
   TableRow, Paper, IconButton, CircularProgress, Alert, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, FormControl,
   InputLabel, Select, MenuItem, Divider, TablePagination, InputAdornment,
-  Autocomplete
+  Autocomplete, ToggleButton, ToggleButtonGroup
 } from '@mui/material';
 import {
   Tag, Search, QrCode, Printer, CheckCircle2, XCircle, Package,
   Calendar, Receipt, Truck, User, ArrowRight, RefreshCw, Plus,
   ShieldCheck, AlertTriangle, Eye, Sparkles, Layers, Building2,
-  Copy, Check, Volume2, Camera
+  Copy, Check, Volume2, Camera, ShieldAlert, Shield, Clock
 } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
 import { db } from '../../utils/offlineDb';
@@ -78,12 +78,19 @@ export default function SerialNumberSuite({ user, token }) {
   const [printCopies, setPrintCopies] = useState(1);
   const [isPrinting, setIsPrinting] = useState(false);
 
-  // Manual Generate Dialog State
+  // Manual Generate / Register Dialog State
   const [generateDialogVisible, setGenerateDialogVisible] = useState(false);
+  const [generateMode, setGenerateMode] = useState('auto'); // 'auto' | 'manual'
   const [menuItems, setMenuItems] = useState([]);
   const [loadingMenuItems, setLoadingMenuItems] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState('');
   const [generateQty, setGenerateQty] = useState(1);
+  const [manualSerialNumber, setManualSerialNumber] = useState('');
+  const [manualSerialError, setManualSerialError] = useState('');
+  const [validatingManualSerial, setValidatingManualSerial] = useState(false);
+  const [manualSerialValid, setManualSerialValid] = useState(false);
+  const [warrantyDurationValue, setWarrantyDurationValue] = useState('');
+  const [warrantyDurationUnit, setWarrantyDurationUnit] = useState('months');
   const [generatePoInvoice, setGeneratePoInvoice] = useState('');
   const [generateSupplierName, setGenerateSupplierName] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -337,16 +344,76 @@ export default function SerialNumberSuite({ user, token }) {
     }
   };
 
-  // Generate Serial Numbers Manually
-  const handleGenerateSerials = async () => {
-    if (!selectedProductId) {
-      notify?.error('Please select a product.', 'Validation');
+  // Validate manual serial number on blur / change
+  const handleValidateManualSerial = async (serialToTest) => {
+    const val = String(serialToTest !== undefined ? serialToTest : manualSerialNumber).trim();
+    if (!val) {
+      setManualSerialError('');
+      setManualSerialValid(false);
       return;
     }
-    const qty = parseInt(generateQty, 10);
-    if (!qty || qty < 1 || qty > 500) {
-      notify?.error('Quantity must be between 1 and 500.', 'Validation');
+    if (!/^\d{8}$/.test(val)) {
+      setManualSerialError('Serial number must be exactly 8 digits (e.g. 12345678).');
+      setManualSerialValid(false);
       return;
+    }
+    setValidatingManualSerial(true);
+    try {
+      const res = await apiFetch(`/api/serial-numbers/check-availability?sn=${encodeURIComponent(val)}`);
+      const data = await res.json();
+      if (res.ok && data.available) {
+        setManualSerialError('');
+        setManualSerialValid(true);
+      } else {
+        setManualSerialError(data.error || `Serial number "${val}" already exists in the system.`);
+        setManualSerialValid(false);
+      }
+    } catch (e) {
+      setManualSerialError('Failed to verify serial number uniqueness.');
+      setManualSerialValid(false);
+    } finally {
+      setValidatingManualSerial(false);
+    }
+  };
+
+  // Generate or Register Serial Numbers Manually
+  const handleGenerateSerials = async () => {
+    if (!selectedProductId) {
+      notify?.error('Please select a target product.', 'Validation');
+      return;
+    }
+
+    const isManual = generateMode === 'manual';
+    let qty = 1;
+    let cleanManualSerial = '';
+
+    if (isManual) {
+      cleanManualSerial = String(manualSerialNumber).trim();
+      if (!cleanManualSerial) {
+        notify?.error('Please enter an 8-digit serial number.', 'Validation');
+        setManualSerialError('Please enter an 8-digit serial number.');
+        return;
+      }
+      if (!/^\d{8}$/.test(cleanManualSerial)) {
+        notify?.error('Serial number must be exactly 8 digits.', 'Validation');
+        setManualSerialError('Serial number must be exactly 8 digits.');
+        return;
+      }
+    } else {
+      qty = parseInt(generateQty, 10);
+      if (!qty || qty < 1 || qty > 500) {
+        notify?.error('Quantity must be between 1 and 500.', 'Validation');
+        return;
+      }
+    }
+
+    let parsedWarranty = null;
+    if (warrantyDurationValue && String(warrantyDurationValue).trim() !== '') {
+      parsedWarranty = parseInt(warrantyDurationValue, 10);
+      if (isNaN(parsedWarranty) || parsedWarranty <= 0) {
+        notify?.error('Warranty period must be a positive number.', 'Validation');
+        return;
+      }
     }
 
     setGenerating(true);
@@ -356,30 +423,41 @@ export default function SerialNumberSuite({ user, token }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           menu_item_id: parseInt(selectedProductId, 10),
-          quantity: qty,
+          quantity: isManual ? 1 : qty,
+          mode: isManual ? 'manual' : 'auto',
+          serial_number: isManual ? cleanManualSerial : undefined,
+          warranty_duration_value: parsedWarranty,
+          warranty_duration_unit: warrantyDurationUnit || 'months',
           purchase_invoice_number: generatePoInvoice.trim() || undefined,
           supplier_name: generateSupplierName.trim() || undefined
         })
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate serial numbers.');
+      if (!res.ok) throw new Error(data.error || 'Failed to generate / register serial numbers.');
 
-      const count = data.created_count || data.data?.quantity || data.data?.serial_numbers?.length || qty;
-      const serials = data.serial_numbers || data.data?.serial_numbers || [];
+      const count = data.created_count || data.data?.quantity || data.data?.serial_numbers?.length || (isManual ? 1 : qty);
+      const serials = data.serial_numbers || data.data?.serial_numbers || (isManual ? [cleanManualSerial] : []);
 
-      notify?.success(`Generated ${count} unique 8-digit serial numbers!`, 'Generation Successful');
+      if (isManual) {
+        notify?.success(`Serial #${cleanManualSerial} successfully registered!`, 'Registration Successful');
+      } else {
+        notify?.success(`Generated ${count} unique 8-digit serial numbers!`, 'Generation Successful');
+      }
       setGenerateDialogVisible(false);
       fetchStats();
       fetchSerials(0);
 
-      // Auto-lookup the first generated serial for quick inspection
+      // Auto-lookup the registered / generated serial for quick inspection
       if (serials && serials.length > 0) {
         setSearchInput(serials[0]);
         handleLookup(serials[0]);
       }
     } catch (err) {
-      notify?.error(err.message || 'Generation failed.', 'Error');
+      notify?.error(err.message || 'Operation failed.', 'Error');
+      if (isManual && (err.message.includes('already exists') || err.message.includes('already registered'))) {
+        setManualSerialError(err.message);
+      }
     } finally {
       setGenerating(false);
     }
@@ -434,6 +512,12 @@ export default function SerialNumberSuite({ user, token }) {
             color="primary"
             startIcon={<Plus size={18} />}
             onClick={() => {
+              setGenerateMode('auto');
+              setManualSerialNumber('');
+              setManualSerialError('');
+              setManualSerialValid(false);
+              setWarrantyDurationValue('');
+              setWarrantyDurationUnit('months');
               setGenerateDialogVisible(true);
               fetchMenuItems();
             }}
@@ -615,293 +699,415 @@ export default function SerialNumberSuite({ user, token }) {
       </Card>
 
       {/* --- LOOKUP RESULT DETAILS CARD (EXACT CRITERIA) --- */}
-      {lookupResult && (
-        <Card
-          id="serial-lookup-details-card"
-          variant="outlined"
-          sx={{
-            borderRadius: 3,
-            p: { xs: 2, sm: 3 },
-            bgcolor: 'background.paper',
-            border: '2px solid',
-            borderColor: lookupResult.is_sold ? 'primary.main' : 'success.main',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.06)'
-          }}
-        >
-          {/* Header Block: Serial Number + Status Badge + Barcode Preview */}
-          <Box sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: { xs: 'flex-start', md: 'center' },
-            flexDirection: { xs: 'column', md: 'row' },
-            gap: 2,
-            pb: 2.5,
-            borderBottom: '1px solid',
-            borderColor: 'divider'
-          }}>
-            <Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-                <Typography variant="overline" sx={{ color: 'text.secondary', fontWeight: 800, letterSpacing: '0.1em' }}>
-                  Serial Number
-                </Typography>
-                <Chip
-                  label={lookupResult.is_sold ? 'SOLD TO CUSTOMER' : 'IN STOCK (NOT SOLD)'}
-                  color={lookupResult.is_sold ? 'primary' : 'success'}
-                  sx={{ fontWeight: 800, borderRadius: 1.5, px: 1 }}
-                />
-              </Box>
+      {/* --- LOOKUP RESULT DETAILS CARD (EXACT CRITERIA) --- */}
+      {lookupResult && (() => {
+        const isDetailWarrantyExpired = Boolean(lookupResult.is_warranty_expired || lookupResult.warranty?.is_warranty_expired);
+        const hasDetailWarranty = Boolean(lookupResult.warranty_duration_value || lookupResult.warranty?.has_warranty);
+        const detailWarrantyDurationText = lookupResult.warranty_duration_text || lookupResult.warranty?.warranty_duration_text || (lookupResult.warranty_duration_value ? `${lookupResult.warranty_duration_value} ${lookupResult.warranty_duration_unit || 'months'}` : null);
+        const detailWarrantyStart = lookupResult.warranty_start_date_formatted || lookupResult.warranty?.warranty_start_date_formatted || lookupResult.sale?.date;
+        const detailWarrantyEnd = lookupResult.warranty_end_date_formatted || lookupResult.warranty?.warranty_end_date_formatted;
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
-                <Typography variant="h3" sx={{ fontWeight: 900, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'text.primary' }}>
-                  {lookupResult.serial_number}
-                </Typography>
-                <Tooltip title={copied ? 'Copied!' : 'Copy Serial Number'}>
-                  <IconButton size="small" onClick={() => copyToClipboard(lookupResult.serial_number)} sx={{ border: '1px solid', borderColor: 'divider' }}>
-                    {copied ? <Check size={16} color="#16a34a" /> : <Copy size={16} />}
-                  </IconButton>
-                </Tooltip>
-              </Box>
-
-              <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.secondary', mt: 0.5 }}>
-                {lookupResult.product?.name}
-                {lookupResult.product?.sku && (
-                  <Box component="span" sx={{ ml: 1, fontSize: '0.9rem', color: 'primary.main', fontWeight: 700 }}>
-                    (SKU: {lookupResult.product.sku})
-                  </Box>
-                )}
-              </Typography>
-            </Box>
-
-            {/* Live Barcode Rendering & Dedicated Print Action */}
+        return (
+          <Card
+            id="serial-lookup-details-card"
+            variant="outlined"
+            sx={{
+              borderRadius: 3,
+              p: { xs: 2, sm: 3 },
+              bgcolor: isDetailWarrantyExpired
+                ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.06)' : '#fffbfb'
+                : 'background.paper',
+              border: '2px solid',
+              borderColor: isDetailWarrantyExpired
+                ? '#ef4444'
+                : (lookupResult.is_sold ? 'primary.main' : 'success.main'),
+              boxShadow: isDetailWarrantyExpired
+                ? '0 10px 30px rgba(239, 68, 68, 0.15)'
+                : '0 10px 30px rgba(0,0,0,0.06)'
+            }}
+          >
+            {/* Header Block: Serial Number + Status Badge + Barcode Preview */}
             <Box sx={{
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: { xs: 'flex-start', md: 'flex-end' },
-              gap: 1.5
+              justifyContent: 'space-between',
+              alignItems: { xs: 'flex-start', md: 'center' },
+              flexDirection: { xs: 'column', md: 'row' },
+              gap: 2,
+              pb: 2.5,
+              borderBottom: '1px solid',
+              borderColor: 'divider'
             }}>
-              <Box
-                sx={{
-                  bgcolor: '#ffffff',
-                  p: 1.5,
-                  borderRadius: 2,
-                  border: '1px solid #e5e7eb',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-                  minWidth: 200,
-                  textAlign: 'center'
-                }}
-                dangerouslySetInnerHTML={{
-                  __html: generateCode128Svg(lookupResult.serial_number, {
-                    width: 1.6,
-                    height: 38,
-                    fontSize: 10,
-                    text: `SN: ${lookupResult.serial_number}`
-                  })
-                }}
-              />
-
-              <Button
-                variant="contained"
-                color="secondary"
-                size="medium"
-                startIcon={<Printer size={18} />}
-                onClick={() => handleOpenPrint(lookupResult)}
-                sx={{
-                  fontWeight: 800,
-                  borderRadius: 2,
-                  textTransform: 'none',
-                  px: 3,
-                  boxShadow: '0 4px 12px rgba(168, 85, 247, 0.25)'
-                }}
-              >
-                Serial Number Print
-              </Button>
-            </Box>
-          </Box>
-
-          {/* Traceability Grid: Manufacturer Purchase & Customer Sale */}
-          <Grid container spacing={3} sx={{ mt: 1 }}>
-
-            {/* 1. Manufacturer Purchase Card */}
-            <Grid size={{ xs: 12, md: 6 }}>
-              <Card
-                variant="outlined"
-                sx={{
-                  height: '100%',
-                  borderRadius: 2.5,
-                  bgcolor: 'rgba(59, 130, 246, 0.02)',
-                  borderColor: 'rgba(59, 130, 246, 0.25)',
-                  p: 2.5
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                  <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.12)', color: 'info.main' }}>
-                    <Truck size={20} />
-                  </Box>
-                  <Typography variant="h6" sx={{ fontWeight: 800, color: 'info.dark' }}>
-                    Purchased From Manufacturer
+              <Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                  <Typography variant="overline" sx={{ color: 'text.secondary', fontWeight: 800, letterSpacing: '0.1em' }}>
+                    Serial Number
                   </Typography>
+                  <Chip
+                    label={lookupResult.is_sold ? 'SOLD TO CUSTOMER' : 'IN STOCK (NOT SOLD)'}
+                    color={lookupResult.is_sold ? 'primary' : 'success'}
+                    sx={{ fontWeight: 800, borderRadius: 1.5, px: 1 }}
+                  />
+                  {isDetailWarrantyExpired ? (
+                    <Chip
+                      icon={<ShieldAlert size={14} />}
+                      label="WARRANTY EXPIRED"
+                      color="error"
+                      sx={{ fontWeight: 800, borderRadius: 1.5, px: 1 }}
+                    />
+                  ) : hasDetailWarranty && lookupResult.is_sold ? (
+                    <Chip
+                      icon={<ShieldCheck size={14} />}
+                      label="WARRANTY ACTIVE"
+                      color="success"
+                      sx={{ fontWeight: 800, borderRadius: 1.5, px: 1 }}
+                    />
+                  ) : hasDetailWarranty && !lookupResult.is_sold ? (
+                    <Chip
+                      icon={<Shield size={14} />}
+                      label={`WARRANTY: ${detailWarrantyDurationText}`}
+                      color="info"
+                      variant="outlined"
+                      sx={{ fontWeight: 700, borderRadius: 1.5 }}
+                    />
+                  ) : null}
                 </Box>
 
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
-                    <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                       Purchase Date:
-                    </Typography>
-                    <Typography variant="body1" sx={{ fontWeight: 800, color: 'text.primary', fontFamily: 'monospace' }}>
-                      {lookupResult.purchase?.date || 'N/A'}
-                    </Typography>
-                  </Box>
-
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
-                    <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                      Purchase Invoice:
-                    </Typography>
-                    <Typography variant="body1" sx={{ fontWeight: 800, color: 'primary.main', fontFamily: 'monospace' }}>
-                      {lookupResult.purchase?.invoice || 'N/A'}
-                    </Typography>
-                  </Box>
-
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
-                    <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                      Supplier / Manufacturer:
-                    </Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                      {lookupResult.purchase?.supplier_name || 'Direct / Stock Inward'}
-                    </Typography>
-                  </Box>
-
-                  {lookupResult.warehouse?.name && (
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
-                      <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Inward Warehouse:
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                        {lookupResult.warehouse.name}
-                      </Typography>
-                    </Box>
-                  )}
-
-                  {lookupResult.purchase?.purchase_cost > 0 && (
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 0.5 }}>
-                      <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Unit Inward Rate:
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                        Rs. {lookupResult.purchase.purchase_cost.toFixed(2)}
-                      </Typography>
-                    </Box>
-                  )}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 0.5 }}>
+                  <Typography variant="h3" sx={{ fontWeight: 900, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'text.primary' }}>
+                    {lookupResult.serial_number}
+                  </Typography>
+                  <Tooltip title={copied ? 'Copied!' : 'Copy Serial Number'}>
+                    <IconButton size="small" onClick={() => copyToClipboard(lookupResult.serial_number)} sx={{ border: '1px solid', borderColor: 'divider' }}>
+                      {copied ? <Check size={16} color="#16a34a" /> : <Copy size={16} />}
+                    </IconButton>
+                  </Tooltip>
                 </Box>
-              </Card>
-            </Grid>
 
-            {/* 2. Customer Sale Card */}
-            <Grid size={{ xs: 12, md: 6 }}>
-              <Card
-                variant="outlined"
-                sx={{
-                  height: '100%',
-                  borderRadius: 2.5,
-                  bgcolor: lookupResult.is_sold ? 'rgba(249, 115, 22, 0.02)' : 'rgba(34, 197, 94, 0.02)',
-                  borderColor: lookupResult.is_sold ? 'rgba(249, 115, 22, 0.25)' : 'rgba(34, 197, 94, 0.3)',
-                  p: 2.5
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
-                  <Box sx={{
-                    p: 1,
+                <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.secondary', mt: 0.5 }}>
+                  {lookupResult.product?.name}
+                  {lookupResult.product?.sku && (
+                    <Box component="span" sx={{ ml: 1, fontSize: '0.9rem', color: 'primary.main', fontWeight: 700 }}>
+                      (SKU: {lookupResult.product.sku})
+                    </Box>
+                  )}
+                </Typography>
+              </Box>
+
+              {/* Live Barcode Rendering & Dedicated Print Action */}
+              <Box sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: { xs: 'flex-start', md: 'flex-end' },
+                gap: 1.5
+              }}>
+                <Box
+                  sx={{
+                    bgcolor: '#ffffff',
+                    p: 1.5,
                     borderRadius: 2,
-                    bgcolor: lookupResult.is_sold ? 'rgba(249, 115, 22, 0.12)' : 'rgba(34, 197, 94, 0.12)',
-                    color: lookupResult.is_sold ? 'primary.main' : 'success.main'
-                  }}>
-                    <User size={20} />
-                  </Box>
-                  <Typography variant="h6" sx={{ fontWeight: 800, color: lookupResult.is_sold ? 'primary.dark' : 'success.dark' }}>
-                    Sold To Customer
-                  </Typography>
-                </Box>
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                    minWidth: 200,
+                    textAlign: 'center'
+                  }}
+                  dangerouslySetInnerHTML={{
+                    __html: generateCode128Svg(lookupResult.serial_number, {
+                      width: 1.6,
+                      height: 38,
+                      fontSize: 10,
+                      text: `SN: ${lookupResult.serial_number}`
+                    })
+                  }}
+                />
 
-                {lookupResult.is_sold ? (
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  size="medium"
+                  startIcon={<Printer size={18} />}
+                  onClick={() => handleOpenPrint(lookupResult)}
+                  sx={{
+                    fontWeight: 800,
+                    borderRadius: 2,
+                    textTransform: 'none',
+                    px: 3,
+                    boxShadow: '0 4px 12px rgba(168, 85, 247, 0.25)'
+                  }}
+                >
+                  Serial Number Print
+                </Button>
+              </Box>
+            </Box>
+
+            {/* Expired Warranty Highlight Banner */}
+            {isDetailWarrantyExpired && (
+              <Alert
+                severity="error"
+                icon={<ShieldAlert size={20} />}
+                sx={{
+                  mt: 2,
+                  borderRadius: 2,
+                  fontWeight: 700,
+                  bgcolor: (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.15)' : '#fef2f2',
+                  border: '1px solid #fecaca'
+                }}
+              >
+                Warranty Expired on {detailWarrantyEnd || 'N/A'} (Duration: {detailWarrantyDurationText || 'N/A'}, Sold on {lookupResult.sale?.date || 'N/A'})
+              </Alert>
+            )}
+
+            {/* Traceability Grid: Manufacturer Purchase & Customer Sale */}
+            <Grid container spacing={3} sx={{ mt: 1 }}>
+
+              {/* 1. Manufacturer Purchase Card */}
+              <Grid size={{ xs: 12, md: 6 }}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    height: '100%',
+                    borderRadius: 2.5,
+                    bgcolor: 'rgba(59, 130, 246, 0.02)',
+                    borderColor: 'rgba(59, 130, 246, 0.25)',
+                    p: 2.5
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+                    <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.12)', color: 'info.main' }}>
+                      <Truck size={20} />
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 800, color: 'info.dark' }}>
+                      Purchased From Manufacturer
+                    </Typography>
+                  </Box>
+
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Customer Sale Date:
+                        Purchase Date:
                       </Typography>
                       <Typography variant="body1" sx={{ fontWeight: 800, color: 'text.primary', fontFamily: 'monospace' }}>
-                        {lookupResult.sale?.date || 'N/A'}
+                        {lookupResult.purchase?.date || 'N/A'}
                       </Typography>
                     </Box>
 
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Sales Invoice:
+                        Purchase Invoice:
                       </Typography>
                       <Typography variant="body1" sx={{ fontWeight: 800, color: 'primary.main', fontFamily: 'monospace' }}>
-                        {lookupResult.sale?.invoice || 'N/A'}
+                        {lookupResult.purchase?.invoice || 'N/A'}
                       </Typography>
                     </Box>
 
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
                       <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Customer Name:
+                        Supplier / Manufacturer:
                       </Typography>
                       <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
-                        {lookupResult.sale?.customer_name || 'Walk-in Customer'}
-                        {lookupResult.sale?.customer_phone && ` (${lookupResult.sale.customer_phone})`}
+                        {lookupResult.purchase?.supplier_name || 'Direct / Stock Inward'}
                       </Typography>
                     </Box>
 
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
-                      <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Payment Mode:
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
-                        {lookupResult.sale?.payment_mode || 'Cash'}
-                      </Typography>
-                    </Box>
+                    {lookupResult.warehouse?.name && (
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Inward Warehouse:
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                          {lookupResult.warehouse.name}
+                        </Typography>
+                      </Box>
+                    )}
 
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 0.5 }}>
-                      <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                        Billed Price:
-                      </Typography>
-                      <Typography variant="body1" sx={{ fontWeight: 800, color: 'success.dark' }}>
-                        Rs. {(lookupResult.sale?.sale_price || lookupResult.product?.selling_price || 0).toFixed(2)}
-                      </Typography>
+                    {lookupResult.purchase?.purchase_cost > 0 && (
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 0.5 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Unit Inward Rate:
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                          Rs. {lookupResult.purchase.purchase_cost.toFixed(2)}
+                        </Typography>
+                      </Box>
+                    )}
+                  </Box>
+                </Card>
+              </Grid>
+
+              {/* 2. Customer Sale Card */}
+              <Grid size={{ xs: 12, md: 6 }}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    height: '100%',
+                    borderRadius: 2.5,
+                    bgcolor: isDetailWarrantyExpired
+                      ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.08)' : 'rgba(254, 226, 226, 0.45)'
+                      : (lookupResult.is_sold ? 'rgba(249, 115, 22, 0.02)' : 'rgba(34, 197, 94, 0.02)'),
+                    borderColor: isDetailWarrantyExpired
+                      ? 'rgba(239, 68, 68, 0.4)'
+                      : (lookupResult.is_sold ? 'rgba(249, 115, 22, 0.25)' : 'rgba(34, 197, 94, 0.3)'),
+                    p: 2.5
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+                    <Box sx={{
+                      p: 1,
+                      borderRadius: 2,
+                      bgcolor: isDetailWarrantyExpired
+                        ? 'rgba(239, 68, 68, 0.15)'
+                        : (lookupResult.is_sold ? 'rgba(249, 115, 22, 0.12)' : 'rgba(34, 197, 94, 0.12)'),
+                      color: isDetailWarrantyExpired
+                        ? 'error.main'
+                        : (lookupResult.is_sold ? 'primary.main' : 'success.main')
+                    }}>
+                      <User size={20} />
                     </Box>
-                  </Box>
-                ) : (
-                  /* Prominently Styled 'Not Sold' Section */
-                  <Box sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    py: 3,
-                    textAlign: 'center',
-                    bgcolor: 'rgba(34, 197, 94, 0.04)',
-                    borderRadius: 2,
-                    border: '1.5px dashed rgba(34, 197, 94, 0.4)'
-                  }}>
-                    <CheckCircle2 size={40} color="#16a34a" />
-                    <Typography variant="h5" sx={{ fontWeight: 900, color: 'success.main', mt: 1, letterSpacing: '0.02em' }}>
-                      Not Sold
+                    <Typography variant="h6" sx={{ fontWeight: 800, color: isDetailWarrantyExpired ? 'error.dark' : (lookupResult.is_sold ? 'primary.dark' : 'success.dark') }}>
+                      Sold To Customer
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 360 }}>
-                      This product unit is currently in stock, active in inventory, and available for retail POS billing.
-                    </Typography>
-                    <Chip
-                      label="Available for Checkout"
-                      color="success"
-                      size="small"
-                      sx={{ mt: 1.5, fontWeight: 700 }}
-                    />
                   </Box>
-                )}
-              </Card>
+
+                  {lookupResult.is_sold ? (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Customer Sale Date:
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 800, color: 'text.primary', fontFamily: 'monospace' }}>
+                          {lookupResult.sale?.date || 'N/A'}
+                        </Typography>
+                      </Box>
+
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Sales Invoice:
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 800, color: 'primary.main', fontFamily: 'monospace' }}>
+                          {lookupResult.sale?.invoice || 'N/A'}
+                        </Typography>
+                      </Box>
+
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Customer Name:
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                          {lookupResult.sale?.customer_name || 'Walk-in Customer'}
+                          {lookupResult.sale?.customer_phone && ` (${lookupResult.sale.customer_phone})`}
+                        </Typography>
+                      </Box>
+
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Payment Mode:
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>
+                          {lookupResult.sale?.payment_mode || 'Cash'}
+                        </Typography>
+                      </Box>
+
+                      {/* Warranty Details in Customer Sale block */}
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Warranty Coverage:
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 800, color: hasDetailWarranty ? 'text.primary' : 'text.secondary' }}>
+                          {hasDetailWarranty ? detailWarrantyDurationText : 'No Warranty'}
+                        </Typography>
+                      </Box>
+
+                      {hasDetailWarranty && (
+                        <>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                            <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                              Warranty Start Date:
+                            </Typography>
+                            <Typography variant="body1" sx={{ fontWeight: 800, color: 'text.primary', fontFamily: 'monospace' }}>
+                              {detailWarrantyStart || lookupResult.sale?.date || 'N/A'}
+                            </Typography>
+                          </Box>
+
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed', borderColor: 'divider', pb: 1 }}>
+                            <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                              Warranty End Date:
+                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Typography variant="body1" sx={{ fontWeight: 800, color: isDetailWarrantyExpired ? 'error.main' : 'text.primary', fontFamily: 'monospace' }}>
+                                {detailWarrantyEnd || 'N/A'}
+                              </Typography>
+                              {isDetailWarrantyExpired ? (
+                                <Chip label="Expired" color="error" size="small" sx={{ height: 20, fontSize: '0.7rem', fontWeight: 800 }} />
+                              ) : (
+                                <Chip label="Active" color="success" size="small" sx={{ height: 20, fontSize: '0.7rem', fontWeight: 800 }} />
+                              )}
+                            </Box>
+                          </Box>
+                        </>
+                      )}
+
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 0.5 }}>
+                        <Typography variant="body2" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                          Billed Price:
+                        </Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 800, color: 'success.dark' }}>
+                          Rs. {(lookupResult.sale?.sale_price || lookupResult.product?.selling_price || 0).toFixed(2)}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  ) : (
+                    /* Prominently Styled 'Not Sold' Section */
+                    <Box sx={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      py: 3,
+                      textAlign: 'center',
+                      bgcolor: 'rgba(34, 197, 94, 0.04)',
+                      borderRadius: 2,
+                      border: '1.5px dashed rgba(34, 197, 94, 0.4)'
+                    }}>
+                      <CheckCircle2 size={40} color="#16a34a" />
+                      <Typography variant="h5" sx={{ fontWeight: 900, color: 'success.main', mt: 1, letterSpacing: '0.02em' }}>
+                        Not Sold
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 360 }}>
+                        This product unit is currently in stock, active in inventory, and available for retail POS billing.
+                      </Typography>
+                      <Chip
+                        label="Available for Checkout"
+                        color="success"
+                        size="small"
+                        sx={{ mt: 1.5, fontWeight: 700 }}
+                      />
+
+                      {hasDetailWarranty && (
+                        <Box sx={{
+                          mt: 2,
+                          p: 1.5,
+                          borderRadius: 2,
+                          bgcolor: 'rgba(59, 130, 246, 0.08)',
+                          border: '1px dashed rgba(59, 130, 246, 0.3)',
+                          width: '100%',
+                          maxWidth: 360,
+                          textAlign: 'left'
+                        }}>
+                          <Typography variant="caption" sx={{ fontWeight: 700, color: 'info.main', display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                            <ShieldCheck size={15} /> Warranty Configured: {detailWarrantyDurationText}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }}>
+                            Clock has not started. Warranty will commence on customer sale date upon POS billing.
+                          </Typography>
+                        </Box>
+                      )}
+                    </Box>
+                  )}
+                </Card>
+              </Grid>
             </Grid>
-          </Grid>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
 
       {/* --- MASTER SERIAL NUMBERS AUDIT TABLE --- */}
       <Card variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden', bgcolor: 'background.paper' }}>
@@ -1071,20 +1277,22 @@ export default function SerialNumberSuite({ user, token }) {
                 <TableCell>Sale Date</TableCell>
                 <TableCell>Sales Invoice</TableCell>
                 <TableCell>Current Status</TableCell>
+                <TableCell>Warranty Start</TableCell>
+                <TableCell>Warranty End</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loadingList ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 6 }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 6 }}>
                     <CircularProgress size={32} />
                     <Typography variant="body2" sx={{ mt: 1, color: 'text.secondary' }}>Loading serial inventory...</Typography>
                   </TableCell>
                 </TableRow>
               ) : serialsList.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} align="center" sx={{ py: 6, color: 'text.secondary' }}>
+                  <TableCell colSpan={11} align="center" sx={{ py: 6, color: 'text.secondary' }}>
                     <Tag size={36} color="#9ca3af" />
                     <Typography variant="body1" sx={{ mt: 1, fontWeight: 700 }}>No serial numbers found</Typography>
                     <Typography variant="caption">Receive stock via Purchase Bills / GRN or click "Generate Serials" above.</Typography>
@@ -1093,8 +1301,26 @@ export default function SerialNumberSuite({ user, token }) {
               ) : (
                 serialsList.map((row) => {
                   const isSold = row.status === 'sold' || Boolean(row.order_id);
+                  const hasWarranty = Boolean(row.warranty_duration_value || row.warranty?.has_warranty);
+                  const isWarrantyExpired = Boolean(row.is_warranty_expired || row.warranty?.is_warranty_expired);
+
                   return (
-                    <TableRow key={row.id} hover sx={{ '&:last-child td, &:last-child th': { border: 0 } }}>
+                    <TableRow
+                      key={row.id}
+                      hover
+                      sx={{
+                        '&:last-child td, &:last-child th': { border: 0 },
+                        bgcolor: isWarrantyExpired
+                          ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(254, 226, 226, 0.45)'
+                          : 'inherit',
+                        borderLeft: isWarrantyExpired ? '4px solid #ef4444' : 'none',
+                        '&:hover': {
+                          bgcolor: isWarrantyExpired
+                            ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.20)' : 'rgba(254, 226, 226, 0.70)'
+                            : undefined
+                        }
+                      }}
+                    >
                       <TableCell sx={{ fontFamily: 'monospace', fontWeight: 800, color: 'primary.main', fontSize: '0.95rem' }}>
                         {row.serial_number}
                       </TableCell>
@@ -1123,6 +1349,50 @@ export default function SerialNumberSuite({ user, token }) {
                           size="small"
                           sx={{ fontWeight: 700, borderRadius: 1 }}
                         />
+                      </TableCell>
+                      <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                        {!hasWarranty ? (
+                          <Typography variant="body2" sx={{ color: 'text.disabled' }}>—</Typography>
+                        ) : !isSold ? (
+                          <Chip
+                            label="Not Started"
+                            size="small"
+                            variant="outlined"
+                            sx={{ height: 22, fontSize: '0.7rem', fontWeight: 600, color: 'text.secondary', borderColor: 'divider' }}
+                          />
+                        ) : (
+                          row.warranty_start_date_formatted || row.warranty_start_date || row.sale_date_formatted || row.sale_date || '—'
+                        )}
+                      </TableCell>
+                      <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                        {!hasWarranty ? (
+                          <Typography variant="body2" sx={{ color: 'text.disabled' }}>—</Typography>
+                        ) : !isSold ? (
+                          <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                            {row.warranty_duration_text || `${row.warranty_duration_value} ${row.warranty_duration_unit || 'mo'}`} (On Sale)
+                          </Typography>
+                        ) : (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                            <Box component="span" sx={{ fontWeight: isWarrantyExpired ? 700 : 500, color: isWarrantyExpired ? 'error.main' : 'inherit' }}>
+                              {row.warranty_end_date_formatted || row.warranty_end_date || '—'}
+                            </Box>
+                            {isWarrantyExpired ? (
+                              <Chip
+                                label="Expired"
+                                size="small"
+                                color="error"
+                                sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, px: 0.5 }}
+                              />
+                            ) : (
+                              <Chip
+                                label="Active"
+                                size="small"
+                                color="success"
+                                sx={{ height: 18, fontSize: '0.65rem', fontWeight: 800, px: 0.5 }}
+                              />
+                            )}
+                          </Box>
+                        )}
                       </TableCell>
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                         <Tooltip title="View Complete Traceability">
@@ -1478,16 +1748,150 @@ export default function SerialNumberSuite({ user, token }) {
             );
           })()}
 
-          <TextField
-            fullWidth
-            size="small"
-            type="number"
-            label="Quantity of Serial Numbers to Generate *"
-            value={generateQty}
-            onChange={(e) => setGenerateQty(e.target.value)}
-            slotProps={{ htmlInput: { min: 1, max: 500 } }}
-            helperText="1 unit = 1 unique 8-digit serial number"
-          />
+          {/* Alternate Mode Toggle: Auto-Generate vs Enter Manually */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>
+              Entry Mode
+            </Typography>
+            <ToggleButtonGroup
+              value={generateMode}
+              exclusive
+              onChange={(e, val) => {
+                if (val) {
+                  setGenerateMode(val);
+                  setManualSerialError('');
+                }
+              }}
+              size="small"
+              fullWidth
+              sx={{ bgcolor: 'action.hover', p: 0.5, borderRadius: 2 }}
+            >
+              <ToggleButton
+                value="auto"
+                sx={{
+                  fontWeight: 700,
+                  textTransform: 'none',
+                  borderRadius: 1.5,
+                  gap: 1,
+                  '&.Mui-selected': { bgcolor: 'primary.main', color: '#fff', '&:hover': { bgcolor: 'primary.dark' } }
+                }}
+              >
+                <Sparkles size={16} />
+                Auto-Generate
+              </ToggleButton>
+              <ToggleButton
+                value="manual"
+                sx={{
+                  fontWeight: 700,
+                  textTransform: 'none',
+                  borderRadius: 1.5,
+                  gap: 1,
+                  '&.Mui-selected': { bgcolor: 'primary.main', color: '#fff', '&:hover': { bgcolor: 'primary.dark' } }
+                }}
+              >
+                <Tag size={16} />
+                Enter Manually
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+
+          {/* Mode-specific Input */}
+          {generateMode === 'auto' ? (
+            <TextField
+              fullWidth
+              size="small"
+              type="number"
+              label="Quantity of Serial Numbers to Generate *"
+              value={generateQty}
+              onChange={(e) => setGenerateQty(e.target.value)}
+              slotProps={{ htmlInput: { min: 1, max: 500 } }}
+              helperText="1 unit = 1 unique 8-digit serial number"
+            />
+          ) : (
+            <TextField
+              fullWidth
+              size="small"
+              label="Serial Number (8 Digits) *"
+              placeholder="e.g. 96106332 (Pre-printed on product)"
+              value={manualSerialNumber}
+              onChange={(e) => {
+                const clean = e.target.value.replace(/\D/g, '').slice(0, 8);
+                setManualSerialNumber(clean);
+                if (clean.length === 8) {
+                  handleValidateManualSerial(clean);
+                } else if (clean.length > 0) {
+                  setManualSerialError('Serial number must be exactly 8 digits.');
+                  setManualSerialValid(false);
+                } else {
+                  setManualSerialError('');
+                  setManualSerialValid(false);
+                }
+              }}
+              onBlur={() => {
+                if (manualSerialNumber.length > 0) {
+                  handleValidateManualSerial(manualSerialNumber);
+                }
+              }}
+              error={Boolean(manualSerialError)}
+              helperText={
+                manualSerialError || (manualSerialValid
+                  ? '✅ Valid and unique 8-digit serial number ready for registration'
+                  : 'Enter the exact 8-digit serial number printed on the product or packaging')
+              }
+              slotProps={{
+                input: {
+                  endAdornment: validatingManualSerial ? (
+                    <InputAdornment position="end">
+                      <CircularProgress size={16} />
+                    </InputAdornment>
+                  ) : manualSerialValid ? (
+                    <InputAdornment position="end">
+                      <CheckCircle2 size={18} color="#16a34a" />
+                    </InputAdornment>
+                  ) : null,
+                  sx: { fontFamily: 'monospace', fontWeight: 700, letterSpacing: '0.05em' }
+                }
+              }}
+            />
+          )}
+
+          {/* Warranty Duration Field (Optional) */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ShieldCheck size={16} color="#0284c7" />
+              <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>
+                Warranty Period (Optional)
+              </Typography>
+            </Box>
+            <Grid container spacing={1.5}>
+              <Grid size={{ xs: 7, sm: 8 }}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  type="number"
+                  label="Warranty Duration"
+                  placeholder="e.g. 12 or 1"
+                  value={warrantyDurationValue}
+                  onChange={(e) => setWarrantyDurationValue(e.target.value)}
+                  slotProps={{ htmlInput: { min: 1, max: 120 } }}
+                  helperText="Leave blank for no warranty. Clock starts upon customer sale date."
+                />
+              </Grid>
+              <Grid size={{ xs: 5, sm: 4 }}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Unit</InputLabel>
+                  <Select
+                    value={warrantyDurationUnit}
+                    label="Unit"
+                    onChange={(e) => setWarrantyDurationUnit(e.target.value)}
+                  >
+                    <MenuItem value="months">Months</MenuItem>
+                    <MenuItem value="years">Years</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+          </Box>
 
           <TextField
             fullWidth
@@ -1515,11 +1919,25 @@ export default function SerialNumberSuite({ user, token }) {
             variant="contained"
             color="primary"
             onClick={handleGenerateSerials}
-            disabled={generating || !selectedProductId}
-            startIcon={generating ? <CircularProgress size={18} color="inherit" /> : <Sparkles size={18} />}
+            disabled={
+              generating ||
+              !selectedProductId ||
+              (generateMode === 'manual' && (!manualSerialNumber || manualSerialNumber.length !== 8 || Boolean(manualSerialError)))
+            }
+            startIcon={
+              generating ? (
+                <CircularProgress size={18} color="inherit" />
+              ) : generateMode === 'manual' ? (
+                <Tag size={18} />
+              ) : (
+                <Sparkles size={18} />
+              )
+            }
             sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2, px: 3 }}
           >
-            {generating ? 'Generating...' : 'Generate 8-Digit Serials'}
+            {generating
+              ? generateMode === 'manual' ? 'Registering...' : 'Generating...'
+              : generateMode === 'manual' ? 'Register Serial Number' : 'Generate 8-Digit Serials'}
           </Button>
         </DialogActions>
       </Dialog>

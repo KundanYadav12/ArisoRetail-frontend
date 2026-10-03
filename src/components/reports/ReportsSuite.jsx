@@ -1324,47 +1324,47 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Returns</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>
-                      -₹{reportData.summary.returns.toFixed(2)}
+                      -₹{(parseFloat(reportData.summary.returns || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
                 {reportData.summary.netSales !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Net Revenue</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>₹{reportData.summary.netSales.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>₹{(parseFloat(reportData.summary.netSales || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {(reportData.summary.gst !== undefined || reportData.summary.gstCollected !== undefined) && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>GST / Tax</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'info.main' }}>
-                      +₹{((reportData.summary.gst ?? reportData.summary.gstCollected) || 0).toFixed(2)}
+                      +₹{((parseFloat(reportData.summary.gst ?? reportData.summary.gstCollected) || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
                 {reportData.summary.grandTotal !== undefined && (
                   <Grid item xs={6} sm={4} md={1.8}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Grand Total</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.grandTotal.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{(parseFloat(reportData.summary.grandTotal || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalStockValue !== undefined && (
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Stock Value</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.totalStockValue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{(parseFloat(reportData.summary.totalStockValue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.netGstPayable !== undefined && (
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Net GST Payable</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.netGstPayable.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{(parseFloat(reportData.summary.netGstPayable || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.grossProfit !== undefined && (
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Gross Profit</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.grossProfit >= 0 ? 'success.main' : 'error.main' }}>
-                      ₹{reportData.summary.grossProfit.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.grossProfit || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
@@ -1372,7 +1372,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Net Profit</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.netProfit >= 0 ? 'success.main' : 'error.main' }}>
-                      ₹{reportData.summary.netProfit.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.netProfit || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
@@ -1380,7 +1380,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Assets</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>
-                      ₹{reportData.summary.totalAssets.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.totalAssets || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
@@ -1388,7 +1388,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Total Liabilities</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'info.main' }}>
-                      ₹{reportData.summary.totalLiabilities.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.totalLiabilities || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
@@ -1396,7 +1396,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={2}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Closing Cash/Bank</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>
-                      ₹{reportData.summary.closingBalance.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.closingBalance || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
@@ -1491,13 +1491,13 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                 {reportData.summary.totalEstimatedCost !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Estimated Cost</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.totalEstimatedCost.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{(parseFloat(reportData.summary.totalEstimatedCost || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalReorderValue !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reorder Value</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{reportData.summary.totalReorderValue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{(parseFloat(reportData.summary.totalReorderValue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalStockShortfall !== undefined && (
@@ -1523,7 +1523,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                 {reportData.summary.totalDeficitValue !== undefined && reportData.summary.totalDeficitValue !== 0 && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Deficit Value</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>₹{reportData.summary.totalDeficitValue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'error.main' }}>₹{(parseFloat(reportData.summary.totalDeficitValue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalLots !== undefined && (
@@ -1541,7 +1541,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                 {reportData.summary.totalLotAssetValue !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Lot Asset Value</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{reportData.summary.totalLotAssetValue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'primary.main' }}>₹{(parseFloat(reportData.summary.totalLotAssetValue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalBatches !== undefined && (
@@ -1567,7 +1567,7 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                 {reportData.summary.totalReservedValue !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Reserved Value</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{reportData.summary.totalReservedValue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'warning.main' }}>₹{(parseFloat(reportData.summary.totalReservedValue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalAvailableStock !== undefined && (
@@ -1612,20 +1612,20 @@ export default function ReportsSuite({ onOpenOrderDetail = null }) {
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Variance Amount</Typography>
                     <Typography variant="h6" sx={{ fontWeight: 900, color: reportData.summary.totalVarianceAmount !== 0 ? 'warning.main' : 'success.main' }}>
-                      ₹{reportData.summary.totalVarianceAmount.toFixed(2)}
+                      ₹{(parseFloat(reportData.summary.totalVarianceAmount || 0)).toFixed(2)}
                     </Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalPurchaseCost !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Purchase Cost</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900 }}>₹{reportData.summary.totalPurchaseCost.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900 }}>₹{(parseFloat(reportData.summary.totalPurchaseCost || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalSalesRevenue !== undefined && (
                   <Grid item xs={6} sm={4} md={1.7}>
                     <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: 'uppercase' }}>Sales Revenue</Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>₹{reportData.summary.totalSalesRevenue.toFixed(2)}</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 900, color: 'success.main' }}>₹{(parseFloat(reportData.summary.totalSalesRevenue || 0)).toFixed(2)}</Typography>
                   </Grid>
                 )}
                 {reportData.summary.totalCatalogItems !== undefined && (

@@ -80,7 +80,13 @@ export default function SalesOrderModal({
   const [placeOfSupply, setPlaceOfSupply] = useState('27-Maharashtra');
   const [salesBy, setSalesBy] = useState('');
   const [salesByName, setSalesByName] = useState('');
-  const [priceList, setPriceList] = useState('standard');
+  const [priceList, setPriceList] = useState(() => {
+    try {
+      return localStorage.getItem('ariso_pricing_mode') === 'wholesale' ? 'wholesale' : 'standard';
+    } catch {
+      return 'standard';
+    }
+  });
   const [referenceNumber, setReferenceNumber] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -222,7 +228,11 @@ export default function SalesOrderModal({
     setPlaceOfSupply('27-Maharashtra');
     setSalesBy('');
     setSalesByName('');
-    setPriceList('standard');
+    try {
+      setPriceList(localStorage.getItem('ariso_pricing_mode') === 'wholesale' ? 'wholesale' : 'standard');
+    } catch {
+      setPriceList('standard');
+    }
     setReferenceNumber('');
     setNotes('');
     setSelectedParty(null);
@@ -407,13 +417,36 @@ export default function SalesOrderModal({
     });
   };
 
+  const handlePriceListChange = (newPriceList) => {
+    setPriceList(newPriceList);
+    // Reprice existing rows in table based on the newly selected price list
+    setItems((prevItems) => {
+      return prevItems.map((row) => {
+        if (!row.menu_item_id) return row;
+        const product = internalMenuItems.find((p) => p.id === row.menu_item_id);
+        if (!product) return row;
+        const isWholesale = newPriceList === 'wholesale';
+        const newPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+          ? parseFloat(product.wholesale_price)
+          : parseFloat(product.price !== undefined ? product.price : (product.selling_price || product.unit_price || 0));
+        return {
+          ...row,
+          price: isNaN(newPrice) ? 0 : newPrice
+        };
+      });
+    });
+  };
+
   const handleProductSelect = (index, product) => {
     setItems(prev => {
       const updated = [...prev];
       if (product) {
         const cat = internalCategories.find(c => c.id === product.category_id);
         const isWeight = product.is_weight_based === 1 || product.unit === 'KG' || product.unit === 'GM' || product.unit === 'kg';
-        const parsedPrice = parseFloat(product.price !== undefined ? product.price : (product.selling_price || product.unit_price || 0));
+        const isWholesale = priceList === 'wholesale';
+        const parsedPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+          ? parseFloat(product.wholesale_price)
+          : parseFloat(product.price !== undefined ? product.price : (product.selling_price || product.unit_price || 0));
         const parsedGst = parseFloat(product.gst_rate !== undefined ? product.gst_rate : (product.tax_rate || 0));
         updated[index] = {
           ...updated[index],
@@ -942,7 +975,7 @@ export default function SalesOrderModal({
                   <Select
                     value={priceList}
                     label="Price List"
-                    onChange={e => setPriceList(e.target.value)}
+                    onChange={e => handlePriceListChange(e.target.value)}
                   >
                     <MenuItem value="standard">Standard Retail</MenuItem>
                     <MenuItem value="wholesale">Wholesale</MenuItem>
