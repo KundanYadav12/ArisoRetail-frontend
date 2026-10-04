@@ -577,12 +577,14 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [menuVeg, setMenuVeg] = useState('1');
   const [menuSpicy, setMenuSpicy] = useState('0');
   const [menuAvailable, setMenuAvailable] = useState('1');
+  const [menuBarcode, setMenuBarcode] = useState('');
   const [menuSku, setMenuSku] = useState('');
   const [menuDesc, setMenuDesc] = useState('');
   const [menuImageUrl, setMenuImageUrl] = useState('');
   const [menuImageFile, setMenuImageFile] = useState(null);
   const [menuPrinterId, setMenuPrinterId] = useState('');
   const [menuIsWeightBased, setMenuIsWeightBased] = useState(false);
+  const [menuPosUnitType, setMenuPosUnitType] = useState('PCS'); // 'PCS' | 'WEIGHT' | 'SERIAL'
   const [menuUnit, setMenuUnit] = useState('pcs');
   const [menuBarcodeImageUrl, setMenuBarcodeImageUrl] = useState('');
 
@@ -618,7 +620,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [barcodeScanModalOpen, setBarcodeScanModalOpen] = useState(false);
   const [barcodeScanStream, setBarcodeScanStream] = useState(null);
   const [barcodeScanError, setBarcodeScanError] = useState('');
-  const [barcodeSkuDuplicate, setBarcodeSkuDuplicate] = useState(null); // { name, id } if duplicate
+  const [barcodeDuplicate, setBarcodeDuplicate] = useState(null); // { name, id } if duplicate
   const [barcodeCheckTimer, setBarcodeCheckTimer] = useState(null);
   const barcodeScanVideoRef = React.useRef(null);
   const barcodeScanCanvasRef = React.useRef(null);
@@ -1194,6 +1196,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
       const q = debouncedSearch.toLowerCase().trim();
       result = result.filter(item => 
         (item.name && item.name.toLowerCase().includes(q)) || 
+        (item.barcode && item.barcode.toLowerCase().includes(q)) ||
         (item.sku && item.sku.toLowerCase().includes(q)) ||
         (item.description && item.description.toLowerCase().includes(q))
       );
@@ -2066,16 +2069,18 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuVeg('1');
     setMenuSpicy('0');
     setMenuAvailable('1');
+    setMenuBarcode('');
     setMenuSku('');
     setMenuDesc('');
     setMenuImageUrl('');
     setMenuImageFile(null);
     setMenuPrinterId('');
     setMenuGst('5');
+    setMenuPosUnitType('PCS');
     setMenuIsWeightBased(false);
     setMenuUnit('pcs');
     setMenuBarcodeImageUrl('');
-    setBarcodeSkuDuplicate(null);
+    setBarcodeDuplicate(null);
 
     // Reset Petpooja additions
     setMenuGoodsOrService('Goods');
@@ -2117,6 +2122,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuVeg(item.is_veg !== undefined ? item.is_veg.toString() : '1');
     setMenuSpicy(item.spicy_level !== undefined ? item.spicy_level.toString() : '0');
     setMenuAvailable(item.is_available !== undefined ? item.is_available.toString() : '1');
+    setMenuBarcode(item.barcode || '');
     setMenuSku(item.sku || '');
     setMenuDesc(item.description || '');
     setMenuImageUrl(item.image_url || '');
@@ -2124,21 +2130,36 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuPrinterId(item.printer_id ? item.printer_id.toString() : '');
     setMenuGst(item.gst_rate !== undefined && item.gst_rate !== null ? Math.round(parseFloat(item.gst_rate)).toString() : '5');
 
-    // Strict Item Type resolution
-    let isWeight = false;
-    const it = item.item_type || item.itemType;
-    if (it) {
-      const s = String(it).toUpperCase().trim();
-      if (s === 'PCS' || s === 'COUNT' || s === 'PIECE') isWeight = false;
-      else if (s === 'WEIGHT' || s === 'KG' || s === 'GRAM') isWeight = true;
-    } else if (item.is_weight_based !== undefined && item.is_weight_based !== null) {
-      const rawIwb = item.is_weight_based;
-      if (rawIwb === 0 || rawIwb === false || rawIwb === '0' || rawIwb === 'false') isWeight = false;
-      else if (rawIwb === 1 || rawIwb === true || rawIwb === '1' || rawIwb === 'true') isWeight = true;
+    // Strict Item Type & POS Unit Type resolution
+    let resolvedUnitType = 'PCS';
+    if (item.pos_unit_type) {
+      const p = String(item.pos_unit_type).toUpperCase().trim();
+      if (p === 'SERIAL' || p === 'SERIAL NUMBER' || p === 'SERIALIZED') resolvedUnitType = 'SERIAL';
+      else if (p === 'WEIGHT') resolvedUnitType = 'WEIGHT';
+      else resolvedUnitType = 'PCS';
     } else {
-      const storedUnit = (item.unit || item.base_unit || '').toLowerCase();
-      isWeight = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(storedUnit);
+      const it = String(item.item_type || item.itemType || '').toUpperCase().trim();
+      if (it === 'SERIAL' || it === 'SERIAL NUMBER' || it === 'SERIALIZED') {
+        resolvedUnitType = 'SERIAL';
+      } else if (it === 'WEIGHT' || item.is_weight_based === 1 || item.is_weight_based === true || item.is_weight_based === '1') {
+        resolvedUnitType = 'WEIGHT';
+      } else if (item.is_serial_tracked === 1 || item.is_serial_tracked === true || item.is_serial_tracked === '1') {
+        if (item.sku === '122' || item.barcode === '122' || (item.name && item.name.toLowerCase().includes('hdmi'))) {
+          resolvedUnitType = 'SERIAL';
+        } else {
+          resolvedUnitType = 'PCS';
+        }
+      } else {
+        const storedUnit = (item.unit || item.base_unit || '').toLowerCase();
+        if (['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(storedUnit)) {
+          resolvedUnitType = 'WEIGHT';
+        } else {
+          resolvedUnitType = 'PCS';
+        }
+      }
     }
+    const isWeight = resolvedUnitType === 'WEIGHT';
+    setMenuPosUnitType(resolvedUnitType);
     setMenuIsWeightBased(isWeight);
 
     const WEIGHT_UNITS = ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'];
@@ -2150,7 +2171,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuUnit(resolvedUnit);
 
     setMenuBarcodeImageUrl(item.barcode_image_url || '');
-    setBarcodeSkuDuplicate(null);
+    setBarcodeDuplicate(null);
 
     // Populate Petpooja additions
     setMenuGoodsOrService(item.goods_or_service || 'Goods');
@@ -2228,11 +2249,14 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     formData.append('is_veg', menuVeg);
     formData.append('spicy_level', menuSpicy);
     formData.append('is_available', menuAvailable);
-    formData.append('sku', menuSku);
+    formData.append('barcode', menuBarcode ? menuBarcode.trim() : '');
+    formData.append('sku', menuSku ? menuSku.trim() : '');
     formData.append('description', menuDesc);
     formData.append('is_weight_based', isWeightFinal ? '1' : '0');
-    formData.append('item_type', isWeightFinal ? 'WEIGHT' : 'PCS');
-    formData.append('itemType', isWeightFinal ? 'WEIGHT' : 'PCS');
+    formData.append('pos_unit_type', menuPosUnitType);
+    formData.append('is_serial_tracked', menuPosUnitType === 'SERIAL' ? '1' : '0');
+    formData.append('item_type', menuPosUnitType);
+    formData.append('itemType', menuPosUnitType);
     formData.append('unit', unitFinal);
     formData.append('base_unit', unitFinal);
     if (menuPrinterId) formData.append('printer_id', menuPrinterId);
@@ -3067,6 +3091,11 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                                   {item.item_code && (
                                     <Typography variant="caption" sx={{ bgcolor: '#f1f5f9', px: 0.75, py: 0.1, borderRadius: 1, fontWeight: 700, fontSize: '10px', color: '#475569' }}>
                                       Code: {item.item_code}
+                                    </Typography>
+                                  )}
+                                  {item.barcode && (
+                                    <Typography variant="caption" sx={{ bgcolor: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', px: 0.75, py: 0.1, borderRadius: 1, fontWeight: 700, fontSize: '10px' }}>
+                                      Barcode: {item.barcode}
                                     </Typography>
                                   )}
                                   {item.sku && (
@@ -6988,35 +7017,35 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         />
                       </Grid>
 
-                      {/* Barcode / SKU */}
-                      <Grid size={{ xs: 12, sm: 8 }}>
+                      {/* Barcode (Scan Target) */}
+                      <Grid size={{ xs: 12, sm: 6 }}>
                         <Box sx={{ position: 'relative' }}>
                           <TextField
-                            label="Barcode / SKU"
+                            label="Barcode (Scan Target)"
                             size="small"
                             fullWidth
-                            value={menuSku}
+                            value={menuBarcode}
                             onChange={e => {
                               const val = e.target.value;
-                              setMenuSku(val);
-                              setBarcodeSkuDuplicate(null);
+                              setMenuBarcode(val);
+                              setBarcodeDuplicate(null);
                               if (barcodeCheckTimer) clearTimeout(barcodeCheckTimer);
                               if (val.trim()) {
                                 const t = setTimeout(async () => {
                                   try {
                                     const excludeId = dialogType === 'edit_menu' && selectedEntity?.id ? selectedEntity.id : undefined;
-                                    const qp = excludeId ? `?sku=${encodeURIComponent(val)}&exclude_id=${excludeId}` : `?sku=${encodeURIComponent(val)}`;
+                                    const qp = excludeId ? `?barcode=${encodeURIComponent(val)}&exclude_id=${excludeId}` : `?barcode=${encodeURIComponent(val)}`;
                                     const r = await apiFetch(`/api/menu/check-barcode${qp}`);
                                     const d = await r.json();
-                                    if (d.duplicate) setBarcodeSkuDuplicate(d.existing_item);
+                                    if (d.duplicate) setBarcodeDuplicate(d.existing_item);
                                   } catch (_) {}
                                 }, 600);
                                 setBarcodeCheckTimer(t);
                               }
                             }}
-                            error={!!barcodeSkuDuplicate}
-                            helperText={barcodeSkuDuplicate ? `Already used by: ${barcodeSkuDuplicate.name}` : ''}
-                            placeholder="Barcode number"
+                            error={!!barcodeDuplicate}
+                            helperText={barcodeDuplicate ? `Already used by: ${barcodeDuplicate.name}` : 'Scannable barcode for POS & stickers'}
+                            placeholder="e.g. 8901030383748"
                             slotProps={{
                               input: {
                                 endAdornment: (
@@ -7045,6 +7074,19 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                             </IconButton>
                           </Box>
                         )}
+                      </Grid>
+
+                      {/* SKU (Stock Keeping Unit) */}
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <TextField
+                          label="SKU (Stock Keeping Unit)"
+                          size="small"
+                          fullWidth
+                          value={menuSku}
+                          onChange={e => setMenuSku(e.target.value)}
+                          placeholder="e.g. SKU-RICE-001"
+                          helperText="Internal inventory code (optional search term)"
+                        />
                       </Grid>
 
                       {/* HSN */}
@@ -7189,7 +7231,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         <Divider sx={{ my: 0.5 }} />
                       </Grid>
 
-                      {/* POS Item Type selector (Preserved) */}
+                      {/* POS Item Type selector */}
                       <Grid size={{ xs: 12, sm: 4 }}>
                         <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', display: 'block', mb: 0.5 }}>
                           POS Unit Type
@@ -7198,32 +7240,50 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           <Button
                             type="button"
                             size="small"
-                            variant={!menuIsWeightBased ? 'contained' : 'outlined'}
-                            color={!menuIsWeightBased ? 'primary' : 'inherit'}
+                            variant={menuPosUnitType === 'PCS' ? 'contained' : 'outlined'}
+                            color={menuPosUnitType === 'PCS' ? 'primary' : 'inherit'}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
+                              setMenuPosUnitType('PCS');
                               setMenuIsWeightBased(false);
                               setMenuUnit('pcs');
                             }}
-                            sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 1 }}
+                            sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 0.5 }}
                           >
                             📦 Pcs
                           </Button>
                           <Button
                             type="button"
                             size="small"
-                            variant={menuIsWeightBased ? 'contained' : 'outlined'}
-                            color={menuIsWeightBased ? 'success' : 'inherit'}
+                            variant={menuPosUnitType === 'WEIGHT' ? 'contained' : 'outlined'}
+                            color={menuPosUnitType === 'WEIGHT' ? 'success' : 'inherit'}
                             onClick={(e) => {
                               e.preventDefault();
                               e.stopPropagation();
+                              setMenuPosUnitType('WEIGHT');
                               setMenuIsWeightBased(true);
                               setMenuUnit('kg');
                             }}
-                            sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 1 }}
+                            sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 0.5 }}
                           >
                             ⚖️ Weight
+                          </Button>
+                          <Button
+                            type="button"
+                            size="small"
+                            variant={menuPosUnitType === 'SERIAL' ? 'contained' : 'outlined'}
+                            color={menuPosUnitType === 'SERIAL' ? 'secondary' : 'inherit'}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setMenuPosUnitType('SERIAL');
+                              setMenuIsWeightBased(false);
+                              setMenuUnit('pcs');
+                            }}
+                            sx={{ flex: 1.2, fontWeight: 800, fontSize: '11px', px: 0.5 }}
+                          >
+                            🔢 Serial Number
                           </Button>
                         </Box>
                       </Grid>
@@ -8516,16 +8576,16 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           setMenuBarcodeImageUrl(imgDataUrl);
                         }
 
-                        setMenuSku(code);
+                        setMenuBarcode(code);
                         setBarcodeScanModalOpen(false);
 
                         // Duplicate check after scan
                         try {
                           const excludeId = dialogType === 'edit_menu' && selectedEntity?.id ? selectedEntity.id : undefined;
-                          const qp = excludeId ? `?sku=${encodeURIComponent(code)}&exclude_id=${excludeId}` : `?sku=${encodeURIComponent(code)}`;
+                          const qp = excludeId ? `?barcode=${encodeURIComponent(code)}&exclude_id=${excludeId}` : `?barcode=${encodeURIComponent(code)}`;
                           const r = await apiFetch(`/api/menu/check-barcode${qp}`);
                           const d = await r.json();
-                          if (d.duplicate) setBarcodeSkuDuplicate(d.existing_item);
+                          if (d.duplicate) setBarcodeDuplicate(d.existing_item);
                         } catch (_) {}
                       }
                     } catch (_) {}
@@ -8549,12 +8609,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
             <TextField
               size="small"
               fullWidth
-              placeholder="Type or paste barcode / SKU code"
+              placeholder="Type or paste barcode"
               id="manual-barcode-input"
               onKeyDown={e => {
                 if (e.key === 'Enter' && e.target.value.trim()) {
                   const code = e.target.value.trim();
-                  setMenuSku(code);
+                  setMenuBarcode(code);
                   setBarcodeScanModalOpen(false);
                   if (barcodeScanStream) { barcodeScanStream.getTracks().forEach(t => t.stop()); setBarcodeScanStream(null); }
                 }
@@ -8566,7 +8626,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               onClick={() => {
                 const input = document.getElementById('manual-barcode-input');
                 if (input && input.value.trim()) {
-                  setMenuSku(input.value.trim());
+                  setMenuBarcode(input.value.trim());
                   setBarcodeScanModalOpen(false);
                   if (barcodeScanStream) { barcodeScanStream.getTracks().forEach(t => t.stop()); setBarcodeScanStream(null); }
                 }

@@ -31,7 +31,8 @@ import {
   formatIsoToDisplayDate,
   parseDisplayToIsoDate,
   resolveItemSize,
-  resolveItemColor
+  resolveItemColor,
+  resolveItemWeight
 } from '../utils/stickerGenerator';
 
 export default function ProductStickerModal({
@@ -50,10 +51,12 @@ export default function ProductStickerModal({
       showAddress: saved.showAddress !== undefined ? saved.showAddress : true,
       showSize: saved.showSize !== undefined ? saved.showSize : false,
       showColor: saved.showColor !== undefined ? saved.showColor : false,
+      showWeight: saved.showWeight !== undefined ? saved.showWeight : false,
       customShopName: saved.customShopName || shopData.restaurant_name || shopData.name || '',
       customAddress: saved.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '',
       customSize: saved.customSize || '',
-      customColor: saved.customColor || ''
+      customColor: saved.customColor || '',
+      customWeight: saved.customWeight || ''
     };
   });
 
@@ -249,8 +252,21 @@ export default function ProductStickerModal({
     return resolveItemColor(currentPreviewItem, config);
   }, [currentPreviewItem, config]);
 
+  const previewWeight = useMemo(() => {
+    return resolveItemWeight(currentPreviewItem, config);
+  }, [currentPreviewItem, config]);
+
   const itemRawSize = (currentPreviewItem?.size || currentPreviewItem?.product_size || currentPreviewItem?.variant_size || '').toString().trim();
   const itemRawColor = (currentPreviewItem?.color || currentPreviewItem?.product_color || currentPreviewItem?.variant_color || '').toString().trim();
+  const itemRawWeight = (
+    currentPreviewItem?.weight ||
+    currentPreviewItem?.product_weight ||
+    currentPreviewItem?.net_weight ||
+    currentPreviewItem?.item_weight ||
+    currentPreviewItem?.unit ||
+    currentPreviewItem?.sales_unit ||
+    ''
+  ).toString().trim();
 
   const shopNameDisplay = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
   const addressDisplay = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
@@ -367,6 +383,7 @@ export default function ProductStickerModal({
                 {[
                   { key: 'showShopName', label: 'Shop Name' },
                   { key: 'showProductName', label: 'Product Name' },
+                  { key: 'showWeight', label: 'Weight / Quantity' },
                   { key: 'showSize', label: 'Size' },
                   { key: 'showColor', label: 'Color' },
                   { key: 'showMrp', label: 'MRP (Strikethrough)' },
@@ -453,8 +470,26 @@ export default function ProductStickerModal({
                 </div>
               </div>
 
-              {/* Size & Color Fields with Checkboxes */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+              {/* Weight, Size & Color Fields with Checkboxes */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '8px', marginTop: '8px' }}>
+                <div>
+                  <label style={{ ...styles.smallLabel, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <input
+                      type="checkbox"
+                      checked={!!config.showWeight}
+                      onChange={(e) => handleConfigChange('showWeight', e.target.checked)}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    <span>Weight / Qty {itemRawWeight ? `(${itemRawWeight})` : ''}:</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={config.customWeight !== undefined ? config.customWeight : ''}
+                    onChange={(e) => handleConfigChange('customWeight', e.target.value)}
+                    placeholder={itemRawWeight || 'e.g. 100g, 1 KG, 500 ml'}
+                    style={styles.textInput}
+                  />
+                </div>
                 <div>
                   <label style={{ ...styles.smallLabel, display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <input
@@ -642,8 +677,16 @@ export default function ProductStickerModal({
                       {config.showProductName && (
                         <div style={styles.previewProductName}>{currentPreviewItem.name}</div>
                       )}
-                      {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                      {((config.showWeight && previewWeight) || (config.showSize && previewSize) || (config.showColor && previewColor)) && (
                         <div style={styles.previewVariantRow}>
+                          {config.showWeight && previewWeight && (
+                            <span style={styles.previewVariantBadge}>
+                              {/^net\s*wt:\s*/i.test(previewWeight) ? previewWeight : `Net Wt: ${previewWeight}`}
+                            </span>
+                          )}
+                          {config.showWeight && previewWeight && ((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                            <span style={{ opacity: 0.4 }}>•</span>
+                          )}
                           {config.showSize && previewSize && (
                             <span style={styles.previewVariantBadge}>
                               {/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}
@@ -741,8 +784,14 @@ export default function ProductStickerModal({
                               </div>
                             )}
                             {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
-                            {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                            {((config.showWeight && previewWeight) || (config.showSize && previewSize) || (config.showColor && previewColor)) && (
                               <div style={{ fontSize: '7.5px', fontWeight: '700', color: '#1e293b', display: 'flex', gap: '3px', justifyContent: 'center', alignItems: 'center', lineHeight: 1.1, margin: '0.5px 0' }}>
+                                {config.showWeight && previewWeight && (
+                                  <span>{/^net\s*wt:\s*/i.test(previewWeight) ? previewWeight : `Net Wt: ${previewWeight}`}</span>
+                                )}
+                                {config.showWeight && previewWeight && ((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                                  <span style={{ opacity: 0.4 }}>•</span>
+                                )}
                                 {config.showSize && previewSize && (
                                   <span>{/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}</span>
                                 )}
@@ -806,8 +855,14 @@ export default function ProductStickerModal({
                                 </div>
                               )}
                               {config.showProductName && <div style={{ fontSize: '9px', fontWeight: '800' }}>{currentPreviewItem.name}</div>}
-                              {((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                              {((config.showWeight && previewWeight) || (config.showSize && previewSize) || (config.showColor && previewColor)) && (
                                 <div style={{ fontSize: '7.5px', fontWeight: '700', color: '#1e293b', display: 'flex', gap: '3px', justifyContent: 'center', alignItems: 'center', lineHeight: 1.1, margin: '0.5px 0' }}>
+                                  {config.showWeight && previewWeight && (
+                                    <span>{/^net\s*wt:\s*/i.test(previewWeight) ? previewWeight : `Net Wt: ${previewWeight}`}</span>
+                                  )}
+                                  {config.showWeight && previewWeight && ((config.showSize && previewSize) || (config.showColor && previewColor)) && (
+                                    <span style={{ opacity: 0.4 }}>•</span>
+                                  )}
                                   {config.showSize && previewSize && (
                                     <span>{/^size:\s*/i.test(previewSize) ? previewSize : `Size: ${previewSize}`}</span>
                                   )}

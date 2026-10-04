@@ -25,8 +25,9 @@ export default function MenuItemModal({
   const [goodsOrService, setGoodsOrService] = useState('Goods');
   const [name, setName] = useState('');
   const [itemCode, setItemCode] = useState('');
+  const [barcode, setBarcode] = useState('');
   const [sku, setSku] = useState('');
-  const [barcodeSkuDuplicate, setBarcodeSkuDuplicate] = useState(null);
+  const [barcodeDuplicate, setBarcodeDuplicate] = useState(null);
   const [barcodeCheckTimer, setBarcodeCheckTimer] = useState(null);
   const [hsnCode, setHsnCode] = useState('');
   const [purchaseUnit, setPurchaseUnit] = useState('pcs');
@@ -36,6 +37,7 @@ export default function MenuItemModal({
   const [categoryId, setCategoryId] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState([]);
+  const [posUnitType, setPosUnitType] = useState('PCS'); // 'PCS' | 'WEIGHT' | 'SERIAL'
   const [isWeightBased, setIsWeightBased] = useState(false);
   const [unit, setUnit] = useState('pcs');
   const [isVeg, setIsVeg] = useState('1');
@@ -94,8 +96,9 @@ export default function MenuItemModal({
       setName(initialName || '');
       setGoodsOrService('Goods');
       setItemCode('');
+      setBarcode('');
       setSku('');
-      setBarcodeSkuDuplicate(null);
+      setBarcodeDuplicate(null);
       setHsnCode('');
       setPurchaseUnit('pcs');
       setSalesUnit('pcs');
@@ -155,8 +158,8 @@ export default function MenuItemModal({
       formData.append('price', String(price ? parseFloat(price) : parseFloat(purchasePrice || 0)));
       formData.append('purchase_price', purchasePrice ? String(parseFloat(purchasePrice)) : '0');
       formData.append('mrp', mrp ? String(parseFloat(mrp)) : '0');
+      formData.append('barcode', barcode.trim());
       formData.append('sku', sku.trim());
-      formData.append('barcode', sku.trim());
       formData.append('hsn_code', hsnCode.trim());
       formData.append('item_code', itemCode.trim());
       formData.append('goods_or_service', goodsOrService);
@@ -165,6 +168,10 @@ export default function MenuItemModal({
       formData.append('unit', unit);
       formData.append('base_unit', unit);
       formData.append('is_weight_based', isWeightBased ? '1' : '0');
+      formData.append('pos_unit_type', posUnitType);
+      formData.append('is_serial_tracked', posUnitType === 'SERIAL' ? '1' : '0');
+      formData.append('item_type', posUnitType);
+      formData.append('itemType', posUnitType);
       formData.append('is_veg', isVeg);
       formData.append('brand', brand.trim());
       formData.append('item_group', itemGroup.trim());
@@ -317,32 +324,45 @@ export default function MenuItemModal({
                     />
                   </Grid>
 
-                  {/* Barcode / SKU */}
-                  <Grid size={{ xs: 12, sm: 8 }}>
+                  {/* Barcode (Scannable Code) */}
+                  <Grid size={{ xs: 12, sm: 6 }}>
                     <TextField
-                      label="Barcode / SKU"
+                      label="Barcode (Scan Target)"
                       size="small"
                       fullWidth
-                      value={sku}
+                      value={barcode}
                       onChange={e => {
                         const val = e.target.value;
-                        setSku(val);
-                        setBarcodeSkuDuplicate(null);
+                        setBarcode(val);
+                        setBarcodeDuplicate(null);
                         if (barcodeCheckTimer) clearTimeout(barcodeCheckTimer);
                         if (val.trim()) {
                           const t = setTimeout(async () => {
                             try {
-                              const r = await apiFetch(`/api/menu/check-barcode?sku=${encodeURIComponent(val)}`);
+                              const r = await apiFetch(`/api/menu/check-barcode?barcode=${encodeURIComponent(val)}`);
                               const d = await r.json();
-                              if (d.duplicate) setBarcodeSkuDuplicate(d.existing_item);
+                              if (d.duplicate) setBarcodeDuplicate(d.existing_item);
                             } catch (_) {}
                           }, 600);
                           setBarcodeCheckTimer(t);
                         }
                       }}
-                      error={!!barcodeSkuDuplicate}
-                      helperText={barcodeSkuDuplicate ? `Already used by: ${barcodeSkuDuplicate.name}` : ''}
-                      placeholder="Barcode number or SKU"
+                      error={!!barcodeDuplicate}
+                      helperText={barcodeDuplicate ? `Already used by: ${barcodeDuplicate.name}` : 'Scannable barcode for POS & stickers'}
+                      placeholder="e.g. 8901030383748"
+                    />
+                  </Grid>
+
+                  {/* SKU (Internal Reference) */}
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField
+                      label="SKU (Stock Keeping Unit)"
+                      size="small"
+                      fullWidth
+                      value={sku}
+                      onChange={e => setSku(e.target.value)}
+                      placeholder="e.g. SKU-RICE-001"
+                      helperText="Internal inventory code (optional search term)"
                     />
                   </Grid>
 
@@ -475,28 +495,44 @@ export default function MenuItemModal({
                       <Button
                         type="button"
                         size="small"
-                        variant={!isWeightBased ? 'contained' : 'outlined'}
-                        color={!isWeightBased ? 'primary' : 'inherit'}
+                        variant={posUnitType === 'PCS' ? 'contained' : 'outlined'}
+                        color={posUnitType === 'PCS' ? 'primary' : 'inherit'}
                         onClick={() => {
+                          setPosUnitType('PCS');
                           setIsWeightBased(false);
                           setUnit('pcs');
                         }}
-                        sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 1 }}
+                        sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 0.5 }}
                       >
                         📦 Pcs
                       </Button>
                       <Button
                         type="button"
                         size="small"
-                        variant={isWeightBased ? 'contained' : 'outlined'}
-                        color={isWeightBased ? 'success' : 'inherit'}
+                        variant={posUnitType === 'WEIGHT' ? 'contained' : 'outlined'}
+                        color={posUnitType === 'WEIGHT' ? 'success' : 'inherit'}
                         onClick={() => {
+                          setPosUnitType('WEIGHT');
                           setIsWeightBased(true);
                           setUnit('kg');
                         }}
-                        sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 1 }}
+                        sx={{ flex: 1, fontWeight: 800, fontSize: '11px', px: 0.5 }}
                       >
                         ⚖️ Weight
+                      </Button>
+                      <Button
+                        type="button"
+                        size="small"
+                        variant={posUnitType === 'SERIAL' ? 'contained' : 'outlined'}
+                        color={posUnitType === 'SERIAL' ? 'secondary' : 'inherit'}
+                        onClick={() => {
+                          setPosUnitType('SERIAL');
+                          setIsWeightBased(false);
+                          setUnit('pcs');
+                        }}
+                        sx={{ flex: 1.2, fontWeight: 800, fontSize: '11px', px: 0.5 }}
+                      >
+                        🔢 Serial Number
                       </Button>
                     </Box>
                   </Grid>

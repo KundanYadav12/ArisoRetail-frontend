@@ -69,12 +69,22 @@ export function handlePositiveNumberKeyDown(e, {
 
   if (e.key === 'Enter') {
     e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    if (e.nativeEvent?.stopImmediatePropagation) {
+      e.nativeEvent.stopImmediatePropagation();
+    }
     if (onEnter) onEnter(e);
     return;
   }
 
   if (e.key === 'Escape') {
     e.preventDefault();
+    e.stopPropagation();
+    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+    if (e.nativeEvent?.stopImmediatePropagation) {
+      e.nativeEvent.stopImmediatePropagation();
+    }
     if (onEscape) onEscape(e);
     return;
   }

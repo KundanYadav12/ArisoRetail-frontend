@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, useMediaQuery, IconButton, CircularProgress, Chip, Tooltip, Tabs, Tab, Switch } from '@mui/material';
-import { Plus, ToggleLeft, ToggleRight, Database, RefreshCw, Users, ShieldAlert, BarChart, Server, Calendar, CheckCircle, Edit2, Trash2, Mail, Send, Key, Palette, Cpu, History, Image as ImageIcon } from 'lucide-react';
+import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, useMediaQuery, IconButton, CircularProgress, Chip, Tooltip, Tabs, Tab, Switch, Alert } from '@mui/material';
+import { Plus, ToggleLeft, ToggleRight, Database, RefreshCw, Users, ShieldAlert, BarChart, Server, Calendar, CheckCircle, Edit2, Trash2, Mail, Send, Key, Palette, Cpu, History, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
 import SuperAdminThemeManager from '../components/SuperAdminThemeManager';
@@ -51,6 +51,7 @@ export default function SuperAdminPanel({ token }) {
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState(null);
   const [renewMonths, setRenewMonths] = useState('12');
+  const [supportContact, setSupportContact] = useState('');
 
   useEffect(() => {
     fetchSaaSData();
@@ -72,6 +73,14 @@ export default function SuperAdminPanel({ token }) {
       } else {
         setRestaurants([]);
       }
+
+      try {
+        const scRes = await apiFetch('/api/superadmin/support-contact');
+        if (scRes.ok) {
+          const scData = await scRes.json();
+          setSupportContact(scData.support_contact_number || '');
+        }
+      } catch (_) {}
 
       const logsRes = await apiFetch('/api/superadmin/logs');
       if (logsRes.ok) {
@@ -119,6 +128,74 @@ export default function SuperAdminPanel({ token }) {
     }
   };
 
+  const handleSaveSupportContact = async () => {
+    try {
+      const response = await apiFetch('/api/superadmin/support-contact', {
+        method: 'PUT',
+        body: { support_contact_number: supportContact }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save support contact number.');
+      setSupportContact(data.support_contact_number || '');
+      notify.success(data.message || 'Support contact number updated.', 'Support Contact');
+    } catch (err) {
+      notify.error(err.message, 'Support Contact Error');
+    }
+  };
+
+  const formatDateForInput = (d) => {
+    if (!d) return '';
+    const date = new Date(d);
+    if (isNaN(date.getTime())) return '';
+    return date.toISOString().split('T')[0];
+  };
+
+  const getExpiryAlertInfo = (expiryDate) => {
+    if (!expiryDate) return { isExpired: false, isNearExpiry: false, daysRemaining: null, label: null };
+    const str = String(expiryDate).trim();
+    const isoStr = str.includes(' ') && !str.includes('T') ? str.replace(' ', 'T') : str;
+    const exp = new Date(isoStr);
+    if (isNaN(exp.getTime())) return { isExpired: false, isNearExpiry: false, daysRemaining: null, label: null };
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(exp);
+    target.setHours(0, 0, 0, 0);
+    
+    const diffDays = Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (diffDays < 0) {
+      return {
+        isExpired: true,
+        isNearExpiry: false,
+        daysRemaining: diffDays,
+        label: `Expired ${Math.abs(diffDays)}d ago`
+      };
+    }
+    if (diffDays === 0) {
+      return {
+        isExpired: false,
+        isNearExpiry: true,
+        daysRemaining: 0,
+        label: 'Expires today'
+      };
+    }
+    if (diffDays > 0 && diffDays <= 10) {
+      return {
+        isExpired: false,
+        isNearExpiry: true,
+        daysRemaining: diffDays,
+        label: `Expires in ${diffDays} day${diffDays > 1 ? 's' : ''}`
+      };
+    }
+    return {
+      isExpired: false,
+      isNearExpiry: false,
+      daysRemaining: diffDays,
+      label: null
+    };
+  };
+
   const handleOpenEditModal = (tenant) => {
     setEditTenant({
       id: tenant.id,
@@ -131,6 +208,8 @@ export default function SuperAdminPanel({ token }) {
       max_user_limit: tenant.max_user_limit || 5,
       subscription_status: tenant.subscription_status || 'active',
       subscription_plan_id: tenant.subscription_plan_id || 1,
+      subscription_start_date: formatDateForInput(tenant.subscription_start_date || tenant.created_at),
+      subscription_expires_at: formatDateForInput(tenant.subscription_expires_at),
       feature_serial_numbers: tenant.feature_serial_numbers !== undefined ? Boolean(tenant.feature_serial_numbers) : true
     });
     setEditDialogOpen(true);
@@ -139,6 +218,15 @@ export default function SuperAdminPanel({ token }) {
   const handleUpdateRestaurant = async (e) => {
     e.preventDefault();
     if (!editTenant) return;
+
+    if (editTenant.subscription_start_date && editTenant.subscription_expires_at) {
+      const start = new Date(editTenant.subscription_start_date);
+      const expiry = new Date(editTenant.subscription_expires_at);
+      if (expiry <= start) {
+        notify.error('Expiry Date must be after Start Date.', 'Validation Error');
+        return;
+      }
+    }
 
     try {
       const response = await apiFetch(`/api/superadmin/restaurants/${editTenant.id}`, {
@@ -647,6 +735,27 @@ export default function SuperAdminPanel({ token }) {
           </Button>
         </Box>
 
+        {/* Platform-wide Support Contact Number (shown in tenants' expired-account banner) */}
+        <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'stretch', sm: 'center' }, gap: 1.5 }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 800 }}>Support Contact Number</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Platform-wide. Shown to expired tenants in the account-expired banner.
+            </Typography>
+          </Box>
+          <TextField
+            size="small"
+            label="Support Contact Number"
+            placeholder="+91 98765 43210"
+            value={supportContact}
+            onChange={e => setSupportContact(e.target.value)}
+            sx={{ minWidth: { sm: 240 } }}
+          />
+          <Button variant="contained" onClick={handleSaveSupportContact} sx={{ fontWeight: 800, textTransform: 'none' }}>
+            Save Number
+          </Button>
+        </Paper>
+
         {/* Tenant List: Mobile Stacked Card View or Desktop Scrollable Table */}
         {isMobile ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -674,7 +783,7 @@ export default function SuperAdminPanel({ token }) {
                     </Box>
                     <Chip
                       label={rest.subscription_status.toUpperCase()}
-                      color={rest.subscription_status === 'active' ? 'success' : rest.subscription_status === 'suspended' ? 'error' : 'warning'}
+                      color={rest.subscription_status === 'active' ? 'success' : (rest.subscription_status === 'suspended' || rest.subscription_status === 'expired') ? 'error' : 'warning'}
                       size="small"
                       sx={{ fontWeight: 800, flexShrink: 0 }}
                     />
@@ -735,9 +844,22 @@ export default function SuperAdminPanel({ token }) {
                       </Grid>
                       <Grid size={{ xs: 6 }}>
                         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block' }}>EXPIRY DATE</Typography>
-                        <Typography variant="body2">
-                          {rest.subscription_expires_at ? new Date(rest.subscription_expires_at).toLocaleDateString() : 'N/A'}
-                        </Typography>
+                        {(() => {
+                          if (!rest.subscription_expires_at) return <Typography variant="body2" sx={{ color: 'text.secondary' }}>N/A (Trial)</Typography>;
+                          const expDateStr = new Date(rest.subscription_expires_at).toLocaleDateString();
+                          const alertInfo = getExpiryAlertInfo(rest.subscription_expires_at);
+                          return (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mt: 0.25 }}>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>{expDateStr}</Typography>
+                              {alertInfo.isExpired && (
+                                <Chip label={alertInfo.label || 'Expired'} color="error" size="small" sx={{ fontWeight: 800, height: 18, fontSize: '0.62rem' }} />
+                              )}
+                              {alertInfo.isNearExpiry && (
+                                <Chip icon={<AlertTriangle size={10} />} label={alertInfo.label} color="warning" size="small" sx={{ fontWeight: 800, height: 18, fontSize: '0.62rem' }} />
+                              )}
+                            </Box>
+                          );
+                        })()}
                       </Grid>
                       <Grid size={{ xs: 6 }}>
                         <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block' }}>CURRENT YR PRICE</Typography>
@@ -859,7 +981,7 @@ export default function SuperAdminPanel({ token }) {
                     <TableCell>
                       <Chip
                         label={rest.subscription_status.toUpperCase()}
-                        color={rest.subscription_status === 'active' ? 'success' : rest.subscription_status === 'suspended' ? 'error' : 'warning'}
+                        color={rest.subscription_status === 'active' ? 'success' : (rest.subscription_status === 'suspended' || rest.subscription_status === 'expired') ? 'error' : 'warning'}
                         size="small"
                         sx={{ fontWeight: 800 }}
                       />
@@ -897,7 +1019,33 @@ export default function SuperAdminPanel({ token }) {
                       {rest.subscription_start_date ? new Date(rest.subscription_start_date).toLocaleDateString() : (rest.created_at ? new Date(rest.created_at).toLocaleDateString() : 'N/A')}
                     </TableCell>
                     <TableCell sx={{ fontSize: 13 }}>
-                      {rest.subscription_expires_at ? new Date(rest.subscription_expires_at).toLocaleDateString() : 'N/A'}
+                      {(() => {
+                        if (!rest.subscription_expires_at) return <Typography variant="caption" sx={{ color: 'text.secondary' }}>N/A (Trial)</Typography>;
+                        const expDateStr = new Date(rest.subscription_expires_at).toLocaleDateString();
+                        const alertInfo = getExpiryAlertInfo(rest.subscription_expires_at);
+                        return (
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                            <Typography variant="body2" sx={{ fontSize: 13 }}>{expDateStr}</Typography>
+                            {alertInfo.isExpired && (
+                              <Chip
+                                label={alertInfo.label || 'Expired'}
+                                color="error"
+                                size="small"
+                                sx={{ fontWeight: 800, height: 20, fontSize: '0.65rem' }}
+                              />
+                            )}
+                            {alertInfo.isNearExpiry && (
+                              <Chip
+                                icon={<AlertTriangle size={11} />}
+                                label={alertInfo.label}
+                                color="warning"
+                                size="small"
+                                sx={{ fontWeight: 800, height: 20, fontSize: '0.65rem' }}
+                              />
+                            )}
+                          </Box>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell sx={{ fontSize: 13, fontWeight: 'bold' }}>
                       {rest.current_year_pricing !== undefined && rest.current_year_pricing !== null ? `₹${parseFloat(rest.current_year_pricing).toFixed(2)}` : 'N/A'}
@@ -1009,10 +1157,31 @@ export default function SuperAdminPanel({ token }) {
 
       {/* EDIT TENANT DIALOG */}
       {editTenant && (
-        <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="xs" fullWidth>
+        <Dialog open={editDialogOpen} onClose={() => setEditDialogOpen(false)} maxWidth="sm" fullWidth>
           <DialogTitle sx={{ fontWeight: 800 }}>Edit Restaurant Tenant</DialogTitle>
           <form onSubmit={handleUpdateRestaurant}>
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {/* Pre-expiry or Expired Alert Banner */}
+              {(() => {
+                if (!editTenant.subscription_expires_at) return null;
+                const alertInfo = getExpiryAlertInfo(editTenant.subscription_expires_at);
+                if (alertInfo.isExpired) {
+                  return (
+                    <Alert severity="error" sx={{ fontWeight: 600, fontSize: 13, py: 0.5 }}>
+                      This tenant's subscription has expired ({alertInfo.label}). Normal store operations are restricted.
+                    </Alert>
+                  );
+                }
+                if (alertInfo.isNearExpiry) {
+                  return (
+                    <Alert severity="warning" icon={<AlertTriangle size={18} />} sx={{ fontWeight: 600, fontSize: 13, py: 0.5 }}>
+                      Subscription Alert: This tenant's subscription {alertInfo.daysRemaining === 0 ? 'expires today' : `expires in ${alertInfo.daysRemaining} day${alertInfo.daysRemaining > 1 ? 's' : ''}`}.
+                    </Alert>
+                  );
+                }
+                return null;
+              })()}
+
               <TextField
                 label="Restaurant Name"
                 size="small"
@@ -1064,7 +1233,14 @@ export default function SuperAdminPanel({ token }) {
                 size="small"
                 fullWidth
                 value={editTenant.subscription_status}
-                onChange={e => setEditTenant({ ...editTenant, subscription_status: e.target.value })}
+                onChange={e => {
+                  const newStatus = e.target.value;
+                  const updates = { subscription_status: newStatus };
+                  if (newStatus === 'expired') {
+                    updates.feature_serial_numbers = false;
+                  }
+                  setEditTenant({ ...editTenant, ...updates });
+                }}
               >
                 <MenuItem value="active">Active</MenuItem>
                 <MenuItem value="trial">Trial</MenuItem>
@@ -1080,6 +1256,55 @@ export default function SuperAdminPanel({ token }) {
                 onChange={e => setEditTenant({ ...editTenant, max_user_limit: parseInt(e.target.value || 0) })}
                 required
               />
+
+              {/* Start Date and Expiry Date Fields */}
+              <Grid container spacing={2}>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Subscription Start Date"
+                    type="date"
+                    size="small"
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                    value={editTenant.subscription_start_date || ''}
+                    onChange={e => setEditTenant({ ...editTenant, subscription_start_date: e.target.value })}
+                    helperText="Subscription activation date"
+                  />
+                </Grid>
+                <Grid item xs={6}>
+                  <TextField
+                    label="Subscription Expiry Date"
+                    type="date"
+                    size="small"
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                    value={editTenant.subscription_expires_at || ''}
+                    onChange={e => {
+                      const newExpiry = e.target.value;
+                      const updates = { subscription_expires_at: newExpiry };
+                      if (newExpiry) {
+                        const expDate = new Date(newExpiry);
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        if (expDate < today) {
+                          updates.subscription_status = 'expired';
+                          updates.feature_serial_numbers = false;
+                        } else if (editTenant.subscription_status === 'expired') {
+                          updates.subscription_status = 'active';
+                        }
+                      }
+                      setEditTenant({ ...editTenant, ...updates });
+                    }}
+                    helperText="Must be after Start Date"
+                    error={Boolean(
+                      editTenant.subscription_start_date &&
+                      editTenant.subscription_expires_at &&
+                      new Date(editTenant.subscription_expires_at) <= new Date(editTenant.subscription_start_date)
+                    )}
+                  />
+                </Grid>
+              </Grid>
+
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, bgcolor: 'action.hover' }}>
                 <Box>
                   <Typography variant="body2" sx={{ fontWeight: 700 }}>Serial Numbers Tracking</Typography>
@@ -1089,6 +1314,7 @@ export default function SuperAdminPanel({ token }) {
                   checked={Boolean(editTenant.feature_serial_numbers)}
                   onChange={e => setEditTenant({ ...editTenant, feature_serial_numbers: e.target.checked })}
                   color="secondary"
+                  disabled={editTenant.subscription_status === 'expired'}
                 />
               </Box>
             </DialogContent>

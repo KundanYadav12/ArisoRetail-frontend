@@ -71,6 +71,7 @@ export const DEFAULT_STICKER_CONFIG = {
   showProductName: true,
   showSize: false,
   showColor: false,
+  showWeight: false,
   showMrp: true,
   showSellingPrice: true,
   showMfgDate: true,
@@ -81,6 +82,7 @@ export const DEFAULT_STICKER_CONFIG = {
   customAddress: '',
   customSize: '',
   customColor: '',
+  customWeight: '',
   mrpMultiplier: 1.25, // default suggested MRP calculation (125% of selling price if not specified)
   defaultMfgDate: '', // if empty, uses today
   defaultExpDate: ''
@@ -294,6 +296,40 @@ export function resolveItemColor(item, config = {}) {
 }
 
 /**
+ * Extract existing product Weight or Quantity with fallbacks
+ */
+export function resolveItemWeight(item, config = {}) {
+  if (config?.customWeight && typeof config.customWeight === 'string' && config.customWeight.trim() !== '') {
+    return config.customWeight.trim();
+  }
+  if (item?.customWeight && typeof item.customWeight === 'string' && item.customWeight.trim() !== '') {
+    return item.customWeight.trim();
+  }
+  const candidates = [
+    item?.weight,
+    item?.product_weight,
+    item?.net_weight,
+    item?.item_weight,
+    item?.quantity_weight,
+    item?.unit_weight,
+    item?.attributes?.weight,
+    item?.attributes?.Weight
+  ];
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '') {
+      return String(c).trim();
+    }
+  }
+  if (item?.unit && typeof item.unit === 'string' && item.unit.trim() !== '') {
+    return item.unit.trim();
+  }
+  if (item?.sales_unit && typeof item.sales_unit === 'string' && item.sales_unit.trim() !== '') {
+    return item.sales_unit.trim();
+  }
+  return '';
+}
+
+/**
  * Generate a pure vector SVG Code128 barcode string
  * @param {string} code - The barcode or SKU to encode
  * @param {object} options - Sizing and styling options
@@ -435,18 +471,24 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
 
   const itemSize = resolveItemSize(item, config);
   const itemColor = resolveItemColor(item, config);
+  const itemWeight = resolveItemWeight(item, config);
   const showSize = !!config.showSize && !!itemSize;
   const showColor = !!config.showColor && !!itemColor;
+  const showWeight = !!config.showWeight && !!itemWeight;
   const displaySize = showSize ? (/^size:\s*/i.test(itemSize) ? itemSize : `Size: ${itemSize}`) : '';
   const displayColor = showColor ? (/^color:\s*/i.test(itemColor) ? itemColor : `Color: ${itemColor}`) : '';
+  const displayWeight = showWeight ? (/^(wt|weight|qty|net\s*wt):\s*/i.test(itemWeight) ? itemWeight : `Net Wt: ${itemWeight}`) : '';
 
   let variantHtml = '';
-  if (showSize || showColor) {
+  const variantParts = [];
+  if (showWeight) variantParts.push(`<span class="badge-weight">${displayWeight}</span>`);
+  if (showSize) variantParts.push(`<span class="badge-size">${displaySize}</span>`);
+  if (showColor) variantParts.push(`<span class="badge-color">${displayColor}</span>`);
+
+  if (variantParts.length > 0) {
     variantHtml = `
       <div class="field-variant-row" style="font-size: ${fScale.variant || '8px'};">
-        ${showSize ? `<span class="badge-size">${displaySize}</span>` : ''}
-        ${showSize && showColor ? `<span class="badge-sep">•</span>` : ''}
-        ${showColor ? `<span class="badge-color">${displayColor}</span>` : ''}
+        ${variantParts.join(' <span class="badge-sep">•</span> ')}
       </div>
     `;
   }
@@ -645,7 +687,7 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .badge-size, .badge-color {
+    .badge-size, .badge-color, .badge-weight {
       display: inline-block;
       white-space: nowrap;
     }

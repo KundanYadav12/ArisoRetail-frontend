@@ -26,7 +26,7 @@ import POSScreen from './pages/POS';
 import CashierDashboard from './pages/CashierDashboard';
 import DayEndDashboard from './components/day_end/DayEndDashboard';
 import PaymentReconciliationSuite from './components/finance/PaymentReconciliationSuite';
-import { ArrowRightLeft, Tag, ChevronDown, MoreHorizontal, X } from 'lucide-react';
+import { ArrowRightLeft, Tag, ChevronDown, MoreHorizontal, X, ShieldAlert, AlertTriangle } from 'lucide-react';
 import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
 import SuperBillItems from './pages/SuperBillItems';
@@ -316,6 +316,48 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!token) return;
+
+    const checkTenantStatus = async () => {
+      try {
+        const res = await apiFetch('/api/auth/me');
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data.user) {
+            setUser(prev => {
+              if (!prev) return data.user;
+              if (
+                prev.subscription_status !== data.user.subscription_status ||
+                prev.is_subscription_expired !== data.user.is_subscription_expired ||
+                String(prev.subscription_expires_at || '') !== String(data.user.subscription_expires_at || '') ||
+                prev.feature_serial_numbers !== data.user.feature_serial_numbers ||
+                String(prev.support_contact_number || '') !== String(data.user.support_contact_number || '')
+              ) {
+                const updated = { ...prev, ...data.user };
+                localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(updated));
+                localStorage.setItem('pos_user', JSON.stringify(updated));
+                return updated;
+              }
+              return prev;
+            });
+          }
+        }
+      } catch (e) {
+        // network or offline, ignore
+      }
+    };
+
+    checkTenantStatus();
+    const interval = setInterval(checkTenantStatus, 15000);
+    window.addEventListener('focus', checkTenantStatus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', checkTenantStatus);
+    };
+  }, [token]);
+
+  useEffect(() => {
     if (!token) {
       setReceiptSettings(null);
       return;
@@ -537,6 +579,99 @@ export default function App() {
     };
   }, [navItems, isMidScreen, currentView]);
 
+  const parseDateNormalized = (d) => {
+    if (!d) return null;
+    if (d instanceof Date) return isNaN(d.getTime()) ? null : d;
+    const str = String(d).trim();
+    const isoStr = str.includes(' ') && !str.includes('T') ? str.replace(' ', 'T') : str;
+    const date = new Date(isoStr);
+    return isNaN(date.getTime()) ? null : date;
+  };
+
+  const isAccountExpired = React.useMemo(() => {
+    if (isSuperAdmin) return false;
+    if (user?.subscription_status === 'expired') return true;
+    if (user?.is_subscription_expired) return true;
+    if (user?.subscription_expires_at) {
+      const exp = parseDateNormalized(user.subscription_expires_at);
+      if (exp && exp.getTime() < Date.now()) {
+        return true;
+      }
+    }
+    return false;
+  }, [isSuperAdmin, user?.subscription_status, user?.is_subscription_expired, user?.subscription_expires_at]);
+
+  const preExpiryInfo = React.useMemo(() => {
+    if (isSuperAdmin || isAccountExpired) return null;
+    if (!user?.subscription_expires_at) return null;
+
+    const exp = parseDateNormalized(user.subscription_expires_at);
+    if (!exp) return null;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(exp);
+    target.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays >= 0 && diffDays <= 10) {
+      const isUrgentFinalDay = diffDays <= 1;
+      const message = diffDays === 0
+        ? 'Your subscription will expire today'
+        : (diffDays === 1
+          ? 'Your subscription will expire in 1 day'
+          : `Your subscription will expire in ${diffDays} days`);
+
+      return {
+        daysRemaining: diffDays,
+        isUrgentFinalDay,
+        message
+      };
+    }
+
+    return null;
+  }, [isSuperAdmin, isAccountExpired, user?.subscription_expires_at]);
+
+  const expiredBannerText = React.useMemo(() => {
+    const base = 'Your account has expired. Please contact support to renew.';
+    const phone = String(user?.support_contact_number || '').trim();
+    if (!phone) return base;
+    return `${base} Mouse and keyboard will not work until you renew. Call ${phone} to renew.`;
+  }, [user?.support_contact_number]);
+
+  const contentLockRef = React.useRef(null);
+
+  // Hard lock: when expired, make the page content inert (no focus/clicks) and swallow
+  // all keyboard / pointer events that do not originate from the header or banner.
+  useEffect(() => {
+    const el = contentLockRef.current;
+    if (!isAccountExpired) {
+      if (el) el.removeAttribute('inert');
+      return undefined;
+    }
+    if (el) el.setAttribute('inert', '');
+    try {
+      const active = document.activeElement;
+      if (active && active !== document.body && el && el.contains(active)) active.blur();
+    } catch (_) {}
+
+    const isAllowedTarget = (target) =>
+      target && target.closest && target.closest('header, [role="presentation"], [data-expiry-allow]');
+
+    const block = (e) => {
+      if (isAllowedTarget(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    };
+    const events = ['keydown', 'keyup', 'keypress', 'click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'wheel', 'paste', 'input'];
+    events.forEach(ev => window.addEventListener(ev, block, true));
+    return () => {
+      events.forEach(ev => window.removeEventListener(ev, block, true));
+      if (contentLockRef.current) contentLockRef.current.removeAttribute('inert');
+    };
+  }, [isAccountExpired]);
   if (!token || !user) {
     return (
       <NotificationProvider>
@@ -594,6 +729,7 @@ export default function App() {
                 bgcolor: 'background.paper',
                 borderBottom: '1px solid',
                 borderColor: 'divider',
+                position: isAccountExpired ? 'relative' : undefined,
                 zIndex: (theme) => theme.zIndex.appBar
               }}
             >
@@ -664,6 +800,28 @@ export default function App() {
                       size="small"
                       icon={<SecurityOutlinedIcon fontSize="small" />}
                       sx={{ fontWeight: 800, fontSize: '0.65rem', height: 22, ml: 0.5, display: { xs: 'none', sm: 'inline-flex' } }}
+                    />
+                  )}
+                  {isAccountExpired && (
+                    <Chip
+                      label="EXPIRED"
+                      color="error"
+                      size="small"
+                      sx={{ fontWeight: 900, fontSize: '0.65rem', height: 22, ml: 0.5 }}
+                    />
+                  )}
+                  {preExpiryInfo && (
+                    <Chip
+                      label={preExpiryInfo.daysRemaining === 0 ? 'EXPIRES TODAY' : `EXPIRES IN ${preExpiryInfo.daysRemaining}D`}
+                      color="error"
+                      size="small"
+                      sx={{
+                        fontWeight: 900,
+                        fontSize: '0.65rem',
+                        height: 22,
+                        ml: 0.5,
+                        animation: preExpiryInfo.isUrgentFinalDay ? 'bannerPulse 1.5s infinite ease-in-out' : 'none'
+                      }}
                     />
                   )}
                 </Box>
@@ -1073,7 +1231,105 @@ export default function App() {
                   </IconButton>
                 </Box>
               </Toolbar>
+              {/* Pre-Expiry Countdown Banner or Expired Account Header Banner */}
+              {(isAccountExpired || preExpiryInfo) && (
+                <Box
+                  sx={{
+                    bgcolor: '#dc2626',
+                    color: '#ffffff',
+                    px: 2,
+                    py: 0.85,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 1.25,
+                    fontWeight: 700,
+                    fontSize: { xs: '0.8rem', sm: '0.88rem' },
+                    letterSpacing: '0.01em',
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2)',
+                    textAlign: 'center',
+                    animation: (!isAccountExpired && preExpiryInfo?.isUrgentFinalDay) ? 'bannerPulse 1.5s infinite ease-in-out' : 'none',
+                    '@keyframes bannerPulse': {
+                      '0%': {
+                        backgroundColor: '#dc2626',
+                        opacity: 1,
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2)'
+                      },
+                      '50%': {
+                        backgroundColor: '#991b1b',
+                        opacity: 0.88,
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2), 0 0 14px rgba(220, 38, 38, 0.8)'
+                      },
+                      '100%': {
+                        backgroundColor: '#dc2626',
+                        opacity: 1,
+                        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2)'
+                      }
+                    }
+                  }}
+                >
+                  {isAccountExpired ? (
+                    <>
+                      <ShieldAlert size={18} style={{ flexShrink: 0 }} />
+                      <span>{expiredBannerText}</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                      <span>{preExpiryInfo?.message}</span>
+                    </>
+                  )}
+                </Box>
+              )}
             </AppBar>
+          )}
+
+          {/* POS Focus Mode Banner (Pre-expiry countdown or Expired) */}
+          {posFocusMode && (isAccountExpired || preExpiryInfo) && (
+            <Box
+              sx={{
+                bgcolor: '#dc2626',
+                color: '#ffffff',
+                px: 2,
+                py: 0.85,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 1.25,
+                fontWeight: 700,
+                fontSize: { xs: '0.8rem', sm: '0.88rem' },
+                textAlign: 'center',
+                zIndex: 9999,
+                position: 'relative',
+                animation: (!isAccountExpired && preExpiryInfo?.isUrgentFinalDay) ? 'bannerPulse 1.5s infinite ease-in-out' : 'none',
+                '@keyframes bannerPulse': {
+                  '0%': {
+                    backgroundColor: '#dc2626',
+                    opacity: 1
+                  },
+                  '50%': {
+                    backgroundColor: '#991b1b',
+                    opacity: 0.88
+                  },
+                  '100%': {
+                    backgroundColor: '#dc2626',
+                    opacity: 1
+                  }
+                }
+              }}
+            >
+              {isAccountExpired ? (
+                <>
+                  <ShieldAlert size={18} style={{ flexShrink: 0 }} />
+                  <span>{expiredBannerText}</span>
+                </>
+              ) : (
+                <>
+                  <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                  <span>{preExpiryInfo?.message}</span>
+                </>
+              )}
+            </Box>
           )}
 
           {/* Mobile Navigation Drawer (Full touch targets, no text clipping) */}
@@ -1117,6 +1373,28 @@ export default function App() {
                 <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', fontSize: '0.72rem', mt: 0.25 }}>
                   🏬 {user.assigned_warehouse_name}
                 </Typography>
+              )}
+              {isAccountExpired && (
+                <Chip
+                  label="SUBSCRIPTION EXPIRED"
+                  color="error"
+                  size="small"
+                  sx={{ fontWeight: 800, fontSize: '0.65rem', height: 20, mt: 0.75 }}
+                />
+              )}
+              {preExpiryInfo && (
+                <Chip
+                  label={preExpiryInfo.daysRemaining === 0 ? 'EXPIRES TODAY' : `EXPIRES IN ${preExpiryInfo.daysRemaining} DAY${preExpiryInfo.daysRemaining === 1 ? '' : 'S'}`}
+                  color="error"
+                  size="small"
+                  sx={{
+                    fontWeight: 800,
+                    fontSize: '0.65rem',
+                    height: 20,
+                    mt: 0.75,
+                    animation: preExpiryInfo.isUrgentFinalDay ? 'bannerPulse 1.5s infinite ease-in-out' : 'none'
+                  }}
+                />
               )}
             </Box>
 
@@ -1258,8 +1536,28 @@ export default function App() {
             </Box>
           </Drawer>
 
+          {/* Expired-account full-screen interaction lock (header + banner stay above it) */}
+          {isAccountExpired && (
+            <Box
+              data-expiry-overlay="true"
+              aria-hidden="true"
+              onContextMenu={(e) => e.preventDefault()}
+              sx={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                zIndex: 1050,
+                bgcolor: 'rgba(15, 23, 42, 0.35)',
+                cursor: 'not-allowed',
+                touchAction: 'none'
+              }}
+            />
+          )}
+
           {/* View Content */}
-          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+          <Box ref={contentLockRef} sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
             {currentView === 'pos' && (
               <POSScreen
                 user={user}

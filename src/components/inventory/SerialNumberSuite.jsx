@@ -5,13 +5,14 @@ import {
   TableRow, Paper, IconButton, CircularProgress, Alert, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, FormControl,
   InputLabel, Select, MenuItem, Divider, TablePagination, InputAdornment,
-  Autocomplete, ToggleButton, ToggleButtonGroup
+  Autocomplete, ToggleButton, ToggleButtonGroup, Popover
 } from '@mui/material';
 import {
   Tag, Search, QrCode, Printer, CheckCircle2, XCircle, Package,
   Calendar, Receipt, Truck, User, ArrowRight, RefreshCw, Plus,
   ShieldCheck, AlertTriangle, Eye, Sparkles, Layers, Building2,
-  Copy, Check, Volume2, Camera, ShieldAlert, Shield, Clock
+  Copy, Check, Volume2, Camera, ShieldAlert, Shield, Clock,
+  Filter, X, RotateCcw
 } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
 import { db } from '../../utils/offlineDb';
@@ -70,6 +71,90 @@ export default function SerialNumberSuite({ user, token }) {
   const [tableSearch, setTableSearch] = useState('');
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+
+  // Column-wise Filters State for Master Serial Number Inventory
+  const initialColFilters = {
+    serial_number: '',
+    product_item: 'all',
+    sku_barcode: '',
+    purchase_date_from: '',
+    purchase_date_to: '',
+    purchase_invoice: '',
+    sale_date_from: '',
+    sale_date_to: '',
+    sales_invoice: '',
+    status: 'all',
+    warranty_start_from: '',
+    warranty_start_to: '',
+    warranty_end_from: '',
+    warranty_end_to: ''
+  };
+  const [colFilters, setColFilters] = useState(initialColFilters);
+  const [colFilterAnchorEl, setColFilterAnchorEl] = useState(null);
+  const [activeFilterCol, setActiveFilterCol] = useState(null);
+
+  const isColFilterActive = (key) => {
+    switch (key) {
+      case 'serial_number':
+        return Boolean(colFilters.serial_number?.trim());
+      case 'product_item':
+        return Boolean(colFilters.product_item && colFilters.product_item !== 'all');
+      case 'sku_barcode':
+        return Boolean(colFilters.sku_barcode?.trim());
+      case 'purchase_date':
+        return Boolean(colFilters.purchase_date_from || colFilters.purchase_date_to);
+      case 'purchase_invoice':
+        return Boolean(colFilters.purchase_invoice?.trim());
+      case 'sale_date':
+        return Boolean(colFilters.sale_date_from || colFilters.sale_date_to);
+      case 'sales_invoice':
+        return Boolean(colFilters.sales_invoice?.trim());
+      case 'status':
+        return Boolean(colFilters.status && colFilters.status !== 'all');
+      case 'warranty_start':
+        return Boolean(colFilters.warranty_start_from || colFilters.warranty_start_to);
+      case 'warranty_end':
+        return Boolean(colFilters.warranty_end_from || colFilters.warranty_end_to);
+      default:
+        return false;
+    }
+  };
+
+  const activeColFiltersCount = [
+    'serial_number', 'product_item', 'sku_barcode', 'purchase_date',
+    'purchase_invoice', 'sale_date', 'sales_invoice', 'status',
+    'warranty_start', 'warranty_end'
+  ].filter(k => isColFilterActive(k)).length;
+
+  const clearSingleColFilter = (key) => {
+    const next = { ...colFilters };
+    if (key === 'purchase_date') {
+      next.purchase_date_from = '';
+      next.purchase_date_to = '';
+    } else if (key === 'sale_date') {
+      next.sale_date_from = '';
+      next.sale_date_to = '';
+    } else if (key === 'warranty_start') {
+      next.warranty_start_from = '';
+      next.warranty_start_to = '';
+    } else if (key === 'warranty_end') {
+      next.warranty_end_from = '';
+      next.warranty_end_to = '';
+    } else if (key === 'product_item' || key === 'status') {
+      next[key] = 'all';
+    } else {
+      next[key] = '';
+    }
+    setColFilters(next);
+    setPage(0);
+    fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, next);
+  };
+
+  const clearAllColFilters = () => {
+    setColFilters(initialColFilters);
+    setPage(0);
+    fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, initialColFilters);
+  };
 
   // Print Dialog State
   const [printDialogVisible, setPrintDialogVisible] = useState(false);
@@ -138,7 +223,8 @@ export default function SerialNumberSuite({ user, token }) {
     customPage = page,
     customFilter = statusFilter,
     customQuery = tableSearch,
-    customProduct = selectedProductFilter
+    customProduct = selectedProductFilter,
+    customColFilters = colFilters
   ) => {
     setLoadingList(true);
     try {
@@ -151,6 +237,50 @@ export default function SerialNumberSuite({ user, token }) {
       });
       if (customProduct && customProduct !== 'all') {
         qParams.append('menu_item_id', customProduct);
+      }
+      if (customColFilters) {
+        if (customColFilters.serial_number?.trim()) {
+          qParams.append('col_serial_number', customColFilters.serial_number.trim());
+        }
+        if (customColFilters.product_item && customColFilters.product_item !== 'all') {
+          qParams.append('col_product_item', customColFilters.product_item);
+        }
+        if (customColFilters.sku_barcode?.trim()) {
+          qParams.append('col_sku_barcode', customColFilters.sku_barcode.trim());
+        }
+        if (customColFilters.purchase_date_from) {
+          qParams.append('col_purchase_date_from', customColFilters.purchase_date_from);
+        }
+        if (customColFilters.purchase_date_to) {
+          qParams.append('col_purchase_date_to', customColFilters.purchase_date_to);
+        }
+        if (customColFilters.purchase_invoice?.trim()) {
+          qParams.append('col_purchase_invoice', customColFilters.purchase_invoice.trim());
+        }
+        if (customColFilters.sale_date_from) {
+          qParams.append('col_sale_date_from', customColFilters.sale_date_from);
+        }
+        if (customColFilters.sale_date_to) {
+          qParams.append('col_sale_date_to', customColFilters.sale_date_to);
+        }
+        if (customColFilters.sales_invoice?.trim()) {
+          qParams.append('col_sales_invoice', customColFilters.sales_invoice.trim());
+        }
+        if (customColFilters.status && customColFilters.status !== 'all') {
+          qParams.append('col_status', customColFilters.status);
+        }
+        if (customColFilters.warranty_start_from) {
+          qParams.append('col_warranty_start_from', customColFilters.warranty_start_from);
+        }
+        if (customColFilters.warranty_start_to) {
+          qParams.append('col_warranty_start_to', customColFilters.warranty_start_to);
+        }
+        if (customColFilters.warranty_end_from) {
+          qParams.append('col_warranty_end_from', customColFilters.warranty_end_from);
+        }
+        if (customColFilters.warranty_end_to) {
+          qParams.append('col_warranty_end_to', customColFilters.warranty_end_to);
+        }
       }
       const res = await apiFetch(`/api/serial-numbers?${qParams.toString()}`);
       if (res.ok) {
@@ -536,6 +666,13 @@ export default function SerialNumberSuite({ user, token }) {
       </Box>
 
       {/* --- KPI STATS CARDS --- */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: -1, px: 0.5 }}>
+        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <Layers size={13} color="#6b7280" />
+          <span>Global Inventory Totals <Box component="span" sx={{ color: 'primary.main', fontWeight: 800 }}>(System-Wide Counts • Unaffected by Table Column Filters)</Box></span>
+        </Typography>
+      </Box>
+
       <Grid container spacing={2}>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <Card variant="outlined" sx={{ borderRadius: 2.5, p: 2, bgcolor: 'background.paper' }}>
@@ -546,6 +683,9 @@ export default function SerialNumberSuite({ user, token }) {
                 </Typography>
                 <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'text.primary' }}>
                   {stats.total_serials.toLocaleString()}
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
+                  Global Store Count
                 </Typography>
               </Box>
               <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.1)', color: 'info.main' }}>
@@ -565,6 +705,9 @@ export default function SerialNumberSuite({ user, token }) {
                 <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'success.dark' }}>
                   {stats.in_stock.toLocaleString()}
                 </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
+                  Global In Stock
+                </Typography>
               </Box>
               <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(34, 197, 94, 0.1)', color: 'success.main' }}>
                 <Package size={24} />
@@ -583,6 +726,9 @@ export default function SerialNumberSuite({ user, token }) {
                 <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'primary.dark' }}>
                   {stats.sold.toLocaleString()}
                 </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
+                  Global Sold Count
+                </Typography>
               </Box>
               <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(249, 115, 22, 0.1)', color: 'primary.main' }}>
                 <CheckCircle2 size={24} />
@@ -600,6 +746,9 @@ export default function SerialNumberSuite({ user, token }) {
                 </Typography>
                 <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'secondary.main' }}>
                   {stats.generated_today.toLocaleString()}
+                </Typography>
+                <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
+                  Global Today
                 </Typography>
               </Box>
               <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(168, 85, 247, 0.1)', color: 'secondary.main' }}>
@@ -1141,7 +1290,7 @@ export default function SerialNumberSuite({ user, token }) {
                 onClick={() => {
                   setStatusFilter('all');
                   setPage(0);
-                  fetchSerials(0, 'all', tableSearch, selectedProductFilter);
+                  fetchSerials(0, 'all', tableSearch, selectedProductFilter, colFilters);
                 }}
                 size="small"
                 sx={{ fontWeight: 700 }}
@@ -1154,7 +1303,7 @@ export default function SerialNumberSuite({ user, token }) {
                 onClick={() => {
                   setStatusFilter('in_stock');
                   setPage(0);
-                  fetchSerials(0, 'in_stock', tableSearch, selectedProductFilter);
+                  fetchSerials(0, 'in_stock', tableSearch, selectedProductFilter, colFilters);
                 }}
                 size="small"
                 sx={{ fontWeight: 700 }}
@@ -1167,7 +1316,7 @@ export default function SerialNumberSuite({ user, token }) {
                 onClick={() => {
                   setStatusFilter('sold');
                   setPage(0);
-                  fetchSerials(0, 'sold', tableSearch, selectedProductFilter);
+                  fetchSerials(0, 'sold', tableSearch, selectedProductFilter, colFilters);
                 }}
                 size="small"
                 sx={{ fontWeight: 700 }}
@@ -1185,7 +1334,7 @@ export default function SerialNumberSuite({ user, token }) {
                   const newProduct = e.target.value;
                   setSelectedProductFilter(newProduct);
                   setPage(0);
-                  fetchSerials(0, statusFilter, tableSearch, newProduct);
+                  fetchSerials(0, statusFilter, tableSearch, newProduct, colFilters);
                 }}
                 sx={{ borderRadius: 2, height: 38, fontSize: '0.85rem' }}
               >
@@ -1209,7 +1358,7 @@ export default function SerialNumberSuite({ user, token }) {
                 const val = e.target.value;
                 setTableSearch(val);
                 setPage(0);
-                fetchSerials(0, statusFilter, val, selectedProductFilter);
+                fetchSerials(0, statusFilter, val, selectedProductFilter, colFilters);
               }}
               slotProps={{
                 input: {
@@ -1225,7 +1374,7 @@ export default function SerialNumberSuite({ user, token }) {
                         onClick={() => {
                           setTableSearch('');
                           setPage(0);
-                          fetchSerials(0, statusFilter, '', selectedProductFilter);
+                          fetchSerials(0, statusFilter, '', selectedProductFilter, colFilters);
                         }}
                       >
                         <XCircle size={15} />
@@ -1237,13 +1386,37 @@ export default function SerialNumberSuite({ user, token }) {
               }}
             />
 
+            {/* Column Filters Active Indicators */}
+            {activeColFiltersCount > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Chip
+                  icon={<Filter size={13} />}
+                  label={`${activeColFiltersCount} Column Filter${activeColFiltersCount > 1 ? 's' : ''} Active`}
+                  color="warning"
+                  size="small"
+                  onDelete={clearAllColFilters}
+                  sx={{ fontWeight: 700 }}
+                />
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="warning"
+                  startIcon={<RotateCcw size={13} />}
+                  onClick={clearAllColFilters}
+                  sx={{ textTransform: 'none', fontWeight: 700, height: 32, fontSize: '0.8rem' }}
+                >
+                  Clear All Filters
+                </Button>
+              </Box>
+            )}
+
             {/* Refresh Button */}
             <Tooltip title="Refresh serial inventory table">
               <IconButton
                 size="small"
                 onClick={() => {
                   fetchStats();
-                  fetchSerials(page, statusFilter, tableSearch, selectedProductFilter);
+                  fetchSerials(page, statusFilter, tableSearch, selectedProductFilter, colFilters);
                 }}
                 sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 0.9 }}
               >
@@ -1269,17 +1442,82 @@ export default function SerialNumberSuite({ user, token }) {
                   }
                 }}
               >
-                <TableCell>Serial # (8-Digit)</TableCell>
-                <TableCell>Product Item</TableCell>
-                <TableCell>SKU / Barcode</TableCell>
-                <TableCell>Purchase Date</TableCell>
-                <TableCell>Purchase Invoice</TableCell>
-                <TableCell>Sale Date</TableCell>
-                <TableCell>Sales Invoice</TableCell>
-                <TableCell>Current Status</TableCell>
-                <TableCell>Warranty Start</TableCell>
-                <TableCell>Warranty End</TableCell>
-                <TableCell align="right">Actions</TableCell>
+                {(() => {
+                  const renderColHeader = (colKey, label, align = 'left') => {
+                    const active = isColFilterActive(colKey);
+                    return (
+                      <TableCell
+                        key={colKey}
+                        align={align}
+                        sx={{
+                          whiteSpace: 'nowrap',
+                          userSelect: 'none',
+                          cursor: 'pointer'
+                        }}
+                        onClick={(e) => {
+                          if (activeFilterCol === colKey && Boolean(colFilterAnchorEl)) {
+                            setColFilterAnchorEl(null);
+                            setActiveFilterCol(null);
+                          } else {
+                            setColFilterAnchorEl(e.currentTarget);
+                            setActiveFilterCol(colKey);
+                          }
+                        }}
+                      >
+                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, justifyContent: align === 'right' ? 'flex-end' : 'flex-start' }}>
+                          <span>{label}</span>
+                          <Tooltip title={active ? `Filter active on ${label} (Click to edit)` : `Filter by ${label}`}>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (activeFilterCol === colKey && Boolean(colFilterAnchorEl)) {
+                                  setColFilterAnchorEl(null);
+                                  setActiveFilterCol(null);
+                                } else {
+                                  setColFilterAnchorEl(e.currentTarget);
+                                  setActiveFilterCol(colKey);
+                                }
+                              }}
+                              sx={{
+                                p: 0.35,
+                                color: active ? 'primary.main' : 'text.disabled',
+                                bgcolor: active ? 'rgba(249, 115, 22, 0.15)' : 'transparent',
+                                '&:hover': {
+                                  color: 'primary.main',
+                                  bgcolor: active ? 'rgba(249, 115, 22, 0.25)' : 'action.hover'
+                                },
+                                borderRadius: 1
+                              }}
+                            >
+                              <Filter
+                                size={13}
+                                style={{
+                                  fill: active ? 'currentColor' : 'none',
+                                  strokeWidth: active ? 2.5 : 2
+                                }}
+                              />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      </TableCell>
+                    );
+                  };
+
+                  return [
+                    renderColHeader('serial_number', 'Serial # (8-Digit)'),
+                    renderColHeader('product_item', 'Product Item'),
+                    renderColHeader('sku_barcode', 'SKU / Barcode'),
+                    renderColHeader('purchase_date', 'Purchase Date'),
+                    renderColHeader('purchase_invoice', 'Purchase Invoice'),
+                    renderColHeader('sale_date', 'Sale Date'),
+                    renderColHeader('sales_invoice', 'Sales Invoice'),
+                    renderColHeader('status', 'Current Status'),
+                    renderColHeader('warranty_start', 'Warranty Start'),
+                    renderColHeader('warranty_end', 'Warranty End'),
+                    <TableCell key="actions" align="right">Actions</TableCell>
+                  ];
+                })()}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -1441,15 +1679,314 @@ export default function SerialNumberSuite({ user, token }) {
           page={page}
           onPageChange={(e, newPage) => {
             setPage(newPage);
-            fetchSerials(newPage, statusFilter, tableSearch, selectedProductFilter);
+            fetchSerials(newPage, statusFilter, tableSearch, selectedProductFilter, colFilters);
           }}
           onRowsPerPageChange={(e) => {
             const newL = parseInt(e.target.value, 10);
             setRowsPerPage(newL);
             setPage(0);
-            fetchSerials(0, statusFilter, tableSearch, selectedProductFilter);
+            fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
           }}
         />
+
+        {/* Column-Wise Filter Popover */}
+        <Popover
+          open={Boolean(colFilterAnchorEl && activeFilterCol)}
+          anchorEl={colFilterAnchorEl}
+          onClose={() => {
+            setColFilterAnchorEl(null);
+            setActiveFilterCol(null);
+          }}
+          anchorOrigin={{
+            vertical: 'bottom',
+            horizontal: ['warranty_start', 'warranty_end'].includes(activeFilterCol) ? 'right' : 'left'
+          }}
+          transformOrigin={{
+            vertical: 'top',
+            horizontal: ['warranty_start', 'warranty_end'].includes(activeFilterCol) ? 'right' : 'left'
+          }}
+          slotProps={{
+            paper: {
+              sx: {
+                p: 2,
+                width: 290,
+                maxWidth: '92vw',
+                borderRadius: 2.5,
+                boxShadow: 8,
+                border: 1,
+                borderColor: 'divider',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1.5
+              }
+            }
+          }}
+        >
+          {/* Popover Header */}
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Filter size={15} color="#f97316" />
+              <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                {activeFilterCol === 'serial_number' && 'Filter Serial #'}
+                {activeFilterCol === 'product_item' && 'Filter Product Item'}
+                {activeFilterCol === 'sku_barcode' && 'Filter SKU / Barcode'}
+                {activeFilterCol === 'purchase_date' && 'Filter Purchase Date'}
+                {activeFilterCol === 'purchase_invoice' && 'Filter Purchase Invoice'}
+                {activeFilterCol === 'sale_date' && 'Filter Sale Date'}
+                {activeFilterCol === 'sales_invoice' && 'Filter Sales Invoice'}
+                {activeFilterCol === 'status' && 'Filter Current Status'}
+                {activeFilterCol === 'warranty_start' && 'Filter Warranty Start'}
+                {activeFilterCol === 'warranty_end' && 'Filter Warranty End'}
+              </Typography>
+            </Box>
+            <IconButton size="small" onClick={() => { setColFilterAnchorEl(null); setActiveFilterCol(null); }}>
+              <X size={16} />
+            </IconButton>
+          </Box>
+
+          <Divider />
+
+          {/* Popover Body */}
+          {activeFilterCol === 'serial_number' && (
+            <TextField
+              size="small"
+              fullWidth
+              autoFocus
+              label="Serial Number"
+              placeholder="e.g. 10000001"
+              value={colFilters.serial_number}
+              onChange={(e) => setColFilters(prev => ({ ...prev, serial_number: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setPage(0);
+                  fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
+                  setColFilterAnchorEl(null);
+                  setActiveFilterCol(null);
+                }
+              }}
+              helperText="Matches any part of 8-digit serial"
+            />
+          )}
+
+          {activeFilterCol === 'product_item' && (
+            <FormControl fullWidth size="small">
+              <InputLabel>Product Item</InputLabel>
+              <Select
+                value={colFilters.product_item}
+                label="Product Item"
+                onChange={(e) => setColFilters(prev => ({ ...prev, product_item: e.target.value }))}
+              >
+                <MenuItem value="all">
+                  <em>All Products</em>
+                </MenuItem>
+                {menuItems.map(item => (
+                  <MenuItem key={item.id} value={String(item.id)}>
+                    {item.name} {item.sku ? `(${item.sku})` : ''}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+
+          {activeFilterCol === 'sku_barcode' && (
+            <TextField
+              size="small"
+              fullWidth
+              autoFocus
+              label="SKU / Barcode"
+              placeholder="e.g. 122 or CAB-01"
+              value={colFilters.sku_barcode}
+              onChange={(e) => setColFilters(prev => ({ ...prev, sku_barcode: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setPage(0);
+                  fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
+                  setColFilterAnchorEl(null);
+                  setActiveFilterCol(null);
+                }
+              }}
+            />
+          )}
+
+          {activeFilterCol === 'purchase_date' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="From Purchase Date"
+                value={colFilters.purchase_date_from}
+                onChange={(e) => setColFilters(prev => ({ ...prev, purchase_date_from: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="To Purchase Date"
+                value={colFilters.purchase_date_to}
+                onChange={(e) => setColFilters(prev => ({ ...prev, purchase_date_to: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Box>
+          )}
+
+          {activeFilterCol === 'purchase_invoice' && (
+            <TextField
+              size="small"
+              fullWidth
+              autoFocus
+              label="Purchase Invoice #"
+              placeholder="e.g. PB-2026 or PO-001"
+              value={colFilters.purchase_invoice}
+              onChange={(e) => setColFilters(prev => ({ ...prev, purchase_invoice: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setPage(0);
+                  fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
+                  setColFilterAnchorEl(null);
+                  setActiveFilterCol(null);
+                }
+              }}
+            />
+          )}
+
+          {activeFilterCol === 'sale_date' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="From Sale Date"
+                value={colFilters.sale_date_from}
+                onChange={(e) => setColFilters(prev => ({ ...prev, sale_date_from: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="To Sale Date"
+                value={colFilters.sale_date_to}
+                onChange={(e) => setColFilters(prev => ({ ...prev, sale_date_to: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Box>
+          )}
+
+          {activeFilterCol === 'sales_invoice' && (
+            <TextField
+              size="small"
+              fullWidth
+              autoFocus
+              label="Sales Invoice / Order #"
+              placeholder="e.g. INV-1004"
+              value={colFilters.sales_invoice}
+              onChange={(e) => setColFilters(prev => ({ ...prev, sales_invoice: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setPage(0);
+                  fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
+                  setColFilterAnchorEl(null);
+                  setActiveFilterCol(null);
+                }
+              }}
+            />
+          )}
+
+          {activeFilterCol === 'status' && (
+            <FormControl fullWidth size="small">
+              <InputLabel>Status</InputLabel>
+              <Select
+                value={colFilters.status}
+                label="Status"
+                onChange={(e) => setColFilters(prev => ({ ...prev, status: e.target.value }))}
+              >
+                <MenuItem value="all"><em>All Statuses</em></MenuItem>
+                <MenuItem value="in_stock">In Stock (Not Sold)</MenuItem>
+                <MenuItem value="sold">Sold to Customer</MenuItem>
+              </Select>
+            </FormControl>
+          )}
+
+          {activeFilterCol === 'warranty_start' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="From Warranty Start"
+                value={colFilters.warranty_start_from}
+                onChange={(e) => setColFilters(prev => ({ ...prev, warranty_start_from: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="To Warranty Start"
+                value={colFilters.warranty_start_to}
+                onChange={(e) => setColFilters(prev => ({ ...prev, warranty_start_to: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Box>
+          )}
+
+          {activeFilterCol === 'warranty_end' && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="From Warranty End"
+                value={colFilters.warranty_end_from}
+                onChange={(e) => setColFilters(prev => ({ ...prev, warranty_end_from: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+              <TextField
+                size="small"
+                fullWidth
+                type="date"
+                label="To Warranty End"
+                value={colFilters.warranty_end_to}
+                onChange={(e) => setColFilters(prev => ({ ...prev, warranty_end_to: e.target.value }))}
+                slotProps={{ inputLabel: { shrink: true } }}
+              />
+            </Box>
+          )}
+
+          <Divider />
+
+          {/* Popover Footer Actions */}
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 0.5 }}>
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => {
+                clearSingleColFilter(activeFilterCol);
+                setColFilterAnchorEl(null);
+                setActiveFilterCol(null);
+              }}
+              sx={{ textTransform: 'none', fontWeight: 600 }}
+            >
+              Clear
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              onClick={() => {
+                setPage(0);
+                fetchSerials(0, statusFilter, tableSearch, selectedProductFilter, colFilters);
+                setColFilterAnchorEl(null);
+                setActiveFilterCol(null);
+              }}
+              sx={{ textTransform: 'none', fontWeight: 700, px: 2 }}
+            >
+              Apply Filter
+            </Button>
+          </Box>
+        </Popover>
       </Card>
 
       {/* --- DEDICATED SERIAL NUMBER PRINT DIALOG --- */}

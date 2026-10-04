@@ -102,6 +102,14 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
   };
 
   const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      if (e.nativeEvent?.stopImmediatePropagation) {
+        e.nativeEvent.stopImmediatePropagation();
+      }
+    }
     handlePositiveNumberKeyDown(e, {
       allowDecimal: true,
       onLeadingDot: () => setWeightValue('0.'),
@@ -158,11 +166,14 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
       pricePerBaseUnit,
       calculatedTotal: parseFloat(calculatedTotal)
     });
+    if (typeof onClose === 'function') {
+      onClose();
+    }
   };
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
         {/* Header */}
         <div style={styles.header}>
           <div>

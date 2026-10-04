@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useKeyboardShortcuts } from '../utils/useKeyboardShortcuts';
 import WeightInputModal from '../components/WeightInputModal';
+import SerialSelectionModal from '../components/SerialSelectionModal';
 import CartQtyEditModal from '../components/CartQtyEditModal';
 import KeyboardHelpModal from '../components/KeyboardHelpModal';
 import LanguageSelectorModal from '../components/LanguageSelectorModal';
@@ -288,6 +289,8 @@ export default function POS({
   // Modals & Overlay Visibility
   const [weightModalVisible, setWeightModalVisible] = useState(false);
   const [selectedWeightProduct, setSelectedWeightProduct] = useState(null);
+  const [serialModalVisible, setSerialModalVisible] = useState(false);
+  const [selectedSerialProduct, setSelectedSerialProduct] = useState(null);
   const [editingCartIndex, setEditingCartIndex] = useState(null);
   const [cartQtyModalOpen, setCartQtyModalOpen] = useState(false);
   const [editingCartItem, setEditingCartItem] = useState(null);
@@ -310,6 +313,7 @@ export default function POS({
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [barcodeScannerOpen, setBarcodeScannerOpen] = useState(false);
+  const [posScanMode, setPosScanMode] = useState('auto'); // 'auto' | 'barcode' | 'serial'
   const [stickerModalItems, setStickerModalItems] = useState(null);
 
   // Auto-scroll selected cart row into view when selectedCartIndex changes
@@ -737,6 +741,23 @@ export default function POS({
     return ['kg', 'gram', 'gm', 'g', 'litre', 'ltr', 'ml'].includes(u);
   };
 
+  const isProductSerialTracked = useCallback((p) => {
+    if (!p) return false;
+    const unitType = (p.pos_unit_type || p.item_type || p.itemType || '').toUpperCase().trim();
+    if (unitType === 'SERIAL' || unitType === 'SERIAL NUMBER' || unitType === 'SERIALIZED') return true;
+    if (unitType === 'WEIGHT' || p.is_weight_based === 1 || p.is_weight_based === true || p.is_weight_based === '1') return false;
+    if (p.is_serial_tracked === 1 || p.is_serial_tracked === true || p.is_serial_tracked === '1') {
+      if (p.sku === '122' || p.barcode === '122' || (p.name && p.name.toLowerCase().includes('hdmi'))) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const alreadyInCartSerials = useMemo(() => {
+    return cart.map(i => i.serial_number).filter(Boolean);
+  }, [cart]);
+
   // Enter Key - Quantity Popup Setting Resolver (Default: ON)
   const isEnterKeyQtyPopupEnabled = receiptSettings?.enter_key_qty_popup !== undefined
     ? (Number(receiptSettings.enter_key_qty_popup) === 1 || receiptSettings.enter_key_qty_popup === true || receiptSettings.enter_key_qty_popup === '1')
@@ -912,40 +933,6 @@ export default function POS({
     return false;
   }, []);
 
-  // Product Selection & Cart Actions
-  const handleSelectProduct = useCallback((product, fromEnterKey = false) => {
-    if (!product) return;
-    if (isProductWeightBased(product)) {
-      setSelectedWeightProduct(product);
-      setEditingCartIndex(null);
-      setWeightModalVisible(true);
-    } else {
-      const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
-      if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
-        if (existingIdx > -1) {
-          // Item already in cart — directly increment quantity on scan
-          addPieceItemToCart(product);
-          setSearchQuery('');
-          autoFocusSearch();
-        } else {
-          // New item — open quantity popup
-          setSelectedCartIndex(cart.length);
-          setEditingCartIndex(null);
-          setEditingCartItem({
-            ...product,
-            product_id: product.id || product.menu_item_id,
-            quantity: 1
-          });
-          setCartQtyModalOpen(true);
-        }
-      } else {
-        addPieceItemToCart(product);
-        setSearchQuery('');
-        autoFocusSearch();
-      }
-    }
-  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct]);
-
   const addPieceItemToCart = useCallback((product) => {
     const isWholesale = pricingMode === 'wholesale';
     const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
@@ -1026,6 +1013,59 @@ export default function POS({
       }
     });
   }, [setCart, cart, isCartItemMatchingProduct, pricingMode]);
+
+  // Product Selection & Cart Actions
+  const handleSelectProduct = useCallback((product, fromEnterKey = false) => {
+    if (!product) return;
+    if (isProductWeightBased(product)) {
+      setSelectedWeightProduct(product);
+      setEditingCartIndex(null);
+      setWeightModalVisible(true);
+    } else if (isProductSerialTracked(product)) {
+      setSelectedSerialProduct(product);
+      setSerialModalVisible(true);
+    } else {
+      const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
+      if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
+        if (existingIdx > -1) {
+          // Item already in cart — directly increment quantity on scan
+          addPieceItemToCart(product);
+          setSearchQuery('');
+          autoFocusSearch();
+        } else {
+          // New item — open quantity popup
+          setSelectedCartIndex(cart.length);
+          setEditingCartIndex(null);
+          setEditingCartItem({
+            ...product,
+            product_id: product.id || product.menu_item_id,
+            quantity: 1
+          });
+          setCartQtyModalOpen(true);
+        }
+      } else {
+        addPieceItemToCart(product);
+        setSearchQuery('');
+        autoFocusSearch();
+      }
+    }
+  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct, isProductWeightBased, isProductSerialTracked, addPieceItemToCart]);
+
+  const handleSerialConfirm = useCallback((selectedSerials, product) => {
+    if (!product || !Array.isArray(selectedSerials) || selectedSerials.length === 0) return;
+    selectedSerials.forEach((sn) => {
+      addPieceItemToCart({
+        ...product,
+        scanned_serial_number: sn,
+        serial_number: sn
+      });
+    });
+    setSerialModalVisible(false);
+    setSelectedSerialProduct(null);
+    setSearchQuery('');
+    autoFocusSearch();
+    playBarcodeSuccess();
+  }, [addPieceItemToCart, autoFocusSearch]);
 
   const handleWeightConfirm = (weightData) => {
     const { product, weightInKg, displayWeight, unit, pricePerBaseUnit, calculatedTotal } = weightData;
@@ -1233,21 +1273,20 @@ export default function POS({
     });
   };
 
-  // Helper: Find matching product by barcode, SKU, or generated ID barcode
-  const findMatchingProduct = useCallback((rawCode) => {
+  // Helper: Find matching product by barcode, generated ID barcode, or fallback SKU
+  const findMatchingProduct = useCallback((rawCode, allowSkuFallback = true) => {
     if (!rawCode || !menuItems || menuItems.length === 0) return null;
     const clean = String(rawCode).trim().toLowerCase();
     if (!clean) return null;
 
-    // 1. Exact match on barcode or SKU
+    // 1. Primary: Exact match on product Barcode (scannable passcode)
     let match = menuItems.find((p) => {
       const b = String(p.barcode || '').trim().toLowerCase();
-      const s = String(p.sku || '').trim().toLowerCase();
-      return (b && b === clean) || (s && s === clean);
+      return b && b === clean;
     });
     if (match) return match;
 
-    // 2. Match with PRD prefix or raw ID (generated sticker barcodes use PRD{id} or SKU)
+    // 2. Match with PRD prefix or raw ID (generated sticker barcodes use PRD{id})
     match = menuItems.find((p) => {
       const id = String(p.id || p.menu_item_id || '').trim().toLowerCase();
       if (!id) return false;
@@ -1255,14 +1294,24 @@ export default function POS({
     });
     if (match) return match;
 
-    // 3. Match normalized leading zeros (e.g. 00123 vs 123)
+    // 3. Match normalized leading zeros on barcode (e.g. 00123 vs 123)
     match = menuItems.find((p) => {
       const b = String(p.barcode || '').trim().replace(/^0+/, '').toLowerCase();
       const c = clean.replace(/^0+/, '');
       return b && c && b === c;
     });
+    if (match) return match;
 
-    return match || null;
+    // 4. Secondary fallback: SKU match only when explicitly permitted (and barcode was not matched)
+    if (allowSkuFallback) {
+      match = menuItems.find((p) => {
+        const s = String(p.sku || '').trim().toLowerCase();
+        return s && s === clean;
+      });
+      if (match) return match;
+    }
+
+    return null;
   }, [menuItems]);
 
   // Handler: Directly add scanned product to cart with sound feedback
@@ -1291,15 +1340,66 @@ export default function POS({
       if (e.key === 'Enter') {
         const candidate = buffer.trim();
         if (candidate.length >= 2) {
-          const exactMatch = findMatchingProduct(candidate);
-          if (exactMatch) {
+          // If in 'serial' mode: strictly route scan to serial number lookup
+          if (posScanMode === 'serial') {
+            if (/^\d{8}$/.test(candidate)) {
+              e.preventDefault();
+              e.stopPropagation();
+              apiFetch(`/api/serial-numbers/lookup?sn=${candidate}`).then(res => res.json()).then(sData => {
+                if (sData.success && sData.data && !sData.data.is_sold) {
+                  const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+                  handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+                } else if (sData.success && sData.data && sData.data.is_sold) {
+                  playBarcodeError();
+                  notify?.error(`Serial #${candidate} is already sold.`, 'Serial Sold');
+                } else {
+                  playBarcodeError();
+                  notify?.error(`Serial #${candidate} not found.`, 'Invalid Serial');
+                }
+              }).catch(() => playBarcodeError());
+              buffer = '';
+              clearTimeout(timeoutId);
+              return;
+            } else {
+              playBarcodeError();
+              notify?.error(`Serial Number must be 8 digits (scanned: ${candidate})`, 'Serial Mode Error');
+              buffer = '';
+              clearTimeout(timeoutId);
+              return;
+            }
+          }
+
+          // In 'barcode' mode: strictly scan product barcode (no serial fallback)
+          if (posScanMode === 'barcode') {
+            const barcodeMatch = findMatchingProduct(candidate, false);
+            if (barcodeMatch) {
+              e.preventDefault();
+              e.stopPropagation();
+              handleBarcodeScanAdd(barcodeMatch);
+              buffer = '';
+              clearTimeout(timeoutId);
+              return;
+            } else {
+              playBarcodeError();
+              notify?.error(`No product barcode matching: ${candidate}`, 'Barcode Not Found');
+              buffer = '';
+              clearTimeout(timeoutId);
+              return;
+            }
+          }
+
+          // In 'auto' mode: check product barcode first
+          const exactBarcode = findMatchingProduct(candidate, false);
+          if (exactBarcode) {
             e.preventDefault();
             e.stopPropagation();
-            handleBarcodeScanAdd(exactMatch);
+            handleBarcodeScanAdd(exactBarcode);
             buffer = '';
             clearTimeout(timeoutId);
             return;
           }
+
+          // If no barcode match and candidate is an 8-digit serial number, lookup serial
           if (/^\d{8}$/.test(candidate)) {
             e.preventDefault();
             e.stopPropagation();
@@ -1311,6 +1411,17 @@ export default function POS({
                 playBarcodeError();
               }
             }).catch(() => {});
+            buffer = '';
+            clearTimeout(timeoutId);
+            return;
+          }
+
+          // Finally, check SKU fallback if barcode was not matched
+          const skuMatch = findMatchingProduct(candidate, true);
+          if (skuMatch) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleBarcodeScanAdd(skuMatch);
             buffer = '';
             clearTimeout(timeoutId);
             return;
@@ -1335,17 +1446,53 @@ export default function POS({
       window.removeEventListener('keydown', handleKeyDown, true);
       clearTimeout(timeoutId);
     };
-  }, [findMatchingProduct, handleBarcodeScanAdd]);
+  }, [findMatchingProduct, handleBarcodeScanAdd, posScanMode, menuItems, notify]);
 
   // USB Barcode Scanner & Search Input Enter Submission
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     if (!queryLower) return;
 
-    const exactMatch = findMatchingProduct(queryLower);
+    if (posScanMode === 'serial') {
+      if (/^\d{8}$/.test(queryLower)) {
+        apiFetch(`/api/serial-numbers/lookup?sn=${queryLower}`).then(res => res.json()).then(sData => {
+          if (sData.success && sData.data && !sData.data.is_sold) {
+            const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+            handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+          } else if (sData.success && sData.data && sData.data.is_sold) {
+            playBarcodeError();
+            notify?.error(`Serial #${queryLower} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
+          } else {
+            playBarcodeError();
+            notify?.error(`No active product found for serial #${queryLower}`, 'Not Found');
+          }
+        }).catch(() => playBarcodeError());
+      } else {
+        playBarcodeError();
+        notify?.error(`Serial Number must be 8 digits (entered: ${queryLower})`, 'Serial Mode');
+      }
+      return;
+    }
 
-    if (exactMatch) {
-      handleBarcodeScanAdd(exactMatch);
+    if (posScanMode === 'barcode') {
+      const barcodeMatch = findMatchingProduct(queryLower, false);
+      if (barcodeMatch) {
+        handleBarcodeScanAdd(barcodeMatch);
+        return;
+      } else if (filteredProducts.length > 0) {
+        handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0], false);
+        return;
+      } else {
+        playBarcodeError();
+        notify?.error(`No product barcode matching: ${queryLower}`, 'Barcode Not Found');
+        return;
+      }
+    }
+
+    // Auto Mode: Barcode -> Serial Number -> Fallback Search/SKU
+    const exactBarcode = findMatchingProduct(queryLower, false);
+    if (exactBarcode) {
+      handleBarcodeScanAdd(exactBarcode);
     } else if (/^\d{8}$/.test(queryLower)) {
       apiFetch(`/api/serial-numbers/lookup?sn=${queryLower}`).then(res => res.json()).then(sData => {
         if (sData.success && sData.data && !sData.data.is_sold) {
@@ -1359,10 +1506,15 @@ export default function POS({
           notify?.error(`No active product found for serial #${queryLower}`, 'Not Found');
         }
       }).catch(() => playBarcodeError());
-    } else if (filteredProducts.length > 0) {
-      handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0], false);
     } else {
-      playBarcodeError();
+      const skuOrIdMatch = findMatchingProduct(queryLower, true);
+      if (skuOrIdMatch) {
+        handleBarcodeScanAdd(skuOrIdMatch);
+      } else if (filteredProducts.length > 0) {
+        handleSelectProduct(filteredProducts[selectedProductIndex] || filteredProducts[0], false);
+      } else {
+        playBarcodeError();
+      }
     }
   };
 
@@ -1370,7 +1522,46 @@ export default function POS({
   const handleCameraBarcodeScan = async (scannedCode) => {
     if (!scannedCode) return { success: false, message: 'No barcode detected' };
     const clean = String(scannedCode).trim();
-    const matched = findMatchingProduct(clean);
+
+    if (posScanMode === 'serial') {
+      if (/^\d{8}$/.test(clean)) {
+        try {
+          const res = await apiFetch(`/api/serial-numbers/lookup?sn=${clean}`);
+          const sData = await res.json();
+          if (sData.success && sData.data && !sData.data.is_sold) {
+            const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+            handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+            return { success: true, message: `Added ${prod.name} (SN: ${clean}) to cart` };
+          } else if (sData.success && sData.data && sData.data.is_sold) {
+            playBarcodeError();
+            notify?.error(`Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
+            return { success: false, message: `Serial #${clean} is already sold` };
+          } else {
+            playBarcodeError();
+            return { success: false, message: `Serial #${clean} not found in inventory` };
+          }
+        } catch (snErr) {
+          playBarcodeError();
+          return { success: false, message: `Error checking serial #${clean}` };
+        }
+      } else {
+        playBarcodeError();
+        return { success: false, message: `Invalid serial #${clean} (must be 8 digits)` };
+      }
+    }
+
+    if (posScanMode === 'barcode') {
+      const matched = findMatchingProduct(clean, false);
+      if (matched) {
+        handleBarcodeScanAdd(matched);
+        return { success: true, message: `Added ${matched.name} to cart` };
+      }
+      playBarcodeError();
+      return { success: false, message: `No product barcode matching: ${clean}` };
+    }
+
+    // Auto Mode: Barcode match first
+    const matched = findMatchingProduct(clean, false);
     if (matched) {
       handleBarcodeScanAdd(matched);
       return { success: true, message: `Added ${matched.name} to cart` };
@@ -1397,6 +1588,13 @@ export default function POS({
         playBarcodeError();
         return { success: false, message: `Error checking serial #${clean}` };
       }
+    }
+
+    // Fallback to SKU in auto mode
+    const skuFallback = findMatchingProduct(clean, true);
+    if (skuFallback) {
+      handleBarcodeScanAdd(skuFallback);
+      return { success: true, message: `Added ${skuFallback.name} to cart` };
     }
 
     playBarcodeError();
@@ -2416,7 +2614,13 @@ export default function POS({
               style={{ ...styles.searchInput, color: colors.textPrimary }}
               className="pos-search-input"
               type="text"
-              placeholder={t('searchPlaceholder')}
+              placeholder={
+                posScanMode === 'barcode'
+                  ? 'Scan Product Barcode (F2)...'
+                  : posScanMode === 'serial'
+                  ? 'Scan 8-digit Serial Number (F2)...'
+                  : t('searchPlaceholder')
+              }
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -2426,6 +2630,38 @@ export default function POS({
             {searchQuery && (
               <button style={{ ...styles.clearSearchBtn, color: colors.textSecondary }} type="button" onClick={() => setSearchQuery('')}><X size={15} /></button>
             )}
+
+            {/* Scan Mode Indicator & Toggle */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingRight: '6px' }}>
+              <button
+                type="button"
+                id="pos-scan-mode-toggle"
+                title={`Scanner Mode: ${posScanMode === 'barcode' ? 'Barcode Mode (Strict Product Scan)' : posScanMode === 'serial' ? 'Serial Number Mode (Strict 8-digit Unit Scan)' : 'Auto Mode (Product Barcode First)'}. Click to switch.`}
+                onClick={() => {
+                  setPosScanMode(prev => prev === 'auto' ? 'barcode' : prev === 'barcode' ? 'serial' : 'auto');
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '3px 8px',
+                  borderRadius: '6px',
+                  border: '1px solid',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  whiteSpace: 'nowrap',
+                  backgroundColor: posScanMode === 'barcode' ? (isDark ? '#1e3a8a' : '#EFF6FF') : posScanMode === 'serial' ? (isDark ? '#78350f' : '#FEF3C7') : (isDark ? '#1e293b' : '#F1F5F9'),
+                  borderColor: posScanMode === 'barcode' ? '#3B82F6' : posScanMode === 'serial' ? '#F59E0B' : '#94A3B8',
+                  color: posScanMode === 'barcode' ? (isDark ? '#93C5FD' : '#1D4ED8') : posScanMode === 'serial' ? (isDark ? '#FDE68A' : '#B45309') : (isDark ? '#CBD5E1' : '#475569')
+                }}
+              >
+                {posScanMode === 'auto' && '⚡ Auto Scan'}
+                {posScanMode === 'barcode' && '🏷️ Barcode Only'}
+                {posScanMode === 'serial' && '🔢 Serial No'}
+              </button>
+            </div>
           </form>
 
           {/* CONTROL BAR: Live Status | Barcode Camera | Focus | Sidebar Toggle | Density */}
@@ -2793,6 +3029,7 @@ export default function POS({
               >
                 {filteredProducts.map((product, idx) => {
                   const isWeight = isProductWeightBased(product);
+                  const isSerial = isProductSerialTracked(product);
                   const isWholesale = pricingMode === 'wholesale';
                   const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
                     ? parseFloat(product.wholesale_price)
@@ -2891,12 +3128,12 @@ export default function POS({
                         }}>
                           <span style={{
                             ...styles.badge,
-                            ...(isWeight ? styles.weightBadge : styles.pieceBadge),
+                            ...(isSerial ? { backgroundColor: '#f3e8ff', color: '#7e22ce', border: '1px solid #d8b4fe' } : isWeight ? styles.weightBadge : styles.pieceBadge),
                             fontSize: densityMode === 'icon' ? '8px' : (densityMode === 'compact' ? '9px' : '10px'),
                             padding: densityMode === 'icon' ? '1px 3px' : '2px 5px',
                             flexShrink: 0
                           }}>
-                            {isWeight ? <><Scale size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'WT' : t('weightBadge')}</> : <><Package size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'PCS' : t('pcsBadge')}</>}
+                            {isSerial ? <><Tag size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'SN' : 'SERIAL'}</> : isWeight ? <><Scale size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'WT' : t('weightBadge')}</> : <><Package size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'PCS' : t('pcsBadge')}</>}
                           </span>
                           {(product.barcode || product.sku) && (
                             <span style={{
@@ -3238,7 +3475,15 @@ export default function POS({
                             </div>
                           )}
                           <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                            {item.is_weight_based ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Scale size={10} />{t('weightBadge')}</span> : <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>}
+                            {item.serial_number ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#9333ea', fontWeight: 700 }}>
+                                <Tag size={10} />SERIAL
+                              </span>
+                            ) : item.is_weight_based ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Scale size={10} />{t('weightBadge')}</span>
+                            ) : (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>
+                            )}
                           </div>
                         </td>
                         <td style={{ ...styles.td, color: colors.textPrimary }}>
@@ -3499,7 +3744,15 @@ export default function POS({
                               </div>
                             )}
                             <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                              {item.is_weight_based ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Scale size={10} />{t('weightBadge')}</span> : <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>}
+                              {item.serial_number ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#9333ea', fontWeight: 700 }}>
+                                  <Tag size={10} />SERIAL
+                                </span>
+                              ) : item.is_weight_based ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Scale size={10} />{t('weightBadge')}</span>
+                              ) : (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>
+                              )}
                             </div>
                           </td>
                           <td style={{ ...styles.td, color: colors.textPrimary }}>
@@ -3754,6 +4007,19 @@ export default function POS({
         onClose={() => setWeightModalVisible(false)}
       />
 
+      <SerialSelectionModal
+        isOpen={serialModalVisible}
+        product={selectedSerialProduct}
+        alreadyInCartSerials={alreadyInCartSerials}
+        pricingMode={pricingMode}
+        onConfirm={handleSerialConfirm}
+        onClose={() => {
+          setSerialModalVisible(false);
+          setSelectedSerialProduct(null);
+          autoFocusSearch();
+        }}
+      />
+
       <CartQtyEditModal
         isOpen={cartQtyModalOpen}
         item={editingCartItem || (editingCartIndex !== null ? cart[editingCartIndex] : cart[selectedCartIndex])}
@@ -3782,8 +4048,14 @@ export default function POS({
         onClose={() => setBarcodeScannerOpen(false)}
         onScan={handleCameraBarcodeScan}
         continuous={true}
-        title="POS Camera Barcode Scanner"
-        subtitle="Point camera at item barcode to continuously add items to cart"
+        title={`POS Camera Scanner (${posScanMode === 'barcode' ? 'Barcode Mode' : posScanMode === 'serial' ? 'Serial Number Mode' : 'Auto Mode'})`}
+        subtitle={
+          posScanMode === 'barcode'
+            ? 'Point camera at product barcode to continuously add items to cart'
+            : posScanMode === 'serial'
+            ? 'Point camera at 8-digit Serial Number barcodes to track unit items'
+            : 'Point camera at item barcode or serial number to continuously add items to cart'
+        }
       />
 
       <HeldReceiptsModal

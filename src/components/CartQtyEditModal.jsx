@@ -66,6 +66,14 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
   };
 
   const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      if (e.nativeEvent?.stopImmediatePropagation) {
+        e.nativeEvent.stopImmediatePropagation();
+      }
+    }
     handlePositiveNumberKeyDown(e, {
       allowDecimal: true,
       onLeadingDot: () => setQtyValue('0.'),
@@ -95,11 +103,14 @@ export default function CartQtyEditModal({ isOpen, item, onConfirm, onClose, onC
       return;
     }
     onConfirm(numericQty);
+    if (typeof onClose === 'function') {
+      onClose();
+    }
   };
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div style={styles.modal} onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <div style={styles.header}>
           <div>
             <h2 style={{ ...styles.productName, display: 'flex', alignItems: 'center', gap: '8px' }}>

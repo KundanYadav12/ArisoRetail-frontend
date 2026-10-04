@@ -78,14 +78,21 @@ export function useKeyboardShortcuts(shortcuts = {}, deps = []) {
           event.preventDefault();
         }
       } else if (key === 'Enter') {
-        const activeTag = document.activeElement?.tagName;
-        if (activeTag === 'INPUT') {
-          const inputEl = document.activeElement;
-          if (inputEl && inputEl.classList.contains('pos-search-input') && !inputEl.value) {
+        const targetTag = (event.target?.tagName || '').toUpperCase();
+        const activeTag = (document.activeElement?.tagName || '').toUpperCase();
+        const isTargetInput = targetTag === 'INPUT';
+        const isActiveInput = activeTag === 'INPUT';
+
+        if (isTargetInput || isActiveInput) {
+          const inputEl = isTargetInput ? event.target : document.activeElement;
+          if (inputEl && inputEl.classList?.contains('pos-search-input') && !inputEl.value) {
             actionKey = 'Enter';
             event.preventDefault();
           }
-        } else if (activeTag !== 'TEXTAREA' && activeTag !== 'BUTTON') {
+        } else if (
+          activeTag !== 'TEXTAREA' && activeTag !== 'BUTTON' &&
+          targetTag !== 'TEXTAREA' && targetTag !== 'BUTTON'
+        ) {
           actionKey = 'Enter';
           event.preventDefault();
         }
