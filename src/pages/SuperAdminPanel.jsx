@@ -42,6 +42,7 @@ export default function SuperAdminPanel({ token }) {
   const [durationMonths, setDurationMonths] = useState('12');
   const [maxUserLimit, setMaxUserLimit] = useState('5');
   const [planId, setPlanId] = useState('1');
+  const [provisionReconciliation, setProvisionReconciliation] = useState(false);
 
   // Edit Tenant Modal
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -109,7 +110,8 @@ export default function SuperAdminPanel({ token }) {
       domain: restDomain,
       duration_months: parseInt(durationMonths),
       max_user_limit: parseInt(maxUserLimit),
-      subscription_plan_id: parseInt(planId)
+      subscription_plan_id: parseInt(planId),
+      reconciliation_enabled: provisionReconciliation ? 1 : 0
     };
 
     try {
@@ -210,7 +212,8 @@ export default function SuperAdminPanel({ token }) {
       subscription_plan_id: tenant.subscription_plan_id || 1,
       subscription_start_date: formatDateForInput(tenant.subscription_start_date || tenant.created_at),
       subscription_expires_at: formatDateForInput(tenant.subscription_expires_at),
-      feature_serial_numbers: tenant.feature_serial_numbers !== undefined ? Boolean(tenant.feature_serial_numbers) : true
+      feature_serial_numbers: tenant.feature_serial_numbers !== undefined ? Boolean(tenant.feature_serial_numbers) : true,
+      reconciliation_enabled: tenant.reconciliation_enabled !== undefined ? Boolean(tenant.reconciliation_enabled) : false
     });
     setEditDialogOpen(true);
   };
@@ -371,6 +374,20 @@ export default function SuperAdminPanel({ token }) {
       fetchSaaSData();
     } catch (err) {
       notify.error('Failed to toggle Serial Numbers permission.', 'Toggle Failed');
+    }
+  };
+
+  const handleToggleReconciliation = async (id, currentVal) => {
+    const nextVal = !currentVal;
+    try {
+      await apiFetch(`/api/superadmin/restaurants/${id}/toggle-reconciliation`, {
+        method: 'PATCH',
+        body: { enabled: nextVal }
+      });
+      notify.success(`Payment Reconciliation feature permission ${nextVal ? 'ENABLED' : 'DISABLED'} for this store.`, 'Payment Reconciliation Permission');
+      fetchSaaSData();
+    } catch (err) {
+      notify.error('Failed to toggle Payment Reconciliation permission.', 'Toggle Failed');
     }
   };
 
@@ -815,6 +832,14 @@ export default function SuperAdminPanel({ token }) {
                       sx={{ fontWeight: 800, cursor: 'pointer', height: 24, fontSize: '0.72rem' }}
                       title="Toggle Serial Numbers Permission"
                     />
+                    <Chip
+                      label={`Reconciliation: ${rest.reconciliation_enabled ? 'ON' : 'OFF'}`}
+                      color={rest.reconciliation_enabled ? 'secondary' : 'default'}
+                      size="small"
+                      onClick={() => handleToggleReconciliation(rest.id, rest.reconciliation_enabled)}
+                      sx={{ fontWeight: 800, cursor: 'pointer', height: 24, fontSize: '0.72rem' }}
+                      title="Toggle Payment Reconciliation Permission"
+                    />
                   </Box>
 
                   {/* Metadata Fields (2-column grid) */}
@@ -939,6 +964,7 @@ export default function SuperAdminPanel({ token }) {
                   <TableCell sx={{ fontWeight: 'bold' }}>SuperBill Mode</TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Barcode Scanner</TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Serial Numbers</TableCell>
+                  <TableCell sx={{ fontWeight: 'bold' }}>Reconciliation</TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Start Date</TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Expiry Date</TableCell>
                   <TableCell sx={{ fontWeight: 'bold' }}>Current Yr Price</TableCell>
@@ -1013,6 +1039,16 @@ export default function SuperAdminPanel({ token }) {
                         onClick={() => handleToggleSerialNumbers(rest.id, rest.feature_serial_numbers)}
                         sx={{ fontWeight: 800, cursor: 'pointer' }}
                         title="Toggle Serial Numbers Permission (Super Admin Only)"
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={rest.reconciliation_enabled ? 'ENABLED' : 'DISABLED'}
+                        color={rest.reconciliation_enabled ? 'secondary' : 'default'}
+                        size="small"
+                        onClick={() => handleToggleReconciliation(rest.id, rest.reconciliation_enabled)}
+                        sx={{ fontWeight: 800, cursor: 'pointer' }}
+                        title="Toggle Payment Reconciliation Permission (Super Admin Only)"
                       />
                     </TableCell>
                     <TableCell sx={{ fontSize: 13 }}>
@@ -1147,6 +1183,18 @@ export default function SuperAdminPanel({ token }) {
             </Grid>
 
             <TextField label="Max Staff User Limit" type="number" size="small" fullWidth value={maxUserLimit} onChange={e => setMaxUserLimit(e.target.value)} required />
+
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, bgcolor: 'action.hover' }}>
+              <Box>
+                <Typography variant="body2" sx={{ fontWeight: 700 }}>Payment Reconciliation</Typography>
+                <Typography variant="caption" color="text.secondary">Allow store users to access the Reconciliation module</Typography>
+              </Box>
+              <Switch
+                checked={Boolean(provisionReconciliation)}
+                onChange={e => setProvisionReconciliation(e.target.checked)}
+                color="secondary"
+              />
+            </Box>
           </DialogContent>
           <DialogActions>
             <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -1313,6 +1361,19 @@ export default function SuperAdminPanel({ token }) {
                 <Switch
                   checked={Boolean(editTenant.feature_serial_numbers)}
                   onChange={e => setEditTenant({ ...editTenant, feature_serial_numbers: e.target.checked })}
+                  color="secondary"
+                  disabled={editTenant.subscription_status === 'expired'}
+                />
+              </Box>
+
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1.5, bgcolor: 'action.hover' }}>
+                <Box>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>Payment Reconciliation</Typography>
+                  <Typography variant="caption" color="text.secondary">Allow store users to access the Reconciliation module</Typography>
+                </Box>
+                <Switch
+                  checked={Boolean(editTenant.reconciliation_enabled)}
+                  onChange={e => setEditTenant({ ...editTenant, reconciliation_enabled: e.target.checked })}
                   color="secondary"
                   disabled={editTenant.subscription_status === 'expired'}
                 />

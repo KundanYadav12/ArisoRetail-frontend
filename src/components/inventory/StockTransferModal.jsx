@@ -185,13 +185,15 @@ export default function StockTransferModal({
         notes: notes.trim(),
         items: items.map(it => ({
           menu_item_id: it.menu_item_id,
+          item_name: it.name || it.item_name || '',
+          unit: it.unit || 'pcs',
           sent_qty: parseFloat(it.sent_qty),
           unit_cost: parseFloat(it.unit_cost || 0),
           source_rack_id: it.source_rack_id ? parseInt(it.source_rack_id, 10) : null,
           destination_rack_id: it.destination_rack_id ? parseInt(it.destination_rack_id, 10) : null,
-          batch_number: it.batch_number || null,
-          expiry_date: it.expiry_date || null,
-          notes: it.notes || null
+          batch_number: it.batch_number && it.batch_number.trim() !== '' ? it.batch_number.trim() : null,
+          expiry_date: it.expiry_date && it.expiry_date.trim() !== '' ? it.expiry_date.trim() : null,
+          notes: it.notes && it.notes.trim() !== '' ? it.notes.trim() : null
         }))
       };
 

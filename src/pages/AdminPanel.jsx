@@ -199,23 +199,31 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
       if (user?.feature_serial_numbers === false) return false;
       return userPermissions.includes('serial_numbers') || isAdminOrOwner || userPermissions.includes('all');
     }
+    if (perm === 'payment_reconciliation') {
+      if (!user?.reconciliation_enabled) return false;
+      return userPermissions.includes('payment_reconciliation') || isAdminOrOwner || userPermissions.includes('all');
+    }
     if (isAdminOrOwner && (!user?.permissions || user.permissions.length === 0)) return true;
     if (userPermissions.includes('all') || userPermissions.includes(perm)) return true;
     if (perm === 'warehouse_reports' && userPermissions.includes('item_sales_report')) return true;
     if (perm === 'item_sales_report' && userPermissions.includes('warehouse_reports')) return true;
     if (perm === 'bank_accounts' && userPermissions.includes('finance_accounts')) return true;
     return false;
-  }, [isSuperAdmin, isAdminOrOwner, user?.permissions, userPermissions, user?.feature_serial_numbers]);
+  }, [isSuperAdmin, isAdminOrOwner, user?.permissions, userPermissions, user?.feature_serial_numbers, user?.reconciliation_enabled]);
 
   const validTabValues = React.useMemo(() => {
     const baseTabs = (isSuperAdmin || (isAdminOrOwner && (!user?.permissions || user.permissions.length === 0)))
-      ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+      ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17]
       : [];
 
     if (baseTabs.length > 0) {
+      if (Boolean(user?.reconciliation_enabled) || isSuperAdmin) {
+        baseTabs.push(16);
+      }
       if (user?.feature_serial_numbers !== false && (isSuperAdmin || userPermissions.includes('serial_numbers') || isAdminOrOwner)) {
         baseTabs.push(18);
       }
+      baseTabs.sort((a, b) => a - b);
       return baseTabs;
     }
 
@@ -227,7 +235,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
       }
     }
     return permitted.length > 0 ? permitted : [0];
-  }, [isSuperAdmin, isAdminOrOwner, user?.permissions, userPermissions, hasUserPermission]);
+  }, [isSuperAdmin, isAdminOrOwner, user?.permissions, userPermissions, hasUserPermission, user?.reconciliation_enabled, user?.feature_serial_numbers]);
 
   const defaultTab = React.useMemo(() => {
     if (initialTab !== undefined && initialTab !== null && validTabValues.includes(initialTab)) {
@@ -261,6 +269,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
       setActiveTab(initialTab);
     }
   }, [initialTab]);
+
+  useEffect(() => {
+    if (!validTabValues.includes(activeTab)) {
+      setActiveTab(validTabValues[0] ?? 0);
+    }
+  }, [validTabValues, activeTab]);
 
   useEffect(() => {
     try {
@@ -6920,7 +6934,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         {activeTab === 15 && <DayEndDashboard user={user} token={token} />}
 
         {/* --- TAB 16: PAYMENT RECONCILIATION SUITE --- */}
-        {activeTab === 16 && <PaymentReconciliationSuite user={user} />}
+        {activeTab === 16 && (Boolean(user?.reconciliation_enabled) || isSuperAdmin) && <PaymentReconciliationSuite user={user} />}
 
         {/* --- TAB 17: SUPPLIER PAYABLES & OUTSTANDING SUITE --- */}
         {activeTab === 17 && <SupplierPayablesDashboard user={user} />}

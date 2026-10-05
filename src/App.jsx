@@ -331,6 +331,7 @@ export default function App() {
                 prev.is_subscription_expired !== data.user.is_subscription_expired ||
                 String(prev.subscription_expires_at || '') !== String(data.user.subscription_expires_at || '') ||
                 prev.feature_serial_numbers !== data.user.feature_serial_numbers ||
+                prev.reconciliation_enabled !== data.user.reconciliation_enabled ||
                 String(prev.support_contact_number || '') !== String(data.user.support_contact_number || '')
               ) {
                 const updated = { ...prev, ...data.user };
@@ -478,7 +479,7 @@ export default function App() {
 
   const hasPosPermission = !isSuperAdmin && (userPerms.includes('pos_billing') || userPerms.includes('all'));
   const hasDayEndPermission = !isSuperAdmin && (isAdminOrManager || userPerms.includes('day_end') || userPerms.includes('all'));
-  const hasReconciliationPermission = !isSuperAdmin && (isAdminOrManager || userPerms.includes('payment_reconciliation') || userPerms.includes('all'));
+  const hasReconciliationPermission = !isSuperAdmin && Boolean(user?.reconciliation_enabled) && (isAdminOrManager || userPerms.includes('payment_reconciliation') || userPerms.includes('all'));
   const hasAdminPanelPermission = !isSuperAdmin && (isAdminOrManager || userPerms.some(p => [
     'menu_items', 'categories', 'printers', 'reports', 'item_sales_report', 'inventory',
     'gst', 'settings', 'profile', 'staff', 'order_history', 'sales_orders', 'customers',
@@ -1640,9 +1641,20 @@ export default function App() {
                 <DayEndDashboard user={user} token={token} />
               </Box>
             )}
-            {currentView === 'payment_reconciliation' && (
+            {currentView === 'payment_reconciliation' && hasReconciliationPermission && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
                 <PaymentReconciliationSuite user={user} />
+              </Box>
+            )}
+            {currentView === 'payment_reconciliation' && !hasReconciliationPermission && (
+              <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 4, textAlign: 'center' }}>
+                <Typography variant="h5" color="error" sx={{ fontWeight: 800, mb: 1 }}>Access Denied</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 460, mb: 3 }}>
+                  Payment Reconciliation is disabled for this store by the Super Administrator.
+                </Typography>
+                <Button variant="contained" onClick={() => setCurrentView(isSuperAdmin ? 'superadmin' : (isAdminOrManager ? 'admin' : 'pos'))}>
+                  Return to Dashboard
+                </Button>
               </Box>
             )}
             {currentView === 'superadmin' && (

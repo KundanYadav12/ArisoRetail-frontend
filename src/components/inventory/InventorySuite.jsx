@@ -1562,7 +1562,7 @@ export default function InventorySuite({
                       <TableCell sx={{ fontWeight: 600 }}>{tr.source_warehouse_name}</TableCell>
                       <TableCell sx={{ fontWeight: 600, color: '#16a34a' }}>{tr.destination_warehouse_name}</TableCell>
                       <TableCell align="center">
-                        <Chip label={`${tr.item_count || 0} items`} size="small" variant="outlined" />
+                        <Chip label={`${tr.item_count ?? tr.total_items ?? 0} items`} size="small" variant="outlined" />
                       </TableCell>
                       <TableCell align="center">
                         <Chip
