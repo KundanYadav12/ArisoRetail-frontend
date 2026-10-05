@@ -175,6 +175,7 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
             <span>${qty} @ ₹${rate}</span>
             ${item.sku ? `<span>SKU: ${item.sku}</span>` : ''}
           </div>
+          ${item.serial_number ? `<div style="font-size: ${subFontSize}; font-weight: 800; font-family: monospace; color: #000000; margin-top: 1px;">SN: ${item.serial_number}</div>` : ''}
         </div>
       `;
     }).join('');
@@ -190,6 +191,7 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
           <td style="width: 45%; text-align: left; vertical-align: top; padding: 2.5px 2px 2.5px 0; word-break: normal; overflow-wrap: break-word; line-height: 1.25;">
             <div style="font-weight: 700; color: #000000;">${item.name}</div>
             ${item.sku ? `<div style="font-size: 8.5px; font-weight: 700; color: #000000; margin-top: 1px;">SKU: ${item.sku}</div>` : ''}
+            ${item.serial_number ? `<div style="font-size: 9px; font-weight: 800; font-family: monospace; color: #000000; margin-top: 1.5px;">SN: ${item.serial_number}</div>` : ''}
           </td>
           <td style="width: 12%; text-align: center; vertical-align: top; padding: 2.5px 1px; white-space: nowrap; font-weight: 700; color: #000000;">
             ${qty}
@@ -527,6 +529,9 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
       const spaces = ' '.repeat(Math.max(1, cols - nameStr.length - totalStr.length));
       cmds += `${nameStr}${spaces}${totalStr}\n`;
       cmds += `  Qty: ${qtyStr} @ ${rateStr}` + (item.sku ? ` [${item.sku}]` : '') + '\n';
+      if (item.serial_number) {
+        cmds += `  SN: ${item.serial_number}\n`;
+      }
     } else {
       let nameStr = item.name;
       if (nameStr.length > 17) {
@@ -541,6 +546,9 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
       cmds += `${line}\n`;
       if (item.sku) {
         cmds += `  SKU: ${item.sku}\n`;
+      }
+      if (item.serial_number) {
+        cmds += `  SN: ${item.serial_number}\n`;
       }
     }
   });

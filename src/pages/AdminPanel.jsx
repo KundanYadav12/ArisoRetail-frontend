@@ -2277,7 +2277,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     formData.append('igst_rate', menuIgstRate || menuGst);
     formData.append('discount_type', menuDiscountType);
     formData.append('discount_value', menuDiscountValue || '0');
-    formData.append('is_trackable', menuIsTrackable ? '1' : '0');
+    formData.append('is_trackable', '1');
     formData.append('opening_stock', menuOpeningStock || '0');
     formData.append('cost_price', menuCostPrice || '0');
     if (menuStockStartDate) formData.append('stock_start_date', menuStockStartDate);
@@ -7044,8 +7044,8 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                               }
                             }}
                             error={!!barcodeDuplicate}
-                            helperText={barcodeDuplicate ? `Already used by: ${barcodeDuplicate.name}` : 'Scannable barcode for POS & stickers'}
-                            placeholder="e.g. 8901030383748"
+                            helperText={barcodeDuplicate ? `Already used by: ${barcodeDuplicate.name}` : 'Leave blank to auto-generate unique 8-digit barcode'}
+                            placeholder="e.g. 8901030383748 (Auto-generates if blank)"
                             slotProps={{
                               input: {
                                 endAdornment: (
@@ -7338,16 +7338,10 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
                   {/* 2. Inventory Card */}
                   <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2.5, mb: 2.5, bgcolor: '#ffffff', borderColor: '#e2e8f0' }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                    <Box sx={{ mb: 2 }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f172a', textTransform: 'uppercase', letterSpacing: 0.5, fontSize: '12px' }}>
                         Inventory
                       </Typography>
-                      <FormControlLabel
-                        control={<Switch checked={menuIsTrackable} onChange={e => setMenuIsTrackable(e.target.checked)} size="small" color="primary" />}
-                        label={<Typography variant="caption" sx={{ fontWeight: 700, color: '#334155' }}>Item Is Trackable?</Typography>}
-                        labelPlacement="start"
-                        sx={{ m: 0 }}
-                      />
                     </Box>
 
                     <Grid container spacing={2}>
@@ -7361,7 +7355,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           value={menuOpeningStock}
                           onChange={e => setMenuOpeningStock(e.target.value)}
                           placeholder="0"
-                          disabled={!menuIsTrackable}
                         />
                       </Grid>
 
@@ -7375,7 +7368,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           value={menuCostPrice}
                           onChange={e => setMenuCostPrice(e.target.value)}
                           placeholder="0.00"
-                          disabled={!menuIsTrackable}
                         />
                       </Grid>
 
@@ -7389,7 +7381,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           value={menuStockStartDate}
                           onChange={e => setMenuStockStartDate(e.target.value)}
                           slotProps={{ inputLabel: { shrink: true } }}
-                          disabled={!menuIsTrackable}
                         />
                       </Grid>
 
@@ -7403,7 +7394,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           value={menuAtParStock}
                           onChange={e => setMenuAtParStock(e.target.value)}
                           placeholder="0"
-                          disabled={!menuIsTrackable}
                         />
                       </Grid>
 
@@ -7417,7 +7407,6 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           value={menuMinStock}
                           onChange={e => setMenuMinStock(e.target.value)}
                           placeholder="0"
-                          disabled={!menuIsTrackable}
                         />
                       </Grid>
                     </Grid>
@@ -8199,9 +8188,16 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               <Box>
                 <Typography variant="subtitle2" sx={{ fontWeight: 'bold', mb: 1 }}>Items List:</Typography>
                 {selectedHistoryOrder.items.map(it => (
-                  <Box key={it.id} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.5, fontSize: 13 }}>
-                    <Typography variant="body2">{it.name} (GST {parseFloat(it.gst_rate || 0)}%) x {it.quantity}</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 'bold' }}>Rs. {(parseFloat(it.price) * it.quantity).toFixed(2)}</Typography>
+                  <Box key={it.id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', py: 0.6, borderBottom: '1px dashed', borderColor: 'divider', fontSize: 13 }}>
+                    <Box sx={{ pr: 1 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{it.name} (GST {parseFloat(it.gst_rate || 0)}%) x {it.quantity}</Typography>
+                      {it.serial_number && (
+                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: '#9333ea', fontWeight: 800, fontFamily: 'monospace', fontSize: '0.75rem', bgcolor: 'rgba(147, 51, 234, 0.08)', border: '1px solid rgba(147, 51, 234, 0.25)', px: 0.75, py: 0.2, borderRadius: 1, mt: 0.3 }}>
+                          <Tag size={11} /> SN: {it.serial_number}
+                        </Box>
+                      )}
+                    </Box>
+                    <Typography variant="body2" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Rs. {(parseFloat(it.price) * it.quantity).toFixed(2)}</Typography>
                   </Box>
                 ))}
               </Box>
@@ -8239,24 +8235,43 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
             </>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 2, pb: 2, display: 'flex', justifyContent: 'space-between' }}>
+        <DialogActions sx={{ px: 2, pb: 2, display: 'flex', justifyContent: 'space-between', gap: 1 }}>
           {selectedHistoryOrder && (
-            <Button
-              variant="outlined"
-              color="success"
-              onClick={() => {
-                const phone = selectedHistoryOrder.order.customer_phone || prompt('Enter customer 10-digit WhatsApp phone number:');
-                if (phone) {
-                  openWhatsAppShare(selectedHistoryOrder, receiptSettings, phone);
-                }
-              }}
-              sx={{ fontWeight: 800, textTransform: 'none' }}
-              startIcon={<Smartphone size={16} />}
-            >
-              Share via WhatsApp
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant="contained"
+                color="warning"
+                onClick={() => {
+                  try {
+                    const htmlReceipt = generateLocalHtmlReceipt(selectedHistoryOrder.order, selectedHistoryOrder.items, user || {}, receiptSettings);
+                    printHtmlSilentlyViaIframe(htmlReceipt);
+                    notify.success('Bill receipt sent to printer.', 'Print Receipt');
+                  } catch (err) {
+                    notify.error('Failed to generate receipt.', 'Print Error');
+                  }
+                }}
+                sx={{ fontWeight: 800, textTransform: 'none' }}
+                startIcon={<Printer size={16} />}
+              >
+                Print Receipt
+              </Button>
+              <Button
+                variant="outlined"
+                color="success"
+                onClick={() => {
+                  const phone = selectedHistoryOrder.order.customer_phone || prompt('Enter customer 10-digit WhatsApp phone number:');
+                  if (phone) {
+                    openWhatsAppShare(selectedHistoryOrder, receiptSettings, phone);
+                  }
+                }}
+                sx={{ fontWeight: 800, textTransform: 'none' }}
+                startIcon={<Smartphone size={16} />}
+              >
+                Share via WhatsApp
+              </Button>
+            </Box>
           )}
-          <Button onClick={() => setHistoryOrderDetailOpen(false)} variant="contained">Close</Button>
+          <Button onClick={() => setHistoryOrderDetailOpen(false)} variant="contained" color="inherit">Close</Button>
         </DialogActions>
       </Dialog>
 

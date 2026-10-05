@@ -3,6 +3,7 @@ import { useKeyboardShortcuts } from '../utils/useKeyboardShortcuts';
 import WeightInputModal from '../components/WeightInputModal';
 import SerialSelectionModal from '../components/SerialSelectionModal';
 import CartQtyEditModal from '../components/CartQtyEditModal';
+import CartPriceEditModal from '../components/CartPriceEditModal';
 import KeyboardHelpModal from '../components/KeyboardHelpModal';
 import LanguageSelectorModal from '../components/LanguageSelectorModal';
 import WebBarcodeScannerModal from '../components/WebBarcodeScannerModal';
@@ -294,6 +295,8 @@ export default function POS({
   const [editingCartIndex, setEditingCartIndex] = useState(null);
   const [cartQtyModalOpen, setCartQtyModalOpen] = useState(false);
   const [editingCartItem, setEditingCartItem] = useState(null);
+  const [cartPriceModalOpen, setCartPriceModalOpen] = useState(false);
+  const [editingPriceItem, setEditingPriceItem] = useState(null);
   const cartTableBodyRef = useRef(null);
 
   const [mobileCartSheetOpen, setMobileCartSheetOpen] = useState(false);
@@ -1017,39 +1020,76 @@ export default function POS({
   // Product Selection & Cart Actions
   const handleSelectProduct = useCallback((product, fromEnterKey = false) => {
     if (!product) return;
+
+    // 1. Not For Sale Guard
+    if (product.not_for_sale === 1 || product.not_for_sale === true || product.not_for_sale === '1') {
+      notify?.warning(`"${product.name}" is marked Not For Sale.`, 'Not For Sale');
+      playBarcodeError();
+      return;
+    }
+
+    // 2. Weight-based Items (Enter Weight opens immediately)
     if (isProductWeightBased(product)) {
       setSelectedWeightProduct(product);
       setEditingCartIndex(null);
       setWeightModalVisible(true);
-    } else if (isProductSerialTracked(product)) {
+      return;
+    }
+
+    // 3. Serial Number Items (Serial Picker opens immediately)
+    if (isProductSerialTracked(product)) {
       setSelectedSerialProduct(product);
       setSerialModalVisible(true);
-    } else {
-      const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
-      if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
-        if (existingIdx > -1) {
-          // Item already in cart — directly increment quantity on scan
-          addPieceItemToCart(product);
-          setSearchQuery('');
-          autoFocusSearch();
-        } else {
-          // New item — open quantity popup
-          setSelectedCartIndex(cart.length);
-          setEditingCartIndex(null);
-          setEditingCartItem({
-            ...product,
-            product_id: product.id || product.menu_item_id,
-            quantity: 1
-          });
-          setCartQtyModalOpen(true);
-        }
-      } else {
+      return;
+    }
+
+    // 4. Open Price Popup (if enabled for this item)
+    const isOpenPrice = product.open_price_popup === 1 || product.open_price_popup === true || product.open_price_popup === '1';
+    if (isOpenPrice) {
+      setEditingPriceItem(product);
+      setCartPriceModalOpen(true);
+      return;
+    }
+
+    // 5. Open Quantity Popup (if enabled for this PCS item, opens immediately on first tile click)
+    const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
+    if (isOpenQty) {
+      setSelectedCartIndex(cart.length);
+      setEditingCartIndex(null);
+      setEditingCartItem({
+        ...product,
+        product_id: product.id || product.menu_item_id,
+        quantity: 1
+      });
+      setCartQtyModalOpen(true);
+      return;
+    }
+
+    // 6. Default PCS behavior (add directly, or open qty on Enter key if enabled)
+    const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
+    if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
+      if (existingIdx > -1) {
+        // Item already in cart — directly increment quantity on scan
         addPieceItemToCart(product);
         setSearchQuery('');
         autoFocusSearch();
+      } else {
+        // New item — open quantity popup
+        setSelectedCartIndex(cart.length);
+        setEditingCartIndex(null);
+        setEditingCartItem({
+          ...product,
+          product_id: product.id || product.menu_item_id,
+          quantity: 1
+        });
+        setCartQtyModalOpen(true);
       }
+    } else {
+      addPieceItemToCart(product);
+      setSearchQuery('');
+      autoFocusSearch();
     }
-  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct, isProductWeightBased, isProductSerialTracked, addPieceItemToCart]);
+  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct, isProductWeightBased, isProductSerialTracked, addPieceItemToCart, notify, autoFocusSearch]);
 
   const handleSerialConfirm = useCallback((selectedSerials, product) => {
     if (!product || !Array.isArray(selectedSerials) || selectedSerials.length === 0) return;
@@ -1215,10 +1255,38 @@ export default function POS({
     autoFocusSearch();
   };
 
+  // Handles saving custom price when open_price_popup is triggered
+  const handleSaveCartPrice = (newPrice) => {
+    if (!editingPriceItem) return;
+    const product = { ...editingPriceItem, price: newPrice, unit_price: newPrice };
+    const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
+
+    if (isOpenQty) {
+      setSelectedCartIndex(cart.length);
+      setEditingCartIndex(null);
+      setEditingCartItem({
+        ...product,
+        product_id: product.id || product.menu_item_id,
+        quantity: 1
+      });
+      setCartPriceModalOpen(false);
+      setEditingPriceItem(null);
+      setCartQtyModalOpen(true);
+      return;
+    }
+
+    addPieceItemToCart(product);
+    setCartPriceModalOpen(false);
+    setEditingPriceItem(null);
+    setSearchQuery('');
+    autoFocusSearch();
+  };
+
   const openCartItemEdit = (index) => {
     const idx = index !== undefined && index !== null ? index : selectedCartIndex;
     const item = cart[idx];
     if (!item) return;
+    if (item.serial_number) return; // Serial-tracked items have fixed quantity 1 and cannot be edited
     setSelectedCartIndex(idx);
     setEditingCartIndex(idx);
     if (item.is_weight_based) {
@@ -1251,7 +1319,7 @@ export default function POS({
   const updateCartQty = (index, delta) => {
     if (!cart || index < 0 || index >= cart.length) return;
     const item = cart[index];
-    if (!item || item.is_weight_based) return;
+    if (!item || item.is_weight_based || item.serial_number) return;
 
     const currentQty = parseInt(item.quantity, 10) || 1;
     const newQty = currentQty + delta;
@@ -1317,17 +1385,49 @@ export default function POS({
   // Handler: Directly add scanned product to cart with sound feedback
   const handleBarcodeScanAdd = useCallback((product) => {
     if (!product) return;
+
+    if (product.not_for_sale === 1 || product.not_for_sale === true || product.not_for_sale === '1') {
+      notify?.warning(`"${product.name}" is marked Not For Sale.`, 'Not For Sale');
+      playBarcodeError();
+      return;
+    }
+
     if (isProductWeightBased(product)) {
       setSelectedWeightProduct(product);
       setEditingCartIndex(null);
       setWeightModalVisible(true);
+      return;
+    } else if (isProductSerialTracked(product) && !product.scanned_serial_number) {
+      setSelectedSerialProduct(product);
+      setSerialModalVisible(true);
+      return;
     } else {
+      const isOpenPrice = product.open_price_popup === 1 || product.open_price_popup === true || product.open_price_popup === '1';
+      if (isOpenPrice) {
+        setEditingPriceItem(product);
+        setCartPriceModalOpen(true);
+        return;
+      }
+
+      const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
+      if (isOpenQty) {
+        setSelectedCartIndex(cart.length);
+        setEditingCartIndex(null);
+        setEditingCartItem({
+          ...product,
+          product_id: product.id || product.menu_item_id,
+          quantity: 1
+        });
+        setCartQtyModalOpen(true);
+        return;
+      }
+
       addPieceItemToCart(product);
     }
     setSearchQuery('');
     autoFocusSearch();
     playBarcodeSuccess();
-  }, [addPieceItemToCart, isProductWeightBased, autoFocusSearch]);
+  }, [addPieceItemToCart, isProductWeightBased, isProductSerialTracked, autoFocusSearch, notify, cart.length]);
 
   // Global USB Barcode Scanner Keyboard Emulation Interceptor
   useEffect(() => {
@@ -1518,87 +1618,98 @@ export default function POS({
     }
   };
 
-  // Live Camera Barcode Scanner Continuous Handler
+  // Live Camera & Manual Scanner Unified Code Handler
   const handleCameraBarcodeScan = async (scannedCode) => {
     if (!scannedCode) return { success: false, message: 'No barcode detected' };
     const clean = String(scannedCode).trim();
+    if (!clean) return { success: false, message: 'Empty input' };
 
-    if (posScanMode === 'serial') {
-      if (/^\d{8}$/.test(clean)) {
-        try {
-          const res = await apiFetch(`/api/serial-numbers/lookup?sn=${clean}`);
-          const sData = await res.json();
-          if (sData.success && sData.data && !sData.data.is_sold) {
-            const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
-            handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
-            return { success: true, message: `Added ${prod.name} (SN: ${clean}) to cart` };
-          } else if (sData.success && sData.data && sData.data.is_sold) {
-            playBarcodeError();
-            notify?.error(`Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
-            return { success: false, message: `Serial #${clean} is already sold` };
-          } else {
-            playBarcodeError();
-            return { success: false, message: `Serial #${clean} not found in inventory` };
-          }
-        } catch (snErr) {
-          playBarcodeError();
-          return { success: false, message: `Error checking serial #${clean}` };
-        }
-      } else {
-        playBarcodeError();
-        return { success: false, message: `Invalid serial #${clean} (must be 8 digits)` };
-      }
-    }
-
-    if (posScanMode === 'barcode') {
-      const matched = findMatchingProduct(clean, false);
-      if (matched) {
-        handleBarcodeScanAdd(matched);
-        return { success: true, message: `Added ${matched.name} to cart` };
-      }
-      playBarcodeError();
-      return { success: false, message: `No product barcode matching: ${clean}` };
-    }
-
-    // Auto Mode: Barcode match first
-    const matched = findMatchingProduct(clean, false);
-    if (matched) {
-      handleBarcodeScanAdd(matched);
-      return { success: true, message: `Added ${matched.name} to cart` };
-    }
-
-    // Check if it's an 8-digit serial number
+    // 1. If input is 8 numeric digits, probe Serial Number inventory first
     if (/^\d{8}$/.test(clean)) {
       try {
         const res = await apiFetch(`/api/serial-numbers/lookup?sn=${clean}`);
         const sData = await res.json();
-        if (sData.success && sData.data && !sData.data.is_sold) {
+        if (sData.success && sData.data) {
+          if (sData.data.is_sold) {
+            playBarcodeError();
+            const invoiceRef = sData.data.sale?.invoice || 'Past Order';
+            notify?.error(`Serial #${clean} is already sold (${invoiceRef}).`, 'Already Sold');
+            return { success: false, message: `Serial #${clean} is already SOLD (${invoiceRef})` };
+          }
+
+          // Check if already in current cart
+          const alreadyInCart = cart.some(it => it.serial_number === clean || it.scanned_serial_number === clean);
+          if (alreadyInCart) {
+            playBarcodeError();
+            notify?.warning(`Serial #${clean} is already added in your active cart.`, 'Already In Cart');
+            return { success: false, message: `Serial #${clean} already in cart` };
+          }
+
           const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
           handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
           return { success: true, message: `Added ${prod.name} (SN: ${clean}) to cart` };
-        } else if (sData.success && sData.data && sData.data.is_sold) {
-          playBarcodeError();
-          notify?.error(`Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'}).`, 'Already Sold');
-          return { success: false, message: `Serial #${clean} is already sold (${sData.data.sale?.invoice || 'Order'})` };
-        } else {
-          playBarcodeError();
-          return { success: false, message: `Serial #${clean} not found in inventory` };
         }
       } catch (snErr) {
-        playBarcodeError();
-        return { success: false, message: `Error checking serial #${clean}` };
+        console.warn('[Camera Scan] Serial lookup exception, proceeding to barcode check:', snErr);
       }
+
+      // If not found in serial inventory, check if this 8-digit number is an item's product barcode
+      const barcodeMatch = findMatchingProduct(clean, false);
+      if (barcodeMatch) {
+        handleBarcodeScanAdd(barcodeMatch);
+        return { success: true, message: `Added ${barcodeMatch.name} to cart` };
+      }
+
+      const skuMatch = findMatchingProduct(clean, true);
+      if (skuMatch) {
+        handleBarcodeScanAdd(skuMatch);
+        return { success: true, message: `Added ${skuMatch.name} to cart` };
+      }
+
+      playBarcodeError();
+      notify?.error(`Serial / Barcode #${clean} not found in inventory.`, 'Not Found');
+      return { success: false, message: `Serial / Barcode #${clean} not found` };
     }
 
-    // Fallback to SKU in auto mode
+    // 2. Non-8-digit input: Check product barcode first
+    const matchedBarcode = findMatchingProduct(clean, false);
+    if (matchedBarcode) {
+      handleBarcodeScanAdd(matchedBarcode);
+      return { success: true, message: `Added ${matchedBarcode.name} to cart` };
+    }
+
+    // Check product SKU
     const skuFallback = findMatchingProduct(clean, true);
     if (skuFallback) {
       handleBarcodeScanAdd(skuFallback);
       return { success: true, message: `Added ${skuFallback.name} to cart` };
     }
 
+    // Also probe serial inventory in case of custom/alphanumeric serial numbers
+    try {
+      const res = await apiFetch(`/api/serial-numbers/lookup?sn=${clean}`);
+      const sData = await res.json();
+      if (sData.success && sData.data) {
+        if (sData.data.is_sold) {
+          playBarcodeError();
+          notify?.error(`Serial #${clean} is already sold.`, 'Already Sold');
+          return { success: false, message: `Serial #${clean} is already sold` };
+        }
+        const alreadyInCart = cart.some(it => it.serial_number === clean || it.scanned_serial_number === clean);
+        if (alreadyInCart) {
+          playBarcodeError();
+          notify?.warning(`Serial #${clean} is already added in your active cart.`, 'Already In Cart');
+          return { success: false, message: `Serial #${clean} already in cart` };
+        }
+        const prod = menuItems.find(p => (p.id || p.menu_item_id) === sData.data.product.id) || sData.data.product;
+        handleBarcodeScanAdd({ ...prod, scanned_serial_number: sData.data.serial_number });
+        return { success: true, message: `Added ${prod.name} (SN: ${clean}) to cart` };
+      }
+    } catch (_) {}
+
     playBarcodeError();
-    return { success: false, message: `No item found for barcode "${scannedCode}"` };
+    notify?.error(`No product barcode or serial number matching: "${clean}"`, 'Not Found');
+    return { success: false, message: `No item found for "${clean}"` };
   };
 
   // POS Quick Edit Handlers
@@ -3054,7 +3165,8 @@ export default function POS({
                         boxShadow: isDark ? '0 4px 6px -1px rgba(0,0,0,0.3)' : '0 2px 4px rgba(0,0,0,0.05)',
                         position: 'relative',
                         overflow: 'hidden',
-                        cursor: 'pointer',
+                        cursor: (product.not_for_sale === 1 || product.not_for_sale === true || product.not_for_sale === '1') ? 'not-allowed' : 'pointer',
+                        opacity: (product.not_for_sale === 1 || product.not_for_sale === true || product.not_for_sale === '1') ? 0.65 : 1,
                         backgroundColor: colors.bgCard,
                       }}
                       onTouchStart={() => handleTouchStart(product)}
@@ -3135,6 +3247,19 @@ export default function POS({
                           }}>
                             {isSerial ? <><Tag size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'SN' : 'SERIAL'}</> : isWeight ? <><Scale size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'WT' : t('weightBadge')}</> : <><Package size={densityMode === 'icon' ? 8 : 10} style={{ marginRight: 2 }} />{densityMode === 'icon' ? 'PCS' : t('pcsBadge')}</>}
                           </span>
+                          {(product.not_for_sale === 1 || product.not_for_sale === true || product.not_for_sale === '1') && (
+                            <span style={{
+                              ...styles.badge,
+                              backgroundColor: '#DC2626',
+                              color: '#FFFFFF',
+                              fontSize: densityMode === 'icon' ? '7.5px' : '8.5px',
+                              padding: '1px 4px',
+                              fontWeight: '900',
+                              flexShrink: 0
+                            }}>
+                              NOT FOR SALE
+                            </span>
+                          )}
                           {(product.barcode || product.sku) && (
                             <span style={{
                               ...styles.barcodeText,
@@ -3447,7 +3572,7 @@ export default function POS({
                           transition: 'background-color 0.15s ease, border-left 0.15s ease'
                         }}
                         onClick={() => setSelectedCartIndex(idx)}
-                        onDoubleClick={() => openCartItemEdit(idx)}
+                        onDoubleClick={() => !item.serial_number && openCartItemEdit(idx)}
                       >
                         <td style={styles.td}>
                           <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
@@ -3487,7 +3612,24 @@ export default function POS({
                           </div>
                         </td>
                         <td style={{ ...styles.td, color: colors.textPrimary }}>
-                          {item.is_weight_based ? (
+                          {item.serial_number ? (
+                            <span
+                              style={{
+                                fontWeight: '800',
+                                padding: '3px 10px',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                backgroundColor: themeMode === 'dark' ? '#3b0764' : '#f3e8ff',
+                                color: '#9333ea',
+                                border: '1px solid #d8b4fe',
+                                display: 'inline-block',
+                                userSelect: 'none'
+                              }}
+                              title="Serial unit quantity is fixed at 1"
+                            >
+                              1
+                            </span>
+                          ) : item.is_weight_based ? (
                             <span
                               style={{
                                 cursor: 'pointer',
@@ -3727,7 +3869,7 @@ export default function POS({
                             transition: 'background-color 0.15s ease, border-left 0.15s ease'
                           }}
                           onClick={() => setSelectedCartIndex(idx)}
-                          onDoubleClick={() => openCartItemEdit(idx)}
+                          onDoubleClick={() => !item.serial_number && openCartItemEdit(idx)}
                         >
                           <td style={styles.td}>
                             <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
@@ -3743,6 +3885,17 @@ export default function POS({
                                 #{itemSku}
                               </div>
                             )}
+                            {item.serial_number && (
+                              <div style={{
+                                fontSize: '10px',
+                                color: '#9333ea',
+                                fontFamily: 'monospace',
+                                fontWeight: '800',
+                                marginTop: '1px'
+                              }}>
+                                SN: {item.serial_number}
+                              </div>
+                            )}
                             <div style={{ fontSize: '11px', color: colors.accentOrange }}>
                               {item.serial_number ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#9333ea', fontWeight: 700 }}>
@@ -3756,7 +3909,24 @@ export default function POS({
                             </div>
                           </td>
                           <td style={{ ...styles.td, color: colors.textPrimary }}>
-                            {item.is_weight_based ? (
+                            {item.serial_number ? (
+                              <span
+                                style={{
+                                  fontWeight: '800',
+                                  padding: '3px 10px',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  backgroundColor: themeMode === 'dark' ? '#3b0764' : '#f3e8ff',
+                                  color: '#9333ea',
+                                  border: '1px solid #d8b4fe',
+                                  display: 'inline-block',
+                                  userSelect: 'none'
+                                }}
+                                title="Serial unit quantity is fixed at 1"
+                              >
+                                1
+                              </span>
+                            ) : item.is_weight_based ? (
                               <span
                                 style={{
                                   cursor: 'pointer',
@@ -4031,6 +4201,17 @@ export default function POS({
           autoFocusSearch();
         }}
         onClearCart={handleClearCart}
+      />
+
+      <CartPriceEditModal
+        isOpen={cartPriceModalOpen}
+        item={editingPriceItem}
+        onConfirm={handleSaveCartPrice}
+        onClose={() => {
+          setCartPriceModalOpen(false);
+          setEditingPriceItem(null);
+          autoFocusSearch();
+        }}
       />
 
       <KeyboardHelpModal

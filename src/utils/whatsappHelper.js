@@ -67,6 +67,9 @@ export function formatWhatsAppReceipt(orderData, receiptSettings = {}) {
       const lineTotal = unitPrice * qty;
       lines.push(`${idx + 1}. *${item.name}*`);
       lines.push(`   ${qty} x ₹${unitPrice.toFixed(2)} = *₹${lineTotal.toFixed(2)}*`);
+      if (item.serial_number) {
+        lines.push(`   SN: ${item.serial_number}`);
+      }
       if (item.notes) {
         lines.push(`   _Note: ${item.notes}_`);
       }

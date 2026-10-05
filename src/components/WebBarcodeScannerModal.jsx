@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -7,13 +7,16 @@ import {
   Typography,
   Box,
   Button,
-  CircularProgress,
-  Switch,
-  FormControlLabel,
-  Alert
+  CircularProgress
 } from '@mui/material';
-import { Close as CloseIcon, FlashOn as FlashOnIcon, FlashOff as FlashOffIcon, Cameraswitch as CameraSwitchIcon } from '@mui/icons-material';
-import { CheckCircle2, AlertTriangle, Keyboard } from 'lucide-react';
+import {
+  Close as CloseIcon,
+  FlashOn as FlashOnIcon,
+  FlashOff as FlashOffIcon,
+  Cameraswitch as CameraSwitchIcon,
+  Refresh as RefreshIcon
+} from '@mui/icons-material';
+import { CheckCircle2, AlertTriangle, Keyboard, Camera as CameraIcon } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 // Audio feedback synthesizers using Web Audio API
@@ -56,14 +59,15 @@ export default function WebBarcodeScannerModal({
   onScan,
   continuous = true,
   title = 'Barcode Camera Scanner',
-  subtitle = 'Point camera at any barcode to scan'
+  subtitle = 'Point camera at any barcode or serial number to scan'
 }) {
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [hasTorch, setHasTorch] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [cameraError, setCameraError] = useState(null); // { type, title, text }
   const [recentScan, setRecentScan] = useState(null); // { code, message, success: boolean }
   const [manualCode, setManualCode] = useState('');
   const manualInputRef = useRef(null);
@@ -73,121 +77,7 @@ export default function WebBarcodeScannerModal({
   const lastScannedTimeRef = useRef({});
   const containerId = 'ariso-barcode-reader-viewport';
 
-  // Get cameras list
-  useEffect(() => {
-    if (open) {
-      setErrorMsg('');
-      setRecentScan(null);
-      setManualCode('');
-      Html5Qrcode.getCameras()
-        .then((devices) => {
-          if (devices && devices.length) {
-            setCameras(devices);
-            // Default to back camera (environment) if available
-            const backCam = devices.find(d => 
-              d.label.toLowerCase().includes('back') || 
-              d.label.toLowerCase().includes('rear') || 
-              d.label.toLowerCase().includes('environment')
-            );
-            setSelectedCameraId(backCam ? backCam.id : devices[devices.length - 1].id);
-          } else {
-            setErrorMsg('No camera found on this device.');
-          }
-        })
-        .catch((err) => {
-          setErrorMsg('Camera permission denied or camera not accessible.');
-        });
-    }
-  }, [open]);
-
-  // Start scanner when camera is selected
-  useEffect(() => {
-    let mounted = true;
-
-    const startScanner = async () => {
-      if (!open || !selectedCameraId) return;
-
-      try {
-        // Stop any running instance
-        if (html5QrCodeRef.current && isScannerRunningRef.current) {
-          try {
-            await html5QrCodeRef.current.stop();
-            isScannerRunningRef.current = false;
-          } catch (_) {}
-        }
-
-        const scanner = new Html5Qrcode(containerId, {
-          formatsToSupport: [
-            Html5QrcodeSupportedFormats.EAN_13,
-            Html5QrcodeSupportedFormats.EAN_8,
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39,
-            Html5QrcodeSupportedFormats.UPC_A,
-            Html5QrcodeSupportedFormats.UPC_E,
-            Html5QrcodeSupportedFormats.QR_CODE,
-            Html5QrcodeSupportedFormats.ITF
-          ],
-          verbose: false
-        });
-        html5QrCodeRef.current = scanner;
-
-        const config = {
-          fps: 20,
-          qrbox: { width: 280, height: 180 },
-          aspectRatio: 1.333333
-        };
-
-        await scanner.start(
-          selectedCameraId,
-          config,
-          (decodedText) => {
-            if (!mounted) return;
-            handleDecodedBarcode(decodedText);
-          },
-          () => {
-            // Scanner frame scan ignore
-          }
-        );
-
-        if (mounted) {
-          isScannerRunningRef.current = true;
-          setScanning(true);
-          setErrorMsg('');
-
-          // Check torch capability
-          try {
-            const capabilities = scanner.getRunningTrackCapabilities();
-            if (capabilities && capabilities.torch) {
-              setHasTorch(true);
-            }
-          } catch (_) {}
-        }
-      } catch (err) {
-        if (mounted) {
-          console.error('[WebBarcodeScanner] Start failed:', err);
-          setErrorMsg(err?.message || 'Could not start camera scanner. Check camera permissions.');
-          setScanning(false);
-        }
-      }
-    };
-
-    if (open && selectedCameraId) {
-      // Short delay to ensure DOM element is rendered
-      const timer = setTimeout(startScanner, 150);
-      return () => {
-        mounted = false;
-        clearTimeout(timer);
-        stopScanner();
-      };
-    }
-
-    return () => {
-      mounted = false;
-      stopScanner();
-    };
-  }, [open, selectedCameraId]);
-
-  const stopScanner = async () => {
+  const stopScanner = useCallback(async () => {
     if (html5QrCodeRef.current && isScannerRunningRef.current) {
       try {
         await html5QrCodeRef.current.stop();
@@ -195,12 +85,245 @@ export default function WebBarcodeScannerModal({
       } catch (_) {}
       isScannerRunningRef.current = false;
       setScanning(false);
+      setTorchOn(false);
+      setHasTorch(false);
     }
-  };
+  }, []);
+
+  const handleCameraError = useCallback((err) => {
+    const errName = err?.name || '';
+    const errMsg = err?.message || String(err);
+    console.warn('[WebBarcodeScanner] Camera Error:', errName, errMsg);
+
+    if (
+      errName === 'NotAllowedError' ||
+      errName === 'PermissionDeniedError' ||
+      errMsg.toLowerCase().includes('permission denied') ||
+      errMsg.toLowerCase().includes('not allowed')
+    ) {
+      setCameraError({
+        type: 'blocked',
+        title: 'Camera Access Blocked',
+        text: 'Camera permission is blocked in your browser. Please click the lock or camera icon in the browser address bar, set Camera to "Allow", and click "Retry Camera".'
+      });
+    } else if (
+      errName === 'NotFoundError' ||
+      errName === 'DevicesNotFoundError' ||
+      errMsg.toLowerCase().includes('not found') ||
+      errMsg.toLowerCase().includes('no video input') ||
+      errMsg.toLowerCase().includes('requested device not found')
+    ) {
+      setCameraError({
+        type: 'not_found',
+        title: 'No Camera Device Detected',
+        text: 'No camera hardware was detected on this device. You can connect a USB webcam or use the manual entry field below with keyboard or barcode gun.'
+      });
+    } else if (
+      errName === 'NotReadableError' ||
+      errName === 'TrackStartError' ||
+      errMsg.toLowerCase().includes('in use') ||
+      errMsg.toLowerCase().includes('could not start')
+    ) {
+      setCameraError({
+        type: 'in_use',
+        title: 'Camera In Use',
+        text: 'The camera may be in use by another application (Zoom, Teams, or another tab). Close other camera apps and click "Retry Camera".'
+      });
+    } else if (errName === 'OverconstrainedError') {
+      setCameraError({
+        type: 'constraint',
+        title: 'Camera Setting Mismatch',
+        text: 'The camera lens or resolution requested is unavailable. Click "Retry Camera" to launch with default settings.'
+      });
+    } else {
+      setCameraError({
+        type: 'general',
+        title: 'Camera Inaccessible',
+        text: errMsg || 'Unable to access camera. You can click "Retry Camera" or enter barcodes/serials manually below.'
+      });
+    }
+    setScanning(false);
+  }, []);
+
+  const startCameraScanner = useCallback(async (forcedCameraId = null) => {
+    setIsInitializing(true);
+    setCameraError(null);
+
+    // Stop any existing scanner
+    await stopScanner();
+
+    // 1. Check browser mediaDevices support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError({
+        type: 'unsupported',
+        title: 'Camera API Not Supported',
+        text: 'Your current browser or connection does not support the HTML5 Camera API. Please use Google Chrome, Microsoft Edge, or enter codes manually below.'
+      });
+      setIsInitializing(false);
+      return;
+    }
+
+    // 2. Request user permission probe via getUserMedia
+    let probeStream = null;
+    try {
+      probeStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }
+      });
+    } catch (envErr) {
+      console.warn('[WebBarcodeScanner] Environment constraint failed, falling back to basic video constraint:', envErr);
+      try {
+        probeStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch (basicErr) {
+        console.warn('[WebBarcodeScanner] getUserMedia basic probe failed:', basicErr);
+        handleCameraError(basicErr);
+        setIsInitializing(false);
+        return;
+      }
+    }
+
+    // Stop probe stream immediately so tracks are free for Html5Qrcode
+    if (probeStream) {
+      probeStream.getTracks().forEach((track) => {
+        try { track.stop(); } catch (_) {}
+      });
+    }
+
+    // 3. Enumerate camera devices
+    let availableDevices = [];
+    try {
+      availableDevices = await Html5Qrcode.getCameras();
+      if (availableDevices && availableDevices.length > 0) {
+        setCameras(availableDevices);
+      }
+    } catch (enumErr) {
+      console.warn('[WebBarcodeScanner] getCameras failed:', enumErr);
+    }
+
+    // 4. Determine camera target
+    let targetCamera = forcedCameraId || selectedCameraId;
+    if (!targetCamera && availableDevices.length > 0) {
+      const backCam = availableDevices.find((d) =>
+        d.label.toLowerCase().includes('back') ||
+        d.label.toLowerCase().includes('rear') ||
+        d.label.toLowerCase().includes('environment')
+      );
+      targetCamera = backCam ? backCam.id : availableDevices[0].id;
+      setSelectedCameraId(targetCamera);
+    }
+    if (!targetCamera) {
+      targetCamera = { facingMode: 'environment' };
+    }
+
+    // 5. Initialize Html5Qrcode
+    try {
+      const scanner = new Html5Qrcode(containerId, {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.ITF
+        ],
+        verbose: false
+      });
+      html5QrCodeRef.current = scanner;
+
+      const config = {
+        fps: 20,
+        qrbox: { width: 280, height: 180 },
+        aspectRatio: 1.333333
+      };
+
+      try {
+        await scanner.start(
+          targetCamera,
+          config,
+          (decodedText) => handleDecodedBarcode(decodedText),
+          () => {}
+        );
+      } catch (firstStartErr) {
+        console.warn('[WebBarcodeScanner] Start failed with targetCamera, trying fallback { facingMode: "user" }...', firstStartErr);
+        try {
+          await scanner.start(
+            { facingMode: 'user' },
+            config,
+            (decodedText) => handleDecodedBarcode(decodedText),
+            () => {}
+          );
+        } catch (secStartErr) {
+          console.warn('[WebBarcodeScanner] Second start attempt failed, trying basic video constraints...', secStartErr);
+          try {
+            await scanner.start(
+              {},
+              config,
+              (decodedText) => handleDecodedBarcode(decodedText),
+              () => {}
+            );
+          } catch (thirdErr) {
+            handleCameraError(thirdErr);
+            setIsInitializing(false);
+            return;
+          }
+        }
+      }
+
+      isScannerRunningRef.current = true;
+      setScanning(true);
+      setCameraError(null);
+      setIsInitializing(false);
+
+      // Check torch capability
+      try {
+        const capabilities = scanner.getRunningTrackCapabilities();
+        if (capabilities && capabilities.torch) {
+          setHasTorch(true);
+        }
+      } catch (_) {}
+    } catch (initErr) {
+      console.error('[WebBarcodeScanner] Html5Qrcode constructor or start error:', initErr);
+      handleCameraError(initErr);
+      setIsInitializing(false);
+    }
+  }, [selectedCameraId, stopScanner, handleCameraError]);
+
+  // Launch camera and setup on dialog open
+  useEffect(() => {
+    if (open) {
+      setCameraError(null);
+      setRecentScan(null);
+      setManualCode('');
+      lastScannedTimeRef.current = {};
+
+      // Auto-focus manual entry field
+      const focusTimer = setTimeout(() => {
+        if (manualInputRef.current) {
+          manualInputRef.current.focus();
+        }
+      }, 150);
+
+      // Start camera
+      const camTimer = setTimeout(() => {
+        startCameraScanner();
+      }, 200);
+
+      return () => {
+        clearTimeout(focusTimer);
+        clearTimeout(camTimer);
+        stopScanner();
+      };
+    } else {
+      stopScanner();
+    }
+  }, [open, startCameraScanner, stopScanner]);
 
   const handleDecodedBarcode = (rawCode) => {
     if (!rawCode) return;
-    const cleanCode = rawCode.trim();
+    const cleanCode = String(rawCode).trim();
+    if (!cleanCode) return;
+
     const now = Date.now();
 
     // Debounce scan of same barcode (1.5 seconds cooldown per identical code)
@@ -221,7 +344,7 @@ export default function WebBarcodeScannerModal({
             }
             setRecentScan({
               code: cleanCode,
-              message: result.message || (result.success ? `Scanned: ${cleanCode}` : `Item Not Found: ${cleanCode}`),
+              message: result.message || (result.success ? `Added: ${cleanCode}` : `Item Not Found: ${cleanCode}`),
               success: result.success
             });
           } else {
@@ -233,7 +356,7 @@ export default function WebBarcodeScannerModal({
             });
           }
           if (!continuous) {
-            onClose();
+            handleCloseDialog();
           }
         })
         .catch((err) => {
@@ -248,7 +371,7 @@ export default function WebBarcodeScannerModal({
     }
 
     if (!continuous) {
-      onClose();
+      handleCloseDialog();
     }
   };
 
@@ -265,9 +388,11 @@ export default function WebBarcodeScannerModal({
 
   const handleSwitchCamera = () => {
     if (cameras.length <= 1) return;
-    const currentIndex = cameras.findIndex(c => c.id === selectedCameraId);
+    const currentIndex = cameras.findIndex((c) => c.id === selectedCameraId);
     const nextIndex = (currentIndex + 1) % cameras.length;
-    setSelectedCameraId(cameras[nextIndex].id);
+    const nextCamId = cameras[nextIndex].id;
+    setSelectedCameraId(nextCamId);
+    startCameraScanner(nextCamId);
   };
 
   const handleCloseDialog = async () => {
@@ -309,7 +434,7 @@ export default function WebBarcodeScannerModal({
       <DialogTitle sx={{ m: 0, p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #1E293B' }}>
         <Box>
           <Typography variant="h6" sx={{ fontWeight: 800, color: '#F8FAFC', display: 'flex', alignItems: 'center', gap: 1 }}>
-            {title}
+            <CameraIcon size={20} color="#38BDF8" /> {title}
           </Typography>
           <Typography variant="caption" sx={{ color: '#94A3B8' }}>
             {subtitle} {continuous ? '• Continuous Mode Active' : ''}
@@ -321,10 +446,52 @@ export default function WebBarcodeScannerModal({
       </DialogTitle>
 
       <DialogContent sx={{ p: 2, display: 'flex', flexDirection: 'column', alignItems: 'center', bgcolor: '#0F172A' }}>
-        {errorMsg && (
-          <Alert severity="error" sx={{ width: '100%', mb: 2, bgcolor: '#450a0a', color: '#fca5a5' }}>
-            {errorMsg}
-          </Alert>
+        {/* Actionable Error Alert Banner */}
+        {cameraError && (
+          <Box
+            sx={{
+              width: '100%',
+              maxWidth: 400,
+              mb: 2,
+              p: 1.75,
+              borderRadius: 2.5,
+              bgcolor: cameraError.type === 'blocked' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+              border: `1px solid ${cameraError.type === 'blocked' ? '#EF4444' : '#F59E0B'}`,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <AlertTriangle size={18} color={cameraError.type === 'blocked' ? '#EF4444' : '#F59E0B'} />
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: cameraError.type === 'blocked' ? '#FCA5A5' : '#FCD34D' }}>
+                  {cameraError.title}
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => startCameraScanner()}
+                startIcon={<RefreshIcon sx={{ fontSize: 16 }} />}
+                sx={{
+                  color: '#38BDF8',
+                  borderColor: '#38BDF8',
+                  fontWeight: 800,
+                  textTransform: 'none',
+                  fontSize: '0.75rem',
+                  px: 1.25,
+                  py: 0.25,
+                  '&:hover': { bgcolor: 'rgba(56, 189, 248, 0.12)', borderColor: '#38BDF8' }
+                }}
+              >
+                Retry Camera
+              </Button>
+            </Box>
+            <Typography variant="body2" sx={{ color: '#E2E8F0', fontSize: '0.78rem', lineHeight: 1.45 }}>
+              {cameraError.text}
+            </Typography>
+          </Box>
         )}
 
         {/* Viewport Container */}
@@ -336,7 +503,7 @@ export default function WebBarcodeScannerModal({
             overflow: 'hidden',
             bgcolor: '#000000',
             position: 'relative',
-            border: '2px solid #38BDF8',
+            border: scanning ? '2px solid #10B981' : cameraError ? '2px solid #64748B' : '2px solid #38BDF8',
             minHeight: 280,
             display: 'flex',
             alignItems: 'center',
@@ -345,10 +512,22 @@ export default function WebBarcodeScannerModal({
         >
           <div id={containerId} style={{ width: '100%' }} />
 
-          {!scanning && !errorMsg && (
-            <Box sx={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-              <CircularProgress size={36} sx={{ color: '#38BDF8' }} />
-              <Typography variant="body2" sx={{ color: '#94A3B8' }}>Starting camera...</Typography>
+          {/* Loader or Camera Status Placeholder */}
+          {!scanning && (
+            <Box sx={{ position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2, textAlign: 'center' }}>
+              {isInitializing ? (
+                <>
+                  <CircularProgress size={36} sx={{ color: '#38BDF8' }} />
+                  <Typography variant="body2" sx={{ color: '#94A3B8', fontWeight: 600 }}>Requesting camera access...</Typography>
+                </>
+              ) : (
+                <>
+                  <CameraSwitchIcon sx={{ fontSize: 42, color: '#475569' }} />
+                  <Typography variant="caption" sx={{ color: '#94A3B8', maxWidth: 280, lineHeight: 1.4 }}>
+                    Camera feed paused or unavailable. You can use the manual input field below to type or scan with a barcode gun.
+                  </Typography>
+                </>
+              )}
             </Box>
           )}
 
@@ -401,12 +580,14 @@ export default function WebBarcodeScannerModal({
               mt: 2,
               p: 1.5,
               width: '100%',
+              maxWidth: 380,
               borderRadius: 2,
               bgcolor: recentScan.success ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
               border: `1px solid ${recentScan.success ? '#10B981' : '#EF4444'}`,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between'
+              justifyContent: 'space-between',
+              animation: 'fadeIn 0.2s ease-in-out'
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -422,7 +603,7 @@ export default function WebBarcodeScannerModal({
                   {recentScan.message}
                 </Typography>
                 <Typography variant="caption" sx={{ color: '#94A3B8' }}>
-                  Barcode: {recentScan.code}
+                  Code: {recentScan.code}
                 </Typography>
               </Box>
             </Box>
