@@ -68,6 +68,7 @@ const resolveDateRange = (preset, stateFrom, stateTo) => {
 const ALL_ADMIN_MODULES = [
   // 1. Sales & POS
   { key: 'pos_billing', label: 'POS Billing & Cashier Terminal', category: 'Sales & POS', desc: 'Counter POS terminal, cart billing, customer checkout, and cash drawer' },
+  { key: 'edit_rate_at_billing', label: 'Edit Rate at Billing', category: 'Sales & POS', desc: 'Allows cashier to change item rate/unit price in Weight and Quantity popups for the current bill only' },
   { key: 'order_history', label: 'Order History & Receipts', category: 'Sales & POS', desc: 'Past receipts, refunds, reprints, kitchen status, and invoice history' },
   { key: 'sales_orders', label: 'Sales Orders & Estimates', category: 'Sales & POS', desc: 'Commercial sales orders, quotations, and delivery challans' },
   { key: 'customers', label: 'Parties & Customers Directory', category: 'Sales & POS', desc: 'Customer directory, party ledger statements, and credit balances' },
@@ -119,7 +120,7 @@ const MODULE_CATEGORIES = [
 const ROLE_DEFAULT_PERMISSIONS = {
   admin: ALL_ADMIN_MODULES.map(m => m.key),
   manager: [
-    'pos_billing', 'order_history', 'sales_orders', 'customers',
+    'pos_billing', 'edit_rate_at_billing', 'order_history', 'sales_orders', 'customers',
     'menu_items', 'categories', 'inventory', 'warehouse_dashboard', 'inventory_catalog',
     'warehouses', 'rack_management', 'stock_transfer', 'stock_receiving', 'stock_count',
     'stock_adjustment', 'stock_requests', 'stock_ledger', 'warehouse_reports',
@@ -127,10 +128,10 @@ const ROLE_DEFAULT_PERMISSIONS = {
     'payment_reconciliation', 'suppliers', 'printers', 'gst', 'settings'
   ],
   cashier: [
-    'pos_billing', 'order_history', 'day_end', 'customers'
+    'pos_billing', 'edit_rate_at_billing', 'order_history', 'day_end', 'customers'
   ],
   salesman: [
-    'pos_billing', 'sales_orders', 'customers', 'inventory', 'order_history'
+    'pos_billing', 'edit_rate_at_billing', 'sales_orders', 'customers', 'inventory', 'order_history'
   ],
   warehouse_manager: [
     'inventory',
@@ -751,7 +752,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [permissionsDraft, setPermissionsDraft] = useState({
     allow_cashier_view_all_reports: 0,
     enable_whatsapp_receipt: 0,
-    whatsapp_business_phone: ''
+    whatsapp_business_phone: '',
+    allow_edit_rate_at_billing: 1,
+    edit_rate_allowed_roles: 'admin,manager,cashier',
+    rate_limit_mode: 'warning',
+    rate_limit_min_discount_pct: 0,
+    rate_limit_below_cost: 1
   });
   const [savingPermissions, setSavingPermissions] = useState(false);
 
@@ -786,7 +792,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     return {
       allow_cashier_view_all_reports: parseNumFlag(s.allow_cashier_view_all_reports, 0),
       enable_whatsapp_receipt:        parseNumFlag(s.enable_whatsapp_receipt, 0),
-      whatsapp_business_phone:        s.whatsapp_business_phone || ''
+      whatsapp_business_phone:        s.whatsapp_business_phone || '',
+      allow_edit_rate_at_billing:     parseNumFlag(s.allow_edit_rate_at_billing, 1),
+      edit_rate_allowed_roles:        s.edit_rate_allowed_roles || 'admin,manager,cashier',
+      rate_limit_mode:                s.rate_limit_mode || 'warning',
+      rate_limit_min_discount_pct:    s.rate_limit_min_discount_pct !== undefined ? Number(s.rate_limit_min_discount_pct) : 0,
+      rate_limit_below_cost:          parseNumFlag(s.rate_limit_below_cost, 1)
     };
   };
 
@@ -839,7 +850,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         ...receiptSettings,
         allow_cashier_view_all_reports: permissionsDraft.allow_cashier_view_all_reports,
         enable_whatsapp_receipt:        permissionsDraft.enable_whatsapp_receipt,
-        whatsapp_business_phone:        permissionsDraft.whatsapp_business_phone
+        whatsapp_business_phone:        permissionsDraft.whatsapp_business_phone,
+        allow_edit_rate_at_billing:     permissionsDraft.allow_edit_rate_at_billing,
+        edit_rate_allowed_roles:        permissionsDraft.edit_rate_allowed_roles,
+        rate_limit_mode:                permissionsDraft.rate_limit_mode,
+        rate_limit_min_discount_pct:    permissionsDraft.rate_limit_min_discount_pct,
+        rate_limit_below_cost:          permissionsDraft.rate_limit_below_cost
       };
 
       const res = await apiFetch('/api/settings/receipt', {
@@ -5096,6 +5112,30 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                           label="Enable Customer WhatsApp Receipt Share"
                         />
                       </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={permissionsDraft.allow_edit_rate_at_billing === 1}
+                              onChange={e => setPermissionsDraft({ ...permissionsDraft, allow_edit_rate_at_billing: e.target.checked ? 1 : 0 })}
+                              color="primary"
+                            />
+                          }
+                          label="Allow Editable Rate in Weight & Qty Popups"
+                        />
+                      </Grid>
+                      <Grid size={{ xs: 12, sm: 6 }}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={permissionsDraft.rate_limit_below_cost === 1}
+                              onChange={e => setPermissionsDraft({ ...permissionsDraft, rate_limit_below_cost: e.target.checked ? 1 : 0 })}
+                              color="primary"
+                            />
+                          }
+                          label="Warn When Overridden Rate is Below Cost Price"
+                        />
+                      </Grid>
                       {permissionsDraft.enable_whatsapp_receipt === 1 && (
                         <Grid size={12}>
                           <TextField
@@ -6940,7 +6980,11 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         {activeTab === 17 && <SupplierPayablesDashboard user={user} />}
 
         {/* --- TAB 18: PRODUCT SERIAL NUMBER TRACKING & PRINTING --- */}
-        {activeTab === 18 && <SerialNumberSuite user={user} token={token} />}
+        {activeTab === 18 && (
+          <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+            <SerialNumberSuite user={user} token={token} />
+          </Box>
+        )}
 
       {/* --- CRUD FORM POPUP --- */}
       <Dialog

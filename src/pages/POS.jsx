@@ -975,7 +975,7 @@ export default function POS({
       }
     }
 
-    const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
+    const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product) && !item.rate_overridden);
     if (existingIdx > -1) {
       setSelectedCartIndex(existingIdx);
     } else {
@@ -983,7 +983,7 @@ export default function POS({
     }
 
     setCart((prevCart) => {
-      const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+      const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product) && !item.rate_overridden);
 
       if (idx > -1) {
         const updated = [...prevCart];
@@ -1004,6 +1004,9 @@ export default function POS({
           barcode: product.barcode || '',
           price: price,
           unit_price: price,
+          unit_rate: price,
+          original_rate: price,
+          rate_overridden: false,
           quantity: 1,
           unit: product.base_unit || product.unit || 'pcs',
           is_weight_based: false,
@@ -1108,7 +1111,18 @@ export default function POS({
   }, [addPieceItemToCart, autoFocusSearch]);
 
   const handleWeightConfirm = (weightData) => {
-    const { product, weightInKg, displayWeight, unit, pricePerBaseUnit, calculatedTotal } = weightData;
+    const {
+      product,
+      weightInKg,
+      displayWeight,
+      unit,
+      pricePerBaseUnit,
+      original_rate,
+      originalRate,
+      unit_rate,
+      rate_overridden,
+      calculatedTotal
+    } = weightData;
 
     // Dynamic Available Stock Check for Weight items
     if (product && product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined) {
@@ -1140,7 +1154,18 @@ export default function POS({
       }
     }
 
-    if (editingCartIndex !== null) {
+    const effectiveRate = parseFloat(pricePerBaseUnit);
+    const origRate = original_rate !== undefined && original_rate !== null
+      ? parseFloat(original_rate)
+      : (originalRate !== undefined && originalRate !== null ? parseFloat(originalRate) : effectiveRate);
+    const isOverridden = rate_overridden !== undefined
+      ? Boolean(rate_overridden)
+      : (Math.abs(effectiveRate - origRate) > 0.005);
+    const finalTotal = typeof calculatedTotal === 'number'
+      ? calculatedTotal.toFixed(2)
+      : parseFloat(calculatedTotal || (weightInKg * effectiveRate)).toFixed(2);
+
+    if (editingCartIndex !== null && editingCartIndex >= 0 && editingCartIndex < cart.length) {
       setCart((prevCart) => {
         const updated = [...prevCart];
         updated[editingCartIndex] = {
@@ -1149,9 +1174,13 @@ export default function POS({
           displayWeight: displayWeight,
           weight_unit: unit,
           unit: unit,
-          base_unit_price: pricePerBaseUnit,
-          price: pricePerBaseUnit,
-          total_price: calculatedTotal.toFixed(2)
+          base_unit_price: effectiveRate,
+          price: effectiveRate,
+          unit_price: effectiveRate,
+          unit_rate: effectiveRate,
+          original_rate: origRate,
+          rate_overridden: isOverridden,
+          total_price: finalTotal
         };
         return updated;
       });
@@ -1163,16 +1192,19 @@ export default function POS({
           name: product.name,
           sku: product.sku || '',
           barcode: product.barcode || '',
-          price: pricePerBaseUnit,
-          unit_price: pricePerBaseUnit,
-          base_unit_price: pricePerBaseUnit,
+          price: effectiveRate,
+          unit_price: effectiveRate,
+          base_unit_price: effectiveRate,
+          original_rate: origRate,
+          unit_rate: effectiveRate,
+          rate_overridden: isOverridden,
           item_weight: weightInKg,
           displayWeight: displayWeight,
           weight_unit: unit,
           unit: unit,
           quantity: 1,
           is_weight_based: true,
-          total_price: calculatedTotal.toFixed(2),
+          total_price: finalTotal,
           gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
           notes: product.scanned_serial_number ? `SN: ${product.scanned_serial_number}` : (product.notes || ''),
           serial_number: product.scanned_serial_number || product.serial_number || null
@@ -1187,16 +1219,38 @@ export default function POS({
     autoFocusSearch();
   };
 
-  // Cart Controls - Handles saving quantity for existing or new items
-  const handleSaveCartQty = (newQty) => {
+  // Cart Controls - Handles saving quantity and rate for existing or new items
+  const handleSaveCartQty = (qtyOrData) => {
+    let newQty = 1;
+    let customRate = null;
+    let customOrigRate = null;
+    let customRateOverridden = null;
+
+    if (typeof qtyOrData === 'object' && qtyOrData !== null) {
+      newQty = parseFloat(qtyOrData.quantity || 1);
+      customRate = qtyOrData.rate !== undefined ? parseFloat(qtyOrData.rate) : (qtyOrData.price !== undefined ? parseFloat(qtyOrData.price) : null);
+      customOrigRate = qtyOrData.original_rate !== undefined ? parseFloat(qtyOrData.original_rate) : (qtyOrData.originalRate !== undefined ? parseFloat(qtyOrData.originalRate) : null);
+      customRateOverridden = qtyOrData.rate_overridden !== undefined ? Boolean(qtyOrData.rate_overridden) : (qtyOrData.rateOverridden !== undefined ? Boolean(qtyOrData.rateOverridden) : null);
+    } else {
+      newQty = parseFloat(qtyOrData || 1);
+    }
+
     if (editingCartIndex !== null && editingCartIndex >= 0 && editingCartIndex < cart.length) {
       setCart((prevCart) => {
         const updated = [...prevCart];
         const item = updated[editingCartIndex];
-        const unitPrice = parseFloat(item.price || item.unit_price || 0);
+        const unitPrice = customRate !== null ? customRate : parseFloat(item.price || item.unit_price || 0);
+        const origRate = customOrigRate !== null ? customOrigRate : (item.original_rate !== undefined ? parseFloat(item.original_rate) : unitPrice);
+        const isOverridden = customRateOverridden !== null ? customRateOverridden : (Math.abs(unitPrice - origRate) > 0.005);
+
         updated[editingCartIndex] = {
           ...item,
           quantity: newQty,
+          price: unitPrice,
+          unit_price: unitPrice,
+          unit_rate: unitPrice,
+          original_rate: origRate,
+          rate_overridden: isOverridden,
           total_price: (newQty * unitPrice).toFixed(2)
         };
         return updated;
@@ -1204,25 +1258,25 @@ export default function POS({
     } else if (editingCartItem) {
       const product = editingCartItem;
       const isWholesale = pricingMode === 'wholesale';
-      const price = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+      const defaultMenuPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
         ? parseFloat(product.wholesale_price)
         : parseFloat(product.price || product.selling_price || product.unit_price || 0);
+
+      const finalPrice = customRate !== null ? customRate : defaultMenuPrice;
+      const origRate = customOrigRate !== null ? customOrigRate : defaultMenuPrice;
+      const isOverridden = customRateOverridden !== null ? customRateOverridden : (Math.abs(finalPrice - origRate) > 0.005);
       const prodId = product.id || product.menu_item_id || product.product_id;
 
-      const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
-      if (existingIdx > -1) {
-        setSelectedCartIndex(existingIdx);
-      } else {
-        setSelectedCartIndex(cart.length);
-      }
-
       setCart((prevCart) => {
-        const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product));
+        // If the line is NOT rate-overridden, merge into existing non-overridden line
+        const idx = (!isOverridden)
+          ? prevCart.findIndex((item) => isCartItemMatchingProduct(item, product) && !item.rate_overridden)
+          : -1;
 
         if (idx > -1) {
           const updated = [...prevCart];
           const item = updated[idx];
-          const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || price));
+          const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || finalPrice));
           updated[idx] = {
             ...item,
             quantity: newQty,
@@ -1235,19 +1289,24 @@ export default function POS({
             name: product.name,
             sku: product.sku || '',
             barcode: product.barcode || '',
-            price: price,
-            unit_price: price,
+            price: finalPrice,
+            unit_price: finalPrice,
+            unit_rate: finalPrice,
+            original_rate: origRate,
+            rate_overridden: isOverridden,
             quantity: newQty,
             unit: product.base_unit || product.unit || 'pcs',
             is_weight_based: false,
-            total_price: (newQty * price).toFixed(2),
+            total_price: (newQty * finalPrice).toFixed(2),
             gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
-            notes: ''
+            notes: '',
+            serial_number: product.serial_number || null
           };
           return [...prevCart, newItem];
         }
       });
     }
+
     setCartQtyModalOpen(false);
     setEditingCartItem(null);
     setEditingCartIndex(null);
@@ -1286,19 +1345,22 @@ export default function POS({
     const idx = index !== undefined && index !== null ? index : selectedCartIndex;
     const item = cart[idx];
     if (!item) return;
-    if (item.serial_number) return; // Serial-tracked items have fixed quantity 1 and cannot be edited
     setSelectedCartIndex(idx);
     setEditingCartIndex(idx);
     if (item.is_weight_based) {
+      const catalogItem = (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id));
       setSelectedWeightProduct({
         id: item.product_id,
         name: item.name,
-        price: item.base_unit_price || item.price,
-        selling_price: item.base_unit_price || item.price,
+        price: item.price,
+        selling_price: item.price,
+        original_rate: item.original_rate !== undefined ? item.original_rate : (catalogItem?.price || item.base_unit_price || item.price),
         unit: item.weight_unit || item.unit || 'kg',
         base_unit: item.weight_unit || item.unit || 'kg',
         is_weight_based: true,
-        gst_rate: item.gst_rate
+        gst_rate: item.gst_rate,
+        purchase_price: catalogItem?.purchase_price || item.purchase_price,
+        cost_price: catalogItem?.cost_price || item.cost_price
       });
       setWeightModalVisible(true);
     } else {
@@ -1917,7 +1979,11 @@ export default function POS({
         tax_amount: parseFloat(i.totalTax !== undefined ? i.totalTax : (i.tax_amount || 0)).toFixed(2),
         discount_amount: parseFloat(i.discountAmount !== undefined ? i.discountAmount : (i.discount_amount || 0)).toFixed(2),
         notes: i.notes || '',
-        serial_number: i.serial_number || null
+        serial_number: i.serial_number || null,
+        original_rate: i.original_rate !== undefined && i.original_rate !== null ? parseFloat(i.original_rate) : parseFloat(i.price),
+        unit_rate: parseFloat(i.unit_rate !== undefined && i.unit_rate !== null ? i.unit_rate : i.price),
+        rate_overridden: Boolean(i.rate_overridden),
+        cashier_id: user?.id || null
       })),
       subtotal: docTax.subtotal.toFixed(2),
       discount_amount: docTax.discountAmount.toFixed(2),
@@ -3572,7 +3638,7 @@ export default function POS({
                           transition: 'background-color 0.15s ease, border-left 0.15s ease'
                         }}
                         onClick={() => setSelectedCartIndex(idx)}
-                        onDoubleClick={() => !item.serial_number && openCartItemEdit(idx)}
+                        onDoubleClick={() => openCartItemEdit(idx)}
                       >
                         <td style={styles.td}>
                           <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
@@ -3623,9 +3689,11 @@ export default function POS({
                                 color: '#9333ea',
                                 border: '1px solid #d8b4fe',
                                 display: 'inline-block',
+                                cursor: 'pointer',
                                 userSelect: 'none'
                               }}
-                              title="Serial unit quantity is fixed at 1"
+                              title="Serial item quantity is 1. Click to edit rate."
+                              onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
                             >
                               1
                             </span>
@@ -3685,7 +3753,46 @@ export default function POS({
                             </div>
                           )}
                         </td>
-                        <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
+                        <td
+                          style={{ ...styles.td, color: colors.textPrimary, cursor: 'pointer' }}
+                          title="Click to edit rate"
+                          onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                        >
+                          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                            <span style={{ fontWeight: item.rate_overridden ? '800' : 'normal' }}>
+                              ₹{parseFloat(item.price).toFixed(2)}
+                            </span>
+                            {item.rate_overridden && (
+                              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                                <span
+                                  style={{
+                                    fontSize: '9px',
+                                    fontWeight: '800',
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    backgroundColor: themeMode === 'dark' ? 'rgba(249, 115, 22, 0.25)' : '#FFF7ED',
+                                    color: '#EA580C',
+                                    border: '1px solid #FDBA74',
+                                    lineHeight: 1.2
+                                  }}
+                                  title={`Original menu rate: ₹${parseFloat(item.original_rate ?? item.price).toFixed(2)}`}
+                                >
+                                  Rate edited
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    color: colors.textSecondary,
+                                    textDecoration: 'line-through'
+                                  }}
+                                  title="Original menu rate"
+                                >
+                                  ₹{parseFloat(item.original_rate ?? item.price).toFixed(2)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </td>
                         <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
                         <td style={styles.td}>
                           <button style={styles.deleteBtn} onClick={(e) => { e.stopPropagation(); removeCartItem(idx); }} title="Remove item"><Trash2 size={13} /></button>
@@ -3869,7 +3976,7 @@ export default function POS({
                             transition: 'background-color 0.15s ease, border-left 0.15s ease'
                           }}
                           onClick={() => setSelectedCartIndex(idx)}
-                          onDoubleClick={() => !item.serial_number && openCartItemEdit(idx)}
+                          onDoubleClick={() => openCartItemEdit(idx)}
                         >
                           <td style={styles.td}>
                             <div style={{ fontWeight: '700', color: colors.textPrimary }}>{item.name}</div>
@@ -3920,9 +4027,11 @@ export default function POS({
                                   color: '#9333ea',
                                   border: '1px solid #d8b4fe',
                                   display: 'inline-block',
+                                  cursor: 'pointer',
                                   userSelect: 'none'
                                 }}
-                                title="Serial unit quantity is fixed at 1"
+                                title="Serial item quantity is 1. Click to edit rate."
+                                onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
                               >
                                 1
                               </span>
@@ -3982,7 +4091,46 @@ export default function POS({
                               </div>
                             )}
                           </td>
-                          <td style={{ ...styles.td, color: colors.textPrimary }}>₹{parseFloat(item.price).toFixed(2)}</td>
+                          <td
+                            style={{ ...styles.td, color: colors.textPrimary, cursor: 'pointer' }}
+                            title="Click to edit rate"
+                            onClick={(e) => { e.stopPropagation(); openCartItemEdit(idx); }}
+                          >
+                            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                              <span style={{ fontWeight: item.rate_overridden ? '800' : 'normal' }}>
+                                ₹{parseFloat(item.price).toFixed(2)}
+                              </span>
+                              {item.rate_overridden && (
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                                  <span
+                                    style={{
+                                      fontSize: '9px',
+                                      fontWeight: '800',
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      backgroundColor: themeMode === 'dark' ? 'rgba(249, 115, 22, 0.25)' : '#FFF7ED',
+                                      color: '#EA580C',
+                                      border: '1px solid #FDBA74',
+                                      lineHeight: 1.2
+                                    }}
+                                    title={`Original menu rate: ₹${parseFloat(item.original_rate ?? item.price).toFixed(2)}`}
+                                  >
+                                    Rate edited
+                                  </span>
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      color: colors.textSecondary,
+                                      textDecoration: 'line-through'
+                                    }}
+                                    title="Original menu rate"
+                                  >
+                                    ₹{parseFloat(item.original_rate ?? item.price).toFixed(2)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </td>
                           <td style={styles.tdBold}>₹{parseFloat(item.total_price).toFixed(2)}</td>
                           <td style={styles.td}>
                             <button style={styles.deleteBtn} onClick={(e) => { e.stopPropagation(); removeCartItem(idx); }} title="Remove item"><Trash2 size={13} /></button>
@@ -4172,9 +4320,16 @@ export default function POS({
         isOpen={weightModalVisible}
         product={selectedWeightProduct}
         pricingMode={pricingMode}
-        initialWeightInKg={editingCartIndex !== null ? cart[editingCartIndex]?.item_weight : 0}
+        initialWeightInKg={editingCartIndex !== null ? (cart[editingCartIndex]?.item_weight || cart[editingCartIndex]?.quantity || 0) : 0}
+        initialRate={editingCartIndex !== null ? (cart[editingCartIndex]?.unit_rate ?? cart[editingCartIndex]?.price) : null}
+        user={user}
+        receiptSettings={receiptSettings}
         onConfirm={handleWeightConfirm}
-        onClose={() => setWeightModalVisible(false)}
+        onClose={() => {
+          setWeightModalVisible(false);
+          setSelectedWeightProduct(null);
+          setEditingCartIndex(null);
+        }}
       />
 
       <SerialSelectionModal
@@ -4193,6 +4348,9 @@ export default function POS({
       <CartQtyEditModal
         isOpen={cartQtyModalOpen}
         item={editingCartItem || (editingCartIndex !== null ? cart[editingCartIndex] : cart[selectedCartIndex])}
+        pricingMode={pricingMode}
+        user={user}
+        receiptSettings={receiptSettings}
         onConfirm={handleSaveCartQty}
         onClose={() => {
           setCartQtyModalOpen(false);

@@ -106,15 +106,39 @@ const processQueue = (error, token = null) => {
 };
 
 /**
+ * Module-level one-time guard to ensure forced logout / session conflict handling
+ * runs strictly ONCE across all concurrent or in-flight requests.
+ */
+let isForceLoggingOut = false;
+
+export function resetForceLogoutFlag() {
+  isForceLoggingOut = false;
+}
+
+export function isForcedLoggingOut() {
+  return isForceLoggingOut;
+}
+
+/**
  * Clear local credentials and notify app of session termination
  */
 export function handleSessionExpired(reason = null) {
-  localStorage.removeItem('ARISO_RETAIL_TOKEN');
-  localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
-  localStorage.removeItem('ARISO_RETAIL_USER');
-  localStorage.removeItem('pos_token');
-  localStorage.removeItem('pos_refresh_token');
-  localStorage.removeItem('pos_user');
+  // If forced logout is already initiated, ignore any subsequent or concurrent triggers
+  if (isForceLoggingOut) {
+    return;
+  }
+  isForceLoggingOut = true;
+
+  try {
+    localStorage.removeItem('ARISO_RETAIL_TOKEN');
+    localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
+    localStorage.removeItem('ARISO_RETAIL_USER');
+    localStorage.removeItem('pos_token');
+    localStorage.removeItem('pos_refresh_token');
+    localStorage.removeItem('pos_user');
+    sessionStorage.clear();
+  } catch (_) {}
+
   window.dispatchEvent(new CustomEvent('auth_session_expired', { detail: { reason } }));
 }
 
@@ -188,10 +212,22 @@ export async function apiFetch(url, options = {}) {
   // Exclude auth-specific endpoints to prevent infinite refresh loops
   const isAuthEndpoint = fullUrl.includes('/api/auth/login') ||
                          fullUrl.includes('/api/auth/refresh') ||
-                         fullUrl.includes('/api/auth/verify-otp');
+                         fullUrl.includes('/api/auth/verify-otp') ||
+                         fullUrl.includes('/api/auth/logout');
+
+  // If forced logout has already been initiated, ignore in-flight non-auth requests
+  if (isForceLoggingOut && !isAuthEndpoint) {
+    return new Response(JSON.stringify({ error: 'Session invalidated' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 
   // Handle 401 Unauthorized (Expired or Invalid Access Token)
   if (response.status === 401 && !isAuthEndpoint) {
+    if (isForceLoggingOut) {
+      return response; // Already forced logging out - ignore any concurrent 401 responses
+    }
     try {
       const clonedRes = response.clone();
       const errorData = await clonedRes.json();
@@ -278,12 +314,14 @@ export async function apiFetch(url, options = {}) {
         isRefreshing = false;
 
         // Explicitly terminate session if refresh token is expired or unauthorized on server
-        if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
-          handleSessionExpired('LOGGED_IN_ELSEWHERE');
-        } else if (rData && rData.code === 'USER_INACTIVE') {
-          handleSessionExpired('USER_INACTIVE');
-        } else {
-          handleSessionExpired('TOKEN_EXPIRED');
+        if (!isForceLoggingOut) {
+          if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
+            handleSessionExpired('LOGGED_IN_ELSEWHERE');
+          } else if (rData && rData.code === 'USER_INACTIVE') {
+            handleSessionExpired('USER_INACTIVE');
+          } else {
+            handleSessionExpired('TOKEN_EXPIRED');
+          }
         }
       }
     } catch (refreshErr) {
