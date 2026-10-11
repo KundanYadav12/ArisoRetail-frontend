@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar,
   Typography, Button, IconButton, useMediaQuery, Menu, MenuItem, Chip,
-  Tooltip, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider
+  Tooltip, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider,
+  Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
 // Clean Vite HMR trigger
 import MenuIcon from '@mui/icons-material/Menu';
@@ -36,7 +37,7 @@ import LanguageSelectorModal from './components/LanguageSelectorModal';
 import KeyboardHelpModal from './components/KeyboardHelpModal';
 import { NotificationProvider } from './context/NotificationContext';
 import { DataRefreshProvider } from './context/DataRefreshContext';
-import { apiFetch, resolveImageUrl } from './utils/api';
+import { apiFetch, resolveImageUrl, resetForceLogoutFlag } from './utils/api';
 import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
@@ -128,6 +129,22 @@ export default function App() {
   const [paymentMode, setPaymentMode] = useState('cash');
   const [taxType, setTaxType] = useState('intra');
   const [receiptSettings, setReceiptSettings] = useState(null);
+
+  // Forced logout / session conflict modal state and guard ref
+  const [sessionConflictModal, setSessionConflictModal] = useState({
+    open: false,
+    message: '',
+    reason: null
+  });
+  const isHandlingSessionExpiryRef = useRef(false);
+
+  const handleDismissSessionConflict = () => {
+    setSessionConflictModal({ open: false, message: '', reason: null });
+    try {
+      window.history.replaceState(null, '', '#/login');
+      window.location.hash = '#/login';
+    } catch (_) {}
+  };
 
   // Global Session Pricing Mode: 'retail' | 'wholesale'
   const [pricingMode, setPricingMode] = useState(() => {
@@ -288,13 +305,56 @@ export default function App() {
     syncSessionAndCatalog();
 
     const handleSessionExpired = (e) => {
+      // Guard: strictly ensure the forced-logout flow executes only ONCE
+      if (isHandlingSessionExpiryRef.current) return;
+      isHandlingSessionExpiryRef.current = true;
+
       const reason = e?.detail?.reason;
-      if (reason === 'LOGGED_IN_ELSEWHERE') {
-        alert('You have been logged out because your account was logged in from another device.');
-      } else if (reason === 'USER_INACTIVE') {
-        alert('Your account is currently inactive. Please contact the administrator.');
+      let msg = 'You have been logged out because your account was logged in from another device.';
+      if (reason === 'USER_INACTIVE') {
+        msg = 'Your account is currently inactive. Please contact the administrator.';
+      } else if (reason === 'TOKEN_EXPIRED') {
+        msg = 'Your session has expired. Please sign in again.';
       }
-      handleLogout();
+
+      // 1. Cancel background auto-sync and intervals immediately
+      try {
+        SyncService.stopAutoSync();
+      } catch (_) {}
+
+      // 2. Clear credentials and session tokens from storage immediately
+      try {
+        localStorage.removeItem('ARISO_RETAIL_TOKEN');
+        localStorage.removeItem('ARISO_RETAIL_REFRESH_TOKEN');
+        localStorage.removeItem('ARISO_RETAIL_USER');
+        localStorage.removeItem('pos_token');
+        localStorage.removeItem('pos_refresh_token');
+        localStorage.removeItem('pos_user');
+        localStorage.removeItem('ARISO_RETAIL_CURRENT_VIEW');
+        localStorage.removeItem('ariso_current_view');
+        localStorage.removeItem('ariso_admin_active_tab');
+        localStorage.removeItem('ariso_admin_inventory_subtab');
+        localStorage.removeItem('ariso_admin_gst_subtab');
+        localStorage.removeItem('ariso_pos_cart');
+        sessionStorage.clear();
+      } catch (_) {}
+
+      // 3. Update router hash to #/login with replaceState so Back cannot re-enter protected routes
+      try {
+        window.history.replaceState(null, '', '#/login');
+      } catch (_) {}
+
+      // 4. Immediately clear React auth state to switch directly to the Login page
+      setUser(null);
+      setToken('');
+      setCurrentView('pos');
+
+      // 5. Present the single modal dialog on top of the Login view
+      setSessionConflictModal({
+        open: true,
+        message: msg,
+        reason
+      });
     };
 
     const handleTokenRefreshed = (e) => {
@@ -673,12 +733,83 @@ export default function App() {
       if (contentLockRef.current) contentLockRef.current.removeAttribute('inert');
     };
   }, [isAccountExpired]);
+  const renderSessionConflictDialog = () => (
+    <Dialog
+      open={Boolean(sessionConflictModal.open)}
+      onClose={(e, reason) => {
+        if (reason !== 'backdropClick') {
+          handleDismissSessionConflict();
+        }
+      }}
+      maxWidth="xs"
+      fullWidth
+      disableEscapeKeyDown={false}
+      PaperProps={{
+        sx: {
+          borderRadius: 3,
+          p: 1.5,
+          textAlign: 'center',
+          boxShadow: '0 24px 48px -12px rgba(0,0,0,0.4)',
+          border: '1px solid #fde68a'
+        }
+      }}
+    >
+      <DialogTitle sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, pt: 2, pb: 1 }}>
+        <Box sx={{
+          width: 56,
+          height: 56,
+          borderRadius: '50%',
+          bgcolor: '#fffbeb',
+          color: '#d97706',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: '2px solid #fde68a'
+        }}>
+          <AlertTriangle size={32} />
+        </Box>
+        <Typography variant="h6" fontWeight={700} color="text.primary">
+          Session Expired
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ pb: 2 }}>
+        <Typography variant="body1" color="text.secondary" sx={{ fontSize: '0.95rem', lineHeight: 1.5 }}>
+          {sessionConflictModal.message}
+        </Typography>
+      </DialogContent>
+      <DialogActions sx={{ justifyContent: 'center', pb: 2, px: 3 }}>
+        <Button
+          id="session-conflict-ok-btn"
+          variant="contained"
+          fullWidth
+          size="large"
+          onClick={handleDismissSessionConflict}
+          sx={{
+            bgcolor: '#f59e0b',
+            '&:hover': { bgcolor: '#d97706' },
+            color: '#ffffff',
+            fontWeight: 700,
+            borderRadius: 2,
+            py: 1.2,
+            fontSize: '1rem',
+            textTransform: 'none',
+            boxShadow: '0 4px 12px rgba(245, 158, 11, 0.35)'
+          }}
+        >
+          OK
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+
   if (!token || !user) {
     return (
       <NotificationProvider>
         <ThemeProvider theme={muiTheme}>
           <CssBaseline />
           <Login onLoginSuccess={(u, t) => {
+            isHandlingSessionExpiryRef.current = false;
+            resetForceLogoutFlag();
             setUser(u);
             setToken(t);
             let targetView = 'pos';
@@ -694,6 +825,7 @@ export default function App() {
             }
             setCurrentView(targetView);
           }} />
+          {renderSessionConflictDialog()}
         </ThemeProvider>
       </NotificationProvider>
     );
@@ -1680,6 +1812,7 @@ export default function App() {
             )}
           </Box>
         </Box>
+        {renderSessionConflictDialog()}
       </ThemeProvider>
       </DataRefreshProvider>
       </NotificationProvider>

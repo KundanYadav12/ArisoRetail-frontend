@@ -297,13 +297,20 @@ export default function SerialNumberSuite({ user, token }) {
 
   const fetchPrinters = async () => {
     try {
-      const res = await apiFetch('/api/printers');
+      const res = await apiFetch('/api/printers/discover');
       if (res.ok) {
         const data = await res.json();
-        setPrinters(data.printers || []);
-        if (data.printers?.length > 0) {
-          const thermal = data.printers.find(p => p.printer_type === 'escpos' || p.printer_type === 'label' || p.is_default);
-          setSelectedPrinterId(thermal ? thermal.id : data.printers[0].id);
+        const list = (data.discovered || data.printers || []).filter(p => !p.is_virtual);
+        setPrinters(list);
+        if (list.length > 0) {
+          const preferred = list.find(p => p.is_label) || list.find(p => p.type === 'usb') || list[0];
+          setSelectedPrinterId(preferred.id || preferred.name);
+        }
+      } else {
+        const fallbackRes = await apiFetch('/api/printers');
+        if (fallbackRes.ok) {
+          const fbData = await fallbackRes.json();
+          setPrinters(Array.isArray(fbData) ? fbData : (fbData.printers || []));
         }
       }
     } catch (e) {
@@ -412,6 +419,39 @@ export default function SerialNumberSuite({ user, token }) {
         sku: selectedSerialForPrint.product_sku,
         selling_price: selectedSerialForPrint.selling_price
       };
+
+      const selectedObj = printers.find(p => p.id === selectedPrinterId || p.name === selectedPrinterId);
+      const isTargetLabelHardware = selectedObj?.is_label || selectedObj?.protocol === 'tspl' || selectedObj?.type === 'usb';
+
+      if (selectedPrinterId && isTargetLabelHardware) {
+        const res = await apiFetch('/api/printers/print-label', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            printer_name: typeof selectedPrinterId === 'string' && isNaN(selectedPrinterId) ? selectedPrinterId : null,
+            printer_id: !isNaN(selectedPrinterId) ? selectedPrinterId : null,
+            copies: parseInt(printCopies, 10) || 1,
+            label_data: {
+              storeName: user?.restaurant_name || 'ARISO RETAIL',
+              productName: product.name,
+              barcode: selectedSerialForPrint.serial_number,
+              sku: product.sku || '',
+              price: product.selling_price || product.price || 0,
+              mrp: product.mrp || product.selling_price || 0,
+              serialNumber: selectedSerialForPrint.serial_number
+            }
+          })
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to print barcode label.');
+        }
+
+        notify?.success(data.message || `Printed ${printCopies} barcode sticker(s) for Serial #${selectedSerialForPrint.serial_number}`, 'Sticker Printed');
+        setPrintDialogVisible(false);
+        return;
+      }
 
       const stickerItems = Array(parseInt(printCopies, 10) || 1).fill({
         id: product.id,
@@ -600,11 +640,11 @@ export default function SerialNumberSuite({ user, token }) {
   };
 
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 2.5, md: 3 }, maxWidth: 1600, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 1.25, sm: 2.5 }, width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
 
       {/* --- HEADER TITLE & PERMISSION BADGE --- */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, flexWrap: 'wrap', gap: 2 }}>
-        <Box>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, flexWrap: 'wrap', gap: 1.5, width: '100%', minWidth: 0 }}>
+        <Box sx={{ minWidth: 0 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
             <Box sx={{
               p: 1.25,
@@ -614,33 +654,36 @@ export default function SerialNumberSuite({ user, token }) {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 12px rgba(249, 115, 22, 0.25)'
+              boxShadow: '0 4px 12px rgba(249, 115, 22, 0.25)',
+              flexShrink: 0
             }}>
               <Tag size={24} />
             </Box>
-            <Box>
-              <Typography variant="h5" sx={{ fontWeight: 800, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="h5" sx={{ fontWeight: 800, fontSize: { xs: 'clamp(1.1rem, 4vw, 1.4rem)', sm: '1.5rem' }, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: 1 }}>
                 Product Serial Number Tracking & Printing
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
                 8-Digit Unique Unit Traceability, Manufacturer Inward & Customer Sale History
               </Typography>
             </Box>
           </Box>
         </Box>
 
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', flexShrink: 0 }}>
           <Chip
             icon={<ShieldCheck size={16} />}
             label="Super Admin Permission Protected"
             color="success"
             variant="outlined"
+            size="small"
             sx={{ fontWeight: 700, borderRadius: 2 }}
           />
           <Button
             variant="contained"
             color="primary"
-            startIcon={<Plus size={18} />}
+            size="small"
+            startIcon={<Plus size={16} />}
             onClick={() => {
               setGenerateMode('auto');
               setManualSerialNumber('');
@@ -651,108 +694,109 @@ export default function SerialNumberSuite({ user, token }) {
               setGenerateDialogVisible(true);
               fetchMenuItems();
             }}
-            sx={{ fontWeight: 700, borderRadius: 2, textTransform: 'none', px: 2.5 }}
+            sx={{ fontWeight: 800, borderRadius: 2, textTransform: 'none', px: 2 }}
           >
-            Generate Serials
+            + Generate Serials
           </Button>
           <IconButton
+            size="small"
             onClick={() => { fetchStats(); fetchSerials(); }}
-            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}
+            sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 0.75 }}
             title="Refresh Data"
           >
-            <RefreshCw size={18} />
+            <RefreshCw size={16} />
           </IconButton>
         </Box>
       </Box>
 
       {/* --- KPI STATS CARDS --- */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: -1, px: 0.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: -0.5, px: 0.5, width: '100%', minWidth: 0 }}>
         <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 0.75 }}>
           <Layers size={13} color="#6b7280" />
           <span>Global Inventory Totals <Box component="span" sx={{ color: 'primary.main', fontWeight: 800 }}>(System-Wide Counts • Unaffected by Table Column Filters)</Box></span>
         </Typography>
       </Box>
 
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 2, bgcolor: 'background.paper' }}>
+      <Grid container spacing={{ xs: 1, sm: 2 }} sx={{ width: '100%', minWidth: 0 }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 1.75, bgcolor: 'background.paper', height: '100%', boxSizing: 'border-box' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
                 <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, textTransform: 'uppercase' }}>
                   Total Tracked Units
                 </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'text.primary' }}>
+                <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, color: 'text.primary' }}>
                   {stats.total_serials.toLocaleString()}
                 </Typography>
                 <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
                   Global Store Count
                 </Typography>
               </Box>
-              <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.1)', color: 'info.main' }}>
-                <Layers size={24} />
+              <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(59, 130, 246, 0.1)', color: 'info.main' }}>
+                <Layers size={22} />
               </Box>
             </Box>
           </Card>
         </Grid>
 
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 2, bgcolor: 'background.paper', borderColor: 'success.light' }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 1.75, bgcolor: 'background.paper', borderColor: 'success.light', height: '100%', boxSizing: 'border-box' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
                 <Typography variant="caption" sx={{ color: 'success.main', fontWeight: 700, textTransform: 'uppercase' }}>
                   In Stock (Available)
                 </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'success.dark' }}>
+                <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, color: 'success.dark' }}>
                   {stats.in_stock.toLocaleString()}
                 </Typography>
                 <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
                   Global In Stock
                 </Typography>
               </Box>
-              <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(34, 197, 94, 0.1)', color: 'success.main' }}>
-                <Package size={24} />
+              <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(34, 197, 94, 0.1)', color: 'success.main' }}>
+                <Package size={22} />
               </Box>
             </Box>
           </Card>
         </Grid>
 
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 2, bgcolor: 'background.paper', borderColor: 'primary.light' }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 1.75, bgcolor: 'background.paper', borderColor: 'primary.light', height: '100%', boxSizing: 'border-box' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
                 <Typography variant="caption" sx={{ color: 'primary.main', fontWeight: 700, textTransform: 'uppercase' }}>
                   Sold To Customers
                 </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'primary.dark' }}>
+                <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, color: 'primary.dark' }}>
                   {stats.sold.toLocaleString()}
                 </Typography>
                 <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
                   Global Sold Count
                 </Typography>
               </Box>
-              <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(249, 115, 22, 0.1)', color: 'primary.main' }}>
-                <CheckCircle2 size={24} />
+              <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(249, 115, 22, 0.1)', color: 'primary.main' }}>
+                <CheckCircle2 size={22} />
               </Box>
             </Box>
           </Card>
         </Grid>
 
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 2, bgcolor: 'background.paper' }}>
+        <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+          <Card variant="outlined" sx={{ borderRadius: 2.5, p: 1.75, bgcolor: 'background.paper', height: '100%', boxSizing: 'border-box' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Box>
                 <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 700, textTransform: 'uppercase' }}>
                   Today's Inward Serials
                 </Typography>
-                <Typography variant="h4" sx={{ fontWeight: 800, mt: 0.5, color: 'secondary.main' }}>
+                <Typography variant="h5" sx={{ fontWeight: 800, mt: 0.5, color: 'secondary.main' }}>
                   {stats.generated_today.toLocaleString()}
                 </Typography>
                 <Typography variant="caption" sx={{ color: 'text.disabled', fontSize: '0.7rem', display: 'block', mt: 0.25 }}>
                   Global Today
                 </Typography>
               </Box>
-              <Box sx={{ p: 1.2, borderRadius: 2, bgcolor: 'rgba(168, 85, 247, 0.1)', color: 'secondary.main' }}>
-                <Sparkles size={24} />
+              <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'rgba(168, 85, 247, 0.1)', color: 'secondary.main' }}>
+                <Sparkles size={22} />
               </Box>
             </Box>
           </Card>
@@ -763,19 +807,23 @@ export default function SerialNumberSuite({ user, token }) {
       <Card
         variant="outlined"
         sx={{
-          borderRadius: 3,
-          p: 3,
+          borderRadius: 2.5,
+          p: { xs: 2, sm: 2.5 },
           bgcolor: 'background.paper',
           border: '2px solid',
           borderColor: 'primary.light',
-          boxShadow: '0 8px 24px rgba(249, 115, 22, 0.08)'
+          boxShadow: '0 4px 16px rgba(249, 115, 22, 0.06)',
+          width: '100%',
+          maxWidth: '100%',
+          minWidth: 0,
+          boxSizing: 'border-box'
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <QrCode size={22} color="#f97316" />
-              <Typography variant="h6" sx={{ fontWeight: 800 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, width: '100%', minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, width: '100%', minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+              <QrCode size={20} color="#f97316" />
+              <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
                 Serial Number Scanner & Lookup
               </Typography>
             </Box>
@@ -784,33 +832,35 @@ export default function SerialNumberSuite({ user, token }) {
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: { xs: 'wrap', sm: 'nowrap' }, width: '100%', minWidth: 0 }}>
             <TextField
               inputRef={searchInputRef}
               fullWidth
               autoFocus
               variant="outlined"
+              size="small"
               placeholder="Scan barcode or enter 8-digit serial number (e.g. 12345678)..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              sx={{ flex: 1, minWidth: 0 }}
               slotProps={{
                 input: {
                   startAdornment: (
                     <InputAdornment position="start">
-                      <Search size={22} color="#6b7280" />
+                      <Search size={18} color="#6b7280" />
                     </InputAdornment>
                   ),
                   endAdornment: searchInput && (
                     <InputAdornment position="end">
                       <IconButton size="small" onClick={() => { setSearchInput(''); setLookupResult(null); setLookupError(''); searchInputRef.current?.focus(); }}>
-                        <XCircle size={18} />
+                        <XCircle size={16} />
                       </IconButton>
                     </InputAdornment>
                   ),
                   sx: {
-                    borderRadius: 2.5,
-                    fontSize: '1.15rem',
+                    borderRadius: 2,
+                    fontSize: '1rem',
                     fontFamily: 'monospace',
                     fontWeight: 700,
                     bgcolor: 'background.default'
@@ -821,18 +871,20 @@ export default function SerialNumberSuite({ user, token }) {
 
             <Button
               variant="contained"
-              size="large"
+              size="medium"
               onClick={() => handleLookup()}
               disabled={lookingUp || !searchInput.trim()}
-              startIcon={lookingUp ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
+              startIcon={lookingUp ? <CircularProgress size={18} color="inherit" /> : <Search size={18} />}
               sx={{
-                height: 56,
-                px: 4,
-                borderRadius: 2.5,
+                height: { xs: 40, sm: 42 },
+                px: 3,
+                borderRadius: 2,
                 fontWeight: 800,
-                fontSize: '1rem',
+                fontSize: '0.9rem',
                 textTransform: 'none',
-                flexShrink: 0
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
+                width: { xs: '100%', sm: 'auto' }
               }}
             >
               {lookingUp ? 'Searching...' : 'Lookup Unit'}
@@ -863,6 +915,10 @@ export default function SerialNumberSuite({ user, token }) {
             sx={{
               borderRadius: 3,
               p: { xs: 2, sm: 3 },
+              width: '100%',
+              maxWidth: '100%',
+              minWidth: 0,
+              boxSizing: 'border-box',
               bgcolor: isDetailWarrantyExpired
                 ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.06)' : '#fffbfb'
                 : 'background.paper',
@@ -1259,19 +1315,22 @@ export default function SerialNumberSuite({ user, token }) {
       })()}
 
       {/* --- MASTER SERIAL NUMBERS AUDIT TABLE --- */}
-      <Card variant="outlined" sx={{ borderRadius: 3, overflow: 'hidden', bgcolor: 'background.paper' }}>
+      <Card variant="outlined" sx={{ borderRadius: 2.5, width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden', bgcolor: 'background.paper', boxSizing: 'border-box' }}>
         <Box sx={{
-          p: 2.5,
+          p: { xs: 1.5, sm: 2 },
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: { xs: 'flex-start', sm: 'center' },
-          flexDirection: { xs: 'column', sm: 'row' },
-          gap: 2,
+          alignItems: { xs: 'flex-start', md: 'center' },
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: 1.5,
           borderBottom: '1px solid',
-          borderColor: 'divider'
+          borderColor: 'divider',
+          width: '100%',
+          minWidth: 0,
+          boxSizing: 'border-box'
         }}>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 800 }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="h6" sx={{ fontWeight: 800, fontSize: { xs: '1rem', sm: '1.15rem' } }}>
               Master Serial Number Inventory
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -1279,9 +1338,9 @@ export default function SerialNumberSuite({ user, token }) {
             </Typography>
           </Box>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap', width: { xs: '100%', md: 'auto' }, minWidth: 0 }}>
             {/* Status Filter Chips with Live Counts */}
-            <Box sx={{ display: 'flex', gap: 0.5, bgcolor: 'action.hover', p: 0.5, borderRadius: 2 }}>
+            <Box sx={{ display: 'flex', gap: 0.5, bgcolor: 'action.hover', p: 0.5, borderRadius: 2, flexShrink: 0 }}>
               <Chip
                 label={`All (${stats.total_serials || totalCount || 0})`}
                 clickable
@@ -1324,7 +1383,7 @@ export default function SerialNumberSuite({ user, token }) {
             </Box>
 
             {/* Product Filter Dropdown */}
-            <FormControl size="small" sx={{ minWidth: 200, maxWidth: 260 }}>
+            <FormControl size="small" sx={{ minWidth: 150, maxWidth: { xs: '100%', sm: 220 }, flex: { xs: 1, sm: 'none' } }}>
               <InputLabel id="product-filter-label" sx={{ fontSize: '0.85rem' }}>Filter Product</InputLabel>
               <Select
                 labelId="product-filter-label"
@@ -1336,7 +1395,7 @@ export default function SerialNumberSuite({ user, token }) {
                   setPage(0);
                   fetchSerials(0, statusFilter, tableSearch, newProduct, colFilters);
                 }}
-                sx={{ borderRadius: 2, height: 38, fontSize: '0.85rem' }}
+                sx={{ borderRadius: 2, height: 36, fontSize: '0.85rem' }}
               >
                 <MenuItem value="all">
                   <em>All Products ({stats.total_serials || totalCount})</em>
@@ -1352,7 +1411,7 @@ export default function SerialNumberSuite({ user, token }) {
             {/* Quick Filter Search */}
             <TextField
               size="small"
-              placeholder="Search serial, product, invoice..."
+              placeholder="Search serial, product..."
               value={tableSearch}
               onChange={(e) => {
                 const val = e.target.value;
@@ -1360,6 +1419,7 @@ export default function SerialNumberSuite({ user, token }) {
                 setPage(0);
                 fetchSerials(0, statusFilter, val, selectedProductFilter, colFilters);
               }}
+              sx={{ minWidth: 160, flex: { xs: 1, sm: 'none' } }}
               slotProps={{
                 input: {
                   startAdornment: (
@@ -1381,7 +1441,7 @@ export default function SerialNumberSuite({ user, token }) {
                       </IconButton>
                     </InputAdornment>
                   ),
-                  sx: { borderRadius: 2, minWidth: 220 }
+                  sx: { borderRadius: 2, height: 36, fontSize: '0.85rem' }
                 }
               }}
             />
@@ -1391,7 +1451,7 @@ export default function SerialNumberSuite({ user, token }) {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                 <Chip
                   icon={<Filter size={13} />}
-                  label={`${activeColFiltersCount} Column Filter${activeColFiltersCount > 1 ? 's' : ''} Active`}
+                  label={`${activeColFiltersCount} Filter${activeColFiltersCount > 1 ? 's' : ''}`}
                   color="warning"
                   size="small"
                   onDelete={clearAllColFilters}
@@ -1403,9 +1463,9 @@ export default function SerialNumberSuite({ user, token }) {
                   color="warning"
                   startIcon={<RotateCcw size={13} />}
                   onClick={clearAllColFilters}
-                  sx={{ textTransform: 'none', fontWeight: 700, height: 32, fontSize: '0.8rem' }}
+                  sx={{ textTransform: 'none', fontWeight: 700, height: 32, fontSize: '0.75rem' }}
                 >
-                  Clear All Filters
+                  Clear
                 </Button>
               </Box>
             )}
@@ -1418,7 +1478,7 @@ export default function SerialNumberSuite({ user, token }) {
                   fetchStats();
                   fetchSerials(page, statusFilter, tableSearch, selectedProductFilter, colFilters);
                 }}
-                sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 0.9 }}
+                sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 0.8 }}
               >
                 <RefreshCw size={16} />
               </IconButton>
@@ -1426,8 +1486,18 @@ export default function SerialNumberSuite({ user, token }) {
           </Box>
         </Box>
 
-        <TableContainer component={Paper} elevation={0} sx={{ maxHeight: 600 }}>
-          <Table stickyHeader size="small">
+        <TableContainer
+          component={Box}
+          sx={{
+            width: '100%',
+            maxWidth: '100%',
+            overflowX: 'auto',
+            maxHeight: 620,
+            boxSizing: 'border-box',
+            position: 'relative'
+          }}
+        >
+          <Table stickyHeader size="small" sx={{ minWidth: 1100 }}>
             <TableHead>
               <TableRow
                 sx={{
@@ -1443,6 +1513,19 @@ export default function SerialNumberSuite({ user, token }) {
                 }}
               >
                 {(() => {
+                  const colMinWidths = {
+                    serial_number: 130,
+                    product_item: 160,
+                    sku_barcode: 110,
+                    purchase_date: 115,
+                    purchase_invoice: 130,
+                    sale_date: 110,
+                    sales_invoice: 130,
+                    status: 110,
+                    warranty_start: 125,
+                    warranty_end: 130
+                  };
+
                   const renderColHeader = (colKey, label, align = 'left') => {
                     const active = isColFilterActive(colKey);
                     return (
@@ -1452,7 +1535,8 @@ export default function SerialNumberSuite({ user, token }) {
                         sx={{
                           whiteSpace: 'nowrap',
                           userSelect: 'none',
-                          cursor: 'pointer'
+                          cursor: 'pointer',
+                          minWidth: colMinWidths[colKey] || 100
                         }}
                         onClick={(e) => {
                           if (activeFilterCol === colKey && Boolean(colFilterAnchorEl)) {
@@ -1515,7 +1599,22 @@ export default function SerialNumberSuite({ user, token }) {
                     renderColHeader('status', 'Current Status'),
                     renderColHeader('warranty_start', 'Warranty Start'),
                     renderColHeader('warranty_end', 'Warranty End'),
-                    <TableCell key="actions" align="right">Actions</TableCell>
+                    <TableCell
+                      key="actions"
+                      align="right"
+                      sx={{
+                        position: 'sticky',
+                        right: 0,
+                        bgcolor: (theme) => theme.palette.mode === 'dark' ? '#1e293b' : '#f8fafc',
+                        zIndex: 4,
+                        boxShadow: '-3px 0 6px rgba(0,0,0,0.06)',
+                        whiteSpace: 'nowrap',
+                        minWidth: 95,
+                        pr: 2
+                      }}
+                    >
+                      Actions
+                    </TableCell>
                   ];
                 })()}
               </TableRow>
@@ -1555,7 +1654,12 @@ export default function SerialNumberSuite({ user, token }) {
                         '&:hover': {
                           bgcolor: isWarrantyExpired
                             ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.20)' : 'rgba(254, 226, 226, 0.70)'
-                            : undefined
+                            : (theme) => theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : '#f8fafc',
+                          '& .sticky-action-cell': {
+                            bgcolor: isWarrantyExpired
+                              ? (theme) => theme.palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.20)' : '#fee2e2'
+                              : (theme) => theme.palette.mode === 'dark' ? '#1e293b' : '#f8fafc'
+                          }
                         }
                       }}
                     >
@@ -1632,7 +1736,21 @@ export default function SerialNumberSuite({ user, token }) {
                           </Box>
                         )}
                       </TableCell>
-                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                      <TableCell
+                        align="right"
+                        className="sticky-action-cell"
+                        sx={{
+                          position: 'sticky',
+                          right: 0,
+                          bgcolor: isWarrantyExpired
+                            ? (theme) => theme.palette.mode === 'dark' ? '#2d1818' : '#fef2f2'
+                            : (theme) => theme.palette.mode === 'dark' ? '#0f172a' : '#ffffff',
+                          zIndex: 2,
+                          boxShadow: '-3px 0 6px rgba(0,0,0,0.06)',
+                          whiteSpace: 'nowrap',
+                          pr: 2
+                        }}
+                      >
                         <Tooltip title="View Complete Traceability">
                           <IconButton
                             size="small"

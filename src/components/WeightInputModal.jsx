@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Scale, ShoppingCart, X, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Scale, ShoppingCart, X, AlertTriangle, RotateCcw, Lock } from 'lucide-react';
 import { useNotify } from '../context/NotificationContext';
 import {
   sanitizePositiveNumberString,
@@ -10,47 +10,29 @@ import {
   handleSelectAllOnMouseUp
 } from '../utils/numberInputUtils';
 
-export default function WeightInputModal({ isOpen, product, initialWeightInKg = 0, pricingMode: propPricingMode, onConfirm, onClose }) {
+export default function WeightInputModal({
+  isOpen,
+  product,
+  initialWeightInKg = 0,
+  initialRate = null,
+  pricingMode: propPricingMode,
+  user = null,
+  receiptSettings = null,
+  onConfirm,
+  onClose
+}) {
   const notify = useNotify();
+  const weightInputRef = useRef(null);
+  const rateInputRef = useRef(null);
+  const amountInputRef = useRef(null);
+
   const [weightValue, setWeightValue] = useState('1.000');
-  const inputRef = useRef(null);
+  const [rateValue, setRateValue] = useState('');
+  const [amountValue, setAmountValue] = useState('');
+  const [lastEditedField, setLastEditedField] = useState('weight'); // 'weight' | 'rate' | 'amount'
+  const [rateError, setRateError] = useState('');
 
-  useEffect(() => {
-    if (isOpen && product) {
-      if (initialWeightInKg > 0) {
-        setWeightValue(initialWeightInKg.toFixed(3));
-      } else {
-        setWeightValue('1.000');
-      }
-      const timer = setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, product, initialWeightInKg]);
-
-  // Handle global F5 shortcut while modal is open to refocus & select input
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleF5 = (e) => {
-      if (e.key === 'F5') {
-        e.preventDefault();
-        e.stopPropagation();
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleF5, true);
-    return () => window.removeEventListener('keydown', handleF5, true);
-  }, [isOpen]);
-
-  if (!isOpen || !product) return null;
-
+  // 1. Resolve Master / Catalog Menu Rate (never modified in DB)
   const currentPricingMode = propPricingMode || (() => {
     try {
       return localStorage.getItem('ariso_pricing_mode') || 'retail';
@@ -58,14 +40,116 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
       return 'retail';
     }
   })();
-  const pricePerBaseUnit = (currentPricingMode === 'wholesale' && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
-    ? parseFloat(product.wholesale_price)
-    : parseFloat(product.price || product.selling_price || 0);
 
+  const menuRate = useMemo(() => {
+    if (!product) return 0;
+    if (product.original_rate !== undefined && product.original_rate !== null && !isNaN(parseFloat(product.original_rate))) {
+      return parseFloat(product.original_rate);
+    }
+    if (currentPricingMode === 'wholesale' && product.wholesale_price && parseFloat(product.wholesale_price) > 0) {
+      return parseFloat(product.wholesale_price);
+    }
+    return parseFloat(product.price || product.selling_price || 0);
+  }, [product, currentPricingMode]);
+
+  // 2. Permission check: Can current cashier/user edit rate at billing?
+  const canEditRate = useMemo(() => {
+    const userRole = user?.role || 'cashier';
+    if (userRole === 'super_admin' || userRole === 'admin' || userRole === 'manager') return true;
+
+    // User-specific permissions array override
+    if (Array.isArray(user?.permissions)) {
+      if (user.permissions.includes('edit_rate_at_billing') || user.permissions.includes('all')) return true;
+      if (user.permissions.includes('no_edit_rate')) return false;
+    }
+
+    // Store-level receipt_settings configuration
+    if (receiptSettings?.allow_edit_rate_at_billing === 0 || receiptSettings?.allow_edit_rate_at_billing === false || receiptSettings?.allow_edit_rate_at_billing === '0') {
+      return false;
+    }
+
+    const allowedRoles = (receiptSettings?.edit_rate_allowed_roles || 'admin,manager,cashier')
+      .split(',')
+      .map(r => r.trim());
+    return allowedRoles.includes(userRole);
+  }, [user, receiptSettings]);
+
+  // 3. Purchase cost / lower limit threshold check
+  const costPrice = useMemo(() => {
+    if (!product) return 0;
+    return parseFloat(product.cost_price || product.purchase_price || 0);
+  }, [product]);
+
+  // Reset state whenever modal opens or product changes
+  useEffect(() => {
+    if (isOpen && product) {
+      const initW = initialWeightInKg > 0 ? initialWeightInKg.toFixed(3) : '1.000';
+      setWeightValue(initW);
+
+      const effectiveRate = (initialRate !== null && initialRate !== undefined && !isNaN(parseFloat(initialRate)))
+        ? parseFloat(initialRate)
+        : menuRate;
+
+      const rateStr = effectiveRate.toFixed(2);
+      setRateValue(rateStr);
+
+      const numW = parseFloat(initW || '0');
+      const initTotal = (numW * effectiveRate).toFixed(2);
+      setAmountValue(initTotal);
+
+      setLastEditedField('weight');
+      setRateError('');
+
+      const timer = setTimeout(() => {
+        if (weightInputRef.current) {
+          weightInputRef.current.focus();
+          weightInputRef.current.select();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, product, initialWeightInKg, initialRate, menuRate]);
+
+  // Handle global F5 and F6 shortcuts inside modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyNav = (e) => {
+      if (e.key === 'F5') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (weightInputRef.current) {
+          weightInputRef.current.focus();
+          weightInputRef.current.select();
+        }
+      } else if (e.key === 'F6' && canEditRate) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (rateInputRef.current) {
+          rateInputRef.current.focus();
+          rateInputRef.current.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyNav, true);
+    return () => window.removeEventListener('keydown', handleKeyNav, true);
+  }, [isOpen, canEditRate]);
+
+  if (!isOpen || !product) return null;
+
+  // Numerical parsers
   const numericWeight = parseFloat(weightValue || '0');
   const isWeightEmptyOrZero = weightValue === '' || weightValue === '.' || isNaN(numericWeight) || numericWeight <= 0;
   const weightInKg = isWeightEmptyOrZero ? 0 : numericWeight;
-  const calculatedTotal = isWeightEmptyOrZero ? '0.00' : (weightInKg * pricePerBaseUnit).toFixed(2);
+
+  const numericRate = parseFloat(rateValue || '0');
+  const isRateEmptyOrZero = rateValue === '' || rateValue === '.' || isNaN(numericRate) || numericRate < 0;
+  const effectiveRate = isRateEmptyOrZero ? 0 : numericRate;
+
+  // Rate override flag
+  const isRateOverridden = Math.abs(effectiveRate - menuRate) > 0.005;
+
+  // Live amount calculation
+  const calculatedTotal = (weightInKg * effectiveRate).toFixed(2);
 
   // Stock inventory tracking checks
   const trackStock = product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined;
@@ -74,11 +158,36 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
   const availableStock = Math.max(0, physicalStock - reservedStock);
   const isOverStock = trackStock && !isWeightEmptyOrZero && (weightInKg > availableStock);
 
+  // Lower limit below-cost warning
+  const isBelowCost = costPrice > 0 && effectiveRate > 0 && effectiveRate < costPrice;
+  const rateLimitMode = receiptSettings?.rate_limit_mode || 'warning';
+
+  // Rate input validation helper
+  const validateRate = (valStr) => {
+    if (valStr === '' || valStr === '.') {
+      return 'Rate cannot be empty';
+    }
+    const n = parseFloat(valStr);
+    if (isNaN(n) || n < 0) {
+      return 'Rate must be a positive number (≥ 0)';
+    }
+    const decParts = valStr.split('.');
+    if (decParts.length > 1 && decParts[1].length > 2) {
+      return 'Rate can have a maximum of 2 decimal places';
+    }
+    return '';
+  };
+
+  // Preset weight selection
   const handlePresetSelect = (presetWeight) => {
     setWeightValue(presetWeight);
-    if (inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
+    setLastEditedField('weight');
+    const w = parseFloat(presetWeight);
+    const amt = (w * effectiveRate).toFixed(2);
+    setAmountValue(amt);
+    if (weightInputRef.current) {
+      weightInputRef.current.focus();
+      weightInputRef.current.select();
     }
   };
 
@@ -86,51 +195,114 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
     return parseFloat(weightValue) === parseFloat(val);
   };
 
+  // Weight input handler
   const handleWeightChange = (e) => {
     let raw = e.target.value;
-    if (raw.startsWith('-') || parseFloat(raw) < 0) {
-      raw = '0';
-    }
+    if (raw.startsWith('-') || parseFloat(raw) < 0) raw = '0';
     const clean = sanitizePositiveNumberString(raw, true);
     setWeightValue(clean);
+    setLastEditedField('weight');
+
+    const w = parseFloat(clean || '0');
+    if (!isNaN(w) && w > 0 && !isRateEmptyOrZero) {
+      setAmountValue((w * effectiveRate).toFixed(2));
+    } else {
+      setAmountValue('0.00');
+    }
   };
 
-  const handlePaste = (e) => {
-    handlePositiveNumberPaste(e, (cleaned) => {
-      setWeightValue(cleaned);
-    }, true);
+  // Rate input handler
+  const handleRateChange = (e) => {
+    let raw = e.target.value;
+    if (raw.startsWith('-')) raw = '0';
+    const clean = sanitizePositiveNumberString(raw, true);
+    setRateValue(clean);
+    setLastEditedField('rate');
+
+    const err = validateRate(clean);
+    setRateError(err);
+
+    if (!err && clean !== '') {
+      const r = parseFloat(clean);
+      setAmountValue((weightInKg * r).toFixed(2));
+    }
+  };
+
+  // Direct Amount / Calculated Total input handler (two-way live back-calculation)
+  const handleAmountChange = (e) => {
+    let raw = e.target.value;
+    if (raw.startsWith('-')) raw = '0';
+    const clean = sanitizePositiveNumberString(raw, true);
+    setAmountValue(clean);
+    setLastEditedField('amount');
+
+    const a = parseFloat(clean || '0');
+    if (!isNaN(a) && a >= 0 && weightInKg > 0) {
+      const backCalcRate = (a / weightInKg).toFixed(2);
+      setRateValue(backCalcRate);
+      setRateError(validateRate(backCalcRate));
+    }
+  };
+
+  // Reset to Menu Rate handler
+  const handleResetRate = () => {
+    const defaultStr = menuRate.toFixed(2);
+    setRateValue(defaultStr);
+    setRateError('');
+    setLastEditedField('rate');
+    setAmountValue((weightInKg * menuRate).toFixed(2));
+    if (rateInputRef.current) {
+      rateInputRef.current.focus();
+      rateInputRef.current.select();
+    }
   };
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      if (e.nativeEvent?.stopImmediatePropagation) {
-        e.nativeEvent.stopImmediatePropagation();
+      if (!isWeightEmptyOrZero && !isOverStock && !rateError && !isRateEmptyOrZero) {
+        handleConfirm();
       }
+      return;
     }
-    handlePositiveNumberKeyDown(e, {
-      allowDecimal: true,
-      onLeadingDot: () => setWeightValue('0.'),
-      onEnter: () => {
-        if (!isWeightEmptyOrZero && !isOverStock) {
-          handleConfirm();
-        }
-      },
-      onEscape: onClose,
-      onF5: () => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (e.key === 'F5') {
+      e.preventDefault();
+      if (weightInputRef.current) {
+        weightInputRef.current.focus();
+        weightInputRef.current.select();
       }
-    });
+      return;
+    }
+
+    if (e.key === 'F6' && canEditRate) {
+      e.preventDefault();
+      if (rateInputRef.current) {
+        rateInputRef.current.focus();
+        rateInputRef.current.select();
+      }
+      return;
+    }
   };
 
   const handleConfirm = () => {
     if (isWeightEmptyOrZero) {
       notify?.warning('Please enter a valid weight greater than 0 kg.', 'Invalid Weight');
+      return;
+    }
+
+    const err = validateRate(rateValue);
+    if (err) {
+      setRateError(err);
+      notify?.warning(err, 'Invalid Rate');
+      if (rateInputRef.current) rateInputRef.current.focus();
       return;
     }
 
@@ -140,36 +312,32 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
         'Stock Limit Exceeded',
         5000
       );
-      notify?.alert({
-        title: 'Insufficient Stock',
-        message: `Cannot add "${product.name}" to cart.`,
-        type: 'warning',
-        buttonText: 'Understood (Enter / Esc)',
-        details: {
-          requested: `${weightInKg.toFixed(3)} kg`,
-          available: `${availableStock.toFixed(3)} kg`,
-          physical: `${physicalStock.toFixed(3)} kg`,
-          reserved: `${reservedStock.toFixed(3)} kg`
-        },
-        subtitle: physicalStock <= 0
-          ? 'This item is currently completely out of stock in your warehouse.'
-          : 'Portions of this stock are reserved by other pending or held orders.'
-      });
       return;
     }
+
+    const finalRate = parseFloat(rateValue);
+    const finalAmount = parseFloat(calculatedTotal);
 
     onConfirm({
       product,
       weightInKg,
       displayWeight: weightInKg,
       unit: 'kg',
-      pricePerBaseUnit,
-      calculatedTotal: parseFloat(calculatedTotal)
+      pricePerBaseUnit: finalRate,
+      price: finalRate,
+      unit_price: finalRate,
+      original_rate: menuRate,
+      unit_rate: finalRate,
+      rate_overridden: isRateOverridden,
+      calculatedTotal: finalAmount
     });
+
     if (typeof onClose === 'function') {
       onClose();
     }
   };
+
+  const isFormValid = !isWeightEmptyOrZero && !isOverStock && !isRateEmptyOrZero && !rateError;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -179,7 +347,14 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
           <div>
             <h2 style={styles.productName}>{product.name}</h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
-              <p style={styles.priceSub}>₹{pricePerBaseUnit.toFixed(2)} per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</p>
+              <p style={styles.priceSub}>
+                Menu Rate: <strong>₹{menuRate.toFixed(2)}</strong> per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}
+                {currentPricingMode === 'wholesale' && (
+                  <span style={{ marginLeft: 6, fontSize: '10px', backgroundColor: '#38BDF8', color: '#0F172A', padding: '1px 5px', borderRadius: '4px', fontWeight: 800 }}>
+                    WHOLESALE
+                  </span>
+                )}
+              </p>
               {trackStock && (
                 <span
                   style={{
@@ -197,15 +372,18 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
               )}
             </div>
           </div>
-          <button style={styles.closeBtn} onClick={onClose}><X size={18} /></button>
+          <button style={styles.closeBtn} onClick={onClose} title="Close (Esc)"><X size={18} /></button>
         </div>
 
-        {/* Input Section */}
+        {/* Input Section 1: Weight Input (Kg) */}
         <div style={styles.inputSection}>
-          <label style={styles.label}>Enter Weight (Kg) (F5):</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <label style={styles.label}>Enter Weight (Kg) (F5):</label>
+            <span style={{ fontSize: '11px', color: '#94A3B8' }}>Scale unit: kg</span>
+          </div>
           <div style={styles.inputRow}>
             <input
-              ref={inputRef}
+              ref={weightInputRef}
               style={{
                 ...styles.input,
                 border: isOverStock
@@ -219,113 +397,193 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
               step="any"
               value={weightValue}
               onChange={handleWeightChange}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
               onFocus={handleSelectAllOnFocus}
               onClick={handleSelectAllOnClick}
               onMouseUp={handleSelectAllOnMouseUp}
               placeholder="0.000"
               autoFocus
             />
+            <div style={styles.unitBadge}>KG</div>
           </div>
+
           {isOverStock && (
-            <div
-              style={{
-                marginTop: '8px',
-                padding: '8px 12px',
-                borderRadius: '8px',
-                backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
-                color: '#fca5a5',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                fontSize: '12px',
-                fontWeight: '700'
-              }}
-            >
-              <AlertTriangle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
+            <div style={styles.stockWarningBox}>
+              <AlertTriangle size={15} color="#ef4444" style={{ flexShrink: 0 }} />
               <span>Requested {weightInKg.toFixed(3)} kg exceeds available stock of {availableStock.toFixed(3)} kg</span>
             </div>
           )}
           {isWeightEmptyOrZero && !isOverStock && (
-            <div
-              style={{
-                marginTop: '8px',
-                padding: '6px 12px',
-                borderRadius: '8px',
-                backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                border: '1px solid rgba(245, 158, 11, 0.4)',
-                color: '#fcd34d',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '12px',
-                fontWeight: '700'
-              }}
-            >
-              <AlertTriangle size={15} color="#F59E0B" style={{ flexShrink: 0 }} />
+            <div style={styles.validationWarningBox}>
+              <AlertTriangle size={14} color="#F59E0B" style={{ flexShrink: 0 }} />
               <span>Please enter a weight greater than 0 kg to add to cart</span>
             </div>
           )}
         </div>
 
-        {/* Preset Quick Buttons */}
-        <label style={styles.label}>QUICK WEIGHT PRESETS:</label>
-        <div style={styles.presetGrid}>
-          {[
-            { val: '0.250', label: '250 g' },
-            { val: '0.500', label: '500 g' },
-            { val: '0.750', label: '750 g' },
-            { val: '1.000', label: '1 kg' },
-            { val: '1.250', label: '1.25 kg' },
-            { val: '2.500', label: '2.5 kg' },
-            { val: '5.000', label: '5 kg' },
-          ].map((p) => {
-            const active = isPresetActive(p.val);
-            return (
-              <button
-                key={p.label}
-                type="button"
-                style={{
-                  ...styles.presetBtn,
-                  ...(active ? styles.presetActive : {})
-                }}
-                onClick={() => handlePresetSelect(p.val)}
-              >
-                {p.label}
-              </button>
-            );
-          })}
+        {/* Preset Quick Weight Buttons */}
+        <div style={{ marginBottom: '14px' }}>
+          <label style={styles.smallLabel}>QUICK WEIGHT PRESETS:</label>
+          <div style={styles.presetGrid}>
+            {[
+              { val: '0.250', label: '250 g' },
+              { val: '0.500', label: '500 g' },
+              { val: '0.750', label: '750 g' },
+              { val: '1.000', label: '1 kg' },
+              { val: '1.250', label: '1.25 kg' },
+              { val: '2.500', label: '2.5 kg' },
+              { val: '5.000', label: '5 kg' },
+            ].map((p) => {
+              const active = isPresetActive(p.val);
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  style={{
+                    ...styles.presetBtn,
+                    ...(active ? styles.presetActive : {})
+                  }}
+                  onClick={() => handlePresetSelect(p.val)}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Calculated Total Box */}
+        {/* Input Section 2: Rate (₹ / kg) (Current Bill Line Only) */}
+        <div style={styles.inputSection}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <label style={styles.label}>
+              Rate (₹ / kg) {canEditRate ? '(F6):' : '(Read-only):'}
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isRateOverridden && (
+                <span style={styles.rateEditedBadge}>
+                  Rate edited (Orig: ₹{menuRate.toFixed(2)})
+                </span>
+              )}
+              {canEditRate && isRateOverridden && (
+                <button
+                  type="button"
+                  style={styles.resetRateBtn}
+                  onClick={handleResetRate}
+                  title="Reset rate back to current menu rate"
+                >
+                  <RotateCcw size={12} /> Reset to menu rate
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div style={styles.inputRow}>
+            <input
+              ref={rateInputRef}
+              style={{
+                ...styles.input,
+                backgroundColor: canEditRate ? '#0F172A' : '#1E293B',
+                cursor: canEditRate ? 'text' : 'not-allowed',
+                border: rateError
+                  ? '2px solid #EF4444'
+                  : isRateOverridden
+                  ? '2px solid #F59E0B'
+                  : '2px solid #334155'
+              }}
+              type="number"
+              min="0"
+              step="0.01"
+              readOnly={!canEditRate}
+              value={rateValue}
+              onChange={handleRateChange}
+              onFocus={handleSelectAllOnFocus}
+              onClick={handleSelectAllOnClick}
+              onMouseUp={handleSelectAllOnMouseUp}
+              placeholder="0.00"
+            />
+            <div style={styles.unitBadge}>
+              {canEditRate ? '₹ / KG' : <Lock size={14} color="#94A3B8" />}
+            </div>
+          </div>
+
+          {rateError && (
+            <div style={styles.errorBox}>
+              <AlertTriangle size={14} color="#EF4444" style={{ flexShrink: 0 }} />
+              <span>{rateError}</span>
+            </div>
+          )}
+
+          {isBelowCost && !rateError && (
+            <div style={styles.belowCostWarningBox}>
+              <AlertTriangle size={14} color="#F59E0B" style={{ flexShrink: 0 }} />
+              <span>
+                Rate (₹{effectiveRate.toFixed(2)}) is below purchase cost (₹{costPrice.toFixed(2)}).
+                {rateLimitMode === 'warning' ? ' (Warning only)' : ''}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Calculated Amount Box with Two-Way Live Editing */}
         <div style={styles.summaryCard}>
           <div style={styles.summaryRow}>
             <span style={styles.summaryLabel}>Total Weight:</span>
-            <span style={styles.summaryVal}>{weightInKg.toFixed(3)} KG ({weightInKg.toFixed(3)} Kg)</span>
+            <span style={styles.summaryVal}>{weightInKg.toFixed(3)} KG</span>
           </div>
           <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>Rate:</span>
-            <span style={styles.summaryVal}>₹{pricePerBaseUnit.toFixed(2)} / {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}</span>
+            <span style={styles.summaryLabel}>Rate per Kg:</span>
+            <span style={styles.summaryVal}>
+              ₹{effectiveRate.toFixed(2)}
+              {isRateOverridden && (
+                <span style={{ fontSize: '11px', color: '#F59E0B', marginLeft: '6px' }}>
+                  (Orig: ₹{menuRate.toFixed(2)})
+                </span>
+              )}
+            </span>
           </div>
+
           <div style={styles.divider} />
-          <div style={styles.totalRow}>
-            <span style={styles.totalLabel}>CALCULATED AMOUNT:</span>
-            <span style={styles.totalVal}>₹{calculatedTotal}</span>
+
+          {/* Amount input row allows direct editing to back-calculate rate */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={styles.totalLabel}>CALCULATED AMOUNT (₹):</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹</span>
+              <input
+                ref={amountInputRef}
+                type="number"
+                min="0"
+                step="0.01"
+                disabled={!canEditRate || isWeightEmptyOrZero}
+                value={amountValue}
+                onChange={handleAmountChange}
+                onFocus={handleSelectAllOnFocus}
+                onClick={handleSelectAllOnClick}
+                onMouseUp={handleSelectAllOnMouseUp}
+                placeholder="0.00"
+                style={{
+                  ...styles.amountInput,
+                  cursor: canEditRate && !isWeightEmptyOrZero ? 'text' : 'default'
+                }}
+                title={canEditRate ? 'Edit amount directly to back-calculate rate' : 'Calculated amount'}
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '4px', textAlign: 'right' }}>
+            amount = weight × rate (rate back-calculates if amount is typed)
           </div>
         </div>
 
         {/* Action Buttons */}
         <div style={styles.actionRow}>
-          <button type="button" style={styles.cancelBtn} onClick={onClose}>Cancel (Esc)</button>
+          <button type="button" style={styles.cancelBtn} onClick={onClose}>
+            Cancel (Esc)
+          </button>
           <button
             type="button"
-            disabled={isWeightEmptyOrZero || isOverStock}
+            disabled={!isFormValid}
             style={{
               ...styles.confirmBtn,
-              ...(isOverStock ? { backgroundColor: '#dc2626' } : {}),
-              ...(isWeightEmptyOrZero ? { backgroundColor: '#475569', cursor: 'not-allowed', opacity: 0.6 } : {}),
+              ...(!isFormValid ? { backgroundColor: '#475569', cursor: 'not-allowed', opacity: 0.6 } : {}),
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -337,10 +595,12 @@ export default function WeightInputModal({ isOpen, product, initialWeightInKg = 
               <><AlertTriangle size={16} /> Exceeds Stock ({availableStock.toFixed(3)} kg max)</>
             ) : isWeightEmptyOrZero ? (
               <><ShoppingCart size={16} /> Enter Weight (Kg)</>
+            ) : rateError ? (
+              <><AlertTriangle size={16} /> Fix Invalid Rate</>
             ) : initialWeightInKg > 0 ? (
               <><Scale size={16} /> Update Weight (₹{calculatedTotal})</>
             ) : (
-              <><ShoppingCart size={16} /> Add to Cart (Enter)</>
+              <><ShoppingCart size={16} /> Add to Cart (Enter) • ₹{calculatedTotal}</>
             )}
           </button>
         </div>
@@ -362,167 +622,251 @@ const styles = {
     justifyContent: 'center',
     alignItems: 'center',
     padding: '16px',
-    boxSizing: 'border-box',
+    backdropFilter: 'blur(3px)'
   },
   modal: {
     backgroundColor: '#1E293B',
     borderRadius: '16px',
-    width: '100%',
-    maxWidth: '460px',
+    width: '460px',
+    maxWidth: '95vw',
+    maxHeight: '92vh',
+    overflowY: 'auto',
     padding: '20px',
+    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
     border: '1px solid #334155',
-    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
-    color: '#F8FAFC',
-    boxSizing: 'border-box',
+    color: '#F8FAFC'
   },
   header: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: '16px',
+    borderBottom: '1px solid #334155',
+    paddingBottom: '12px'
   },
   productName: {
-    fontSize: '20px',
-    fontWeight: '800',
     margin: 0,
+    fontSize: '17px',
+    fontWeight: '800',
     color: '#F8FAFC',
+    lineHeight: 1.3
   },
   priceSub: {
-    fontSize: '13px',
-    color: '#F97316',
-    fontWeight: '700',
-    margin: '4px 0 0 0',
+    margin: 0,
+    fontSize: '12px',
+    color: '#94A3B8'
   },
   closeBtn: {
-    background: '#334155',
+    background: 'none',
     border: 'none',
-    color: '#CBD5E1',
-    width: '32px',
-    height: '32px',
-    borderRadius: '50%',
+    color: '#94A3B8',
     cursor: 'pointer',
-    fontSize: '16px',
+    padding: '4px',
+    borderRadius: '6px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
   },
   inputSection: {
-    marginBottom: '16px',
+    marginBottom: '14px'
   },
   label: {
+    display: 'block',
     fontSize: '12px',
     fontWeight: '800',
-    color: '#94A3B8',
+    color: '#E2E8F0',
+    letterSpacing: '0.3px'
+  },
+  smallLabel: {
     display: 'block',
-    marginBottom: '6px',
-    letterSpacing: '0.5px',
+    fontSize: '11px',
+    fontWeight: '700',
+    color: '#94A3B8',
+    marginBottom: '6px'
   },
   inputRow: {
     display: 'flex',
-    flexWrap: 'wrap',
-    gap: '10px',
     alignItems: 'center',
+    gap: '6px'
   },
   input: {
-    flex: '1 1 140px',
-    minWidth: '140px',
+    flex: 1,
     backgroundColor: '#0F172A',
-    border: '2px solid #F97316',
-    borderRadius: '10px',
     color: '#F8FAFC',
-    fontSize: '24px',
+    fontSize: '18px',
     fontWeight: '800',
     padding: '10px 14px',
-    outline: 'none',
-    boxSizing: 'border-box',
-  },
-  unitToggle: {
-    display: 'flex',
-    flex: '0 0 auto',
-    backgroundColor: '#0F172A',
-    borderRadius: '10px',
-    padding: '4px',
-    border: '1px solid #334155',
-  },
-  unitBtn: {
-    padding: '10px 16px',
     borderRadius: '8px',
-    border: 'none',
-    backgroundColor: 'transparent',
-    color: '#94A3B8',
-    fontWeight: '700',
-    fontSize: '14px',
-    cursor: 'pointer',
+    border: '2px solid #334155',
+    outline: 'none',
+    width: '100%',
+    boxSizing: 'border-box'
   },
-  unitActive: {
-    backgroundColor: '#F97316',
-    color: '#FFFFFF',
+  amountInput: {
+    backgroundColor: '#0F172A',
+    color: '#10B981',
+    fontSize: '20px',
     fontWeight: '900',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    border: '1px solid #059669',
+    outline: 'none',
+    width: '130px',
+    textAlign: 'right'
+  },
+  unitBadge: {
+    padding: '10px 14px',
+    backgroundColor: '#334155',
+    borderRadius: '8px',
+    fontWeight: '800',
+    fontSize: '12px',
+    color: '#E2E8F0',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0
+  },
+  rateEditedBadge: {
+    fontSize: '10.5px',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    color: '#FCD34D',
+    border: '1px solid rgba(245, 158, 11, 0.4)',
+    fontWeight: '800'
+  },
+  resetRateBtn: {
+    background: 'none',
+    border: '1px solid #475569',
+    color: '#38BDF8',
+    borderRadius: '4px',
+    padding: '2px 6px',
+    fontSize: '10.5px',
+    fontWeight: '700',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '3px'
   },
   presetGrid: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '8px',
-    marginBottom: '18px',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, 1fr)',
+    gap: '6px'
   },
   presetBtn: {
-    backgroundColor: '#334155',
-    color: '#F8FAFC',
-    borderWidth: '1px',
-    borderStyle: 'solid',
-    borderColor: '#475569',
-    padding: '8px 14px',
-    borderRadius: '8px',
+    backgroundColor: '#0F172A',
+    color: '#CBD5E1',
+    border: '1px solid #334155',
+    borderRadius: '6px',
+    padding: '7px 4px',
+    fontSize: '11px',
     fontWeight: '700',
-    fontSize: '13px',
     cursor: 'pointer',
+    transition: 'all 0.15s ease'
   },
   presetActive: {
     backgroundColor: '#F97316',
     color: '#FFFFFF',
-    borderColor: '#F97316',
-    fontWeight: '900',
+    borderColor: '#F97316'
   },
   summaryCard: {
     backgroundColor: '#0F172A',
-    borderRadius: '12px',
-    padding: '14px',
+    borderRadius: '10px',
+    padding: '12px 14px',
     border: '1px solid #334155',
-    marginBottom: '20px',
+    marginBottom: '16px'
   },
   summaryRow: {
     display: 'flex',
     justifyContent: 'space-between',
-    marginBottom: '6px',
-    fontSize: '13px',
+    alignItems: 'center',
+    marginBottom: '4px'
   },
   summaryLabel: {
+    fontSize: '12px',
     color: '#94A3B8',
+    fontWeight: '600'
   },
   summaryVal: {
+    fontSize: '12px',
     color: '#F8FAFC',
-    fontWeight: '700',
+    fontWeight: '700'
   },
   divider: {
     height: '1px',
     backgroundColor: '#334155',
-    margin: '8px 0',
+    margin: '8px 0'
   },
   totalRow: {
     display: 'flex',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'center'
   },
   totalLabel: {
     color: '#38BDF8',
     fontWeight: '800',
-    fontSize: '13px',
+    fontSize: '12.5px'
   },
   totalVal: {
     color: '#10B981',
     fontWeight: '900',
-    fontSize: '22px',
+    fontSize: '20px'
+  },
+  stockWarningBox: {
+    marginTop: '6px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    border: '1px solid rgba(239, 68, 68, 0.4)',
+    color: '#fca5a5',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '11.5px',
+    fontWeight: '700'
+  },
+  validationWarningBox: {
+    marginTop: '6px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    border: '1px solid rgba(245, 158, 11, 0.4)',
+    color: '#fcd34d',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '11.5px',
+    fontWeight: '700'
+  },
+  errorBox: {
+    marginTop: '6px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    border: '1px solid rgba(239, 68, 68, 0.4)',
+    color: '#fca5a5',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '11.5px',
+    fontWeight: '700'
+  },
+  belowCostWarningBox: {
+    marginTop: '6px',
+    padding: '6px 10px',
+    borderRadius: '6px',
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    border: '1px solid rgba(245, 158, 11, 0.35)',
+    color: '#fcd34d',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '11.5px',
+    fontWeight: '700'
   },
   actionRow: {
     display: 'flex',
-    gap: '10px',
+    gap: '10px'
   },
   cancelBtn: {
     flex: 1,
@@ -533,6 +877,7 @@ const styles = {
     borderRadius: '10px',
     border: 'none',
     cursor: 'pointer',
+    fontSize: '13px'
   },
   confirmBtn: {
     flex: 2,
@@ -543,5 +888,6 @@ const styles = {
     borderRadius: '10px',
     border: 'none',
     cursor: 'pointer',
-  },
+    fontSize: '13px'
+  }
 };
