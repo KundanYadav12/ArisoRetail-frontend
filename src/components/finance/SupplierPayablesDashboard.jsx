@@ -282,7 +282,7 @@ export default function SupplierPayablesDashboard() {
                 Supplier Payables & Outstanding
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Petpooja-style vendor ledger, multi-bill payment allocation, overdue aging & advance management
+                Vendor ledger, multi-bill payment allocation, overdue aging & advance management
               </Typography>
             </Box>
           </Box>

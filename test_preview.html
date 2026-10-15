@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Label Fit Verification (203 DPI)</title>
+  <style>
+    body {
+      background: #1e293b;
+      font-family: Arial, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 24px;
+      color: #fff;
+    }
+    .test-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 30px;
+      margin-top: 20px;
+    }
+    .test-card-box {
+      background: #0f172a;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+    }
+    .test-card-title {
+      font-weight: bold;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #38bdf8;
+    }
+    .label-wrapper {
+      background: #fff;
+      display: inline-block;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+      border: 1px dashed #94a3b8;
+    }
+  </style>
+</head>
+<body>
+  <h1 style="font-size: 20px; margin: 0 0 8px 0;">Product Sticker Label Fit Verification (Production Layout)</h1>
+  <p style="color: #94a3b8; margin: 0 0 20px 0; font-size: 13px;">Testing 38x50 mm (2-Row), 50x25 mm, 38x38 mm with real barcode & typography, shorter bars, 0.5mm text gap, 1.2mm bottom edge margin</p>
+  <div class="test-grid" id="test-grid">Loading labels...</div>
+
+  <script type="module">
+    import { renderSingleStickerHtml, buildPortraitSheetPrintDocument } from '/src/utils/stickerGenerator.js';
+
+    const testItem1 = {
+      id: '101',
+      name: 'Basmati Rice (Premium) Test',
+      salePrice: 90.0,
+      price: 90.0,
+      mrp: 112.5,
+      barcode: 'BAR-101-B',
+      sku: 'BAR-101-B',
+      weight: '1 kg',
+      size: 'L',
+      color: 'Standard'
+    };
+
+    const testItem2 = {
+      id: '102',
+      name: 'Organic Whole Wheat Flour (Chakki Fresh)',
+      salePrice: 245.0,
+      price: 245.0,
+      mrp: 299.0,
+      barcode: 'SKU-LONGER-SKU-987654',
+      sku: 'SKU-LONGER-SKU-987654',
+      weight: '5 kg',
+      size: 'XL',
+      color: 'Natural'
+    };
+
+    const shopData = {
+      name: 'ARISO RETAIL FLAGSHIP',
+      restaurant_name: 'ARISO RETAIL FLAGSHIP',
+      address: 'Lokhandwala, Kandivali (East)'
+    };
+
+    const configs = [
+      {
+        title: '38×50 mm: Default SKU (BAR-101-B)',
+        item: testItem1,
+        config: {
+          size: '38x50',
+          rows: 2,
+          dpi: 203,
+          showShopName: true,
+          showAddress: true,
+          showProductName: true,
+          showMrp: true,
+          showSellingPrice: true,
+          showMfgDate: true,
+          showExpDate: false,
+          showBarcode: true,
+          defaultMfgDate: '2026-10-13',
+          fontFamily: 'default'
+        }
+      },
+      {
+        title: '38×50 mm: Longer SKU (SKU-LONGER-SKU-987654)',
+        item: testItem2,
+        config: {
+          size: '38x50',
+          rows: 2,
+          dpi: 203,
+          showShopName: true,
+          showAddress: true,
+          showProductName: true,
+          showMrp: true,
+          showSellingPrice: true,
+          showMfgDate: true,
+          showExpDate: false,
+          showBarcode: true,
+          defaultMfgDate: '2026-10-13',
+          fontFamily: 'default'
+        }
+      },
+      {
+        title: '38×50 mm: With Optional Fields (Weight, Size, Color, Exp Date)',
+        item: testItem1,
+        config: {
+          size: '38x50',
+          rows: 2,
+          dpi: 203,
+          showShopName: true,
+          showAddress: true,
+          showProductName: true,
+          showMrp: true,
+          showSellingPrice: true,
+          showMfgDate: true,
+          showExpDate: true,
+          showBarcode: true,
+          printWeight: true,
+          weightValue: '1',
+          weightUnit: 'kg',
+          showSize: true,
+          showColor: true,
+          defaultMfgDate: '2026-10-13',
+          defaultExpDate: '2027-10-13',
+          fontFamily: 'default'
+        }
+      },
+      {
+        title: '50×25 mm: Compact 1-Row / 2-Row Label',
+        item: testItem1,
+        config: {
+          size: '50x25',
+          rows: 1,
+          dpi: 203,
+          showShopName: true,
+          showAddress: true,
+          showProductName: true,
+          showMrp: true,
+          showSellingPrice: true,
+          showMfgDate: true,
+          showExpDate: false,
+          showBarcode: true,
+          defaultMfgDate: '2026-10-13',
+          fontFamily: 'default'
+        }
+      },
+      {
+        title: '38×38 mm: Square Label',
+        item: testItem1,
+        config: {
+          size: '38x38',
+          rows: 1,
+          dpi: 203,
+          showShopName: true,
+          showAddress: true,
+          showProductName: true,
+          showMrp: true,
+          showSellingPrice: true,
+          showMfgDate: true,
+          showExpDate: false,
+          showBarcode: true,
+          defaultMfgDate: '2026-10-13',
+          fontFamily: 'default'
+        }
+      }
+    ];
+
+    const container = document.getElementById('test-grid');
+    container.innerHTML = '';
+
+    configs.forEach(c => {
+      const box = document.createElement('div');
+      box.className = 'test-card-box';
+      const title = document.createElement('div');
+      title.className = 'test-card-title';
+      title.textContent = c.title;
+      box.appendChild(title);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'label-wrapper';
+      wrapper.innerHTML = renderSingleStickerHtml(c.item, c.config, shopData);
+      box.appendChild(wrapper);
+
+      container.appendChild(box);
+    });
+
+    // Expose print doc generator for automated PDF test
+    window.__buildPortraitSheet = () => {
+      return buildPortraitSheetPrintDocument([testItem1, testItem2], {
+        size: '38x50',
+        rows: 2,
+        sheetColumns: 2,
+        dpi: 203,
+        printMode: 'portrait_sheet',
+        paperSizeName: 'USER',
+        paperWidthMm: 104,
+        paperHeightMm: 106,
+        showShopName: true,
+        showAddress: true,
+        showProductName: true,
+        showMrp: true,
+        showSellingPrice: true,
+        showMfgDate: true,
+        showExpDate: false,
+        showBarcode: true,
+        defaultMfgDate: '2026-10-13',
+        fontFamily: 'default'
+      }, shopData);
+    };
+  </script>
+</body>
+</html>

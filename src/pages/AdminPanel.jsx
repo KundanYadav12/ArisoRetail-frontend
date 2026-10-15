@@ -25,6 +25,7 @@ import { openWhatsAppShare } from '../utils/whatsappHelper';
 import { generateLocalHtmlReceipt, generateLocalHtmlKot, generateLocalEscPosReceipt, generateLocalEscPosKot, safeUtf8ToBase64, is2InchPaper, formatReceiptDateTime, printHtmlSilentlyViaIframe } from '../utils/localReceiptGenerator';
 import { db } from '../utils/offlineDb';
 import { getISTDateString } from '../utils/dateUtils';
+import { checkAgentHealth, testAgentPrint, getAgentPrinters } from '../utils/printAgentService';
 
 const getLocalDateString = (date) => {
   return getISTDateString(date);
@@ -603,7 +604,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [menuUnit, setMenuUnit] = useState('pcs');
   const [menuBarcodeImageUrl, setMenuBarcodeImageUrl] = useState('');
 
-  // --- Petpooja Inventory & Accounting States ---
+  // --- Inventory & Accounting States ---
   const [menuGoodsOrService, setMenuGoodsOrService] = useState('Goods'); // 'Goods' | 'Service'
   const [menuItemCode, setMenuItemCode] = useState('');
   const [menuHsnCode, setMenuHsnCode] = useState('');
@@ -658,25 +659,81 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
   const [systemPrinters, setSystemPrinters] = useState([]);
   const [loadingSystemPrinters, setLoadingSystemPrinters] = useState(false);
 
+  const [localAgentStatus, setLocalAgentStatus] = useState({ checked: false, connected: false, defaultPrinter: '', version: '' });
+  const [testingAgent, setTestingAgent] = useState(false);
+
+  const handleCheckLocalAgent = async (showNotification = false) => {
+    setTestingAgent(true);
+    try {
+      const res = await checkAgentHealth(1500);
+      setLocalAgentStatus({ checked: true, connected: res.connected, defaultPrinter: res.defaultPrinter || 'TSC TE244', version: res.version || '1.0.0' });
+      if (showNotification) {
+        if (res.connected) {
+          notify?.success(`Local Print Agent is active (v${res.version || '1.0.0'}). Direct TSPL printing ready on port 9101.`, 'Agent Online');
+        } else {
+          notify?.warning('Local Print Agent is not running on 127.0.0.1:9101. Run "start-agent.bat" or "install-service.bat" in the print-agent folder.', 'Agent Offline');
+        }
+      }
+      return res;
+    } catch (_) {
+      setLocalAgentStatus({ checked: true, connected: false, defaultPrinter: '', version: '' });
+      if (showNotification) {
+        notify?.warning('Local Print Agent is not reachable on 127.0.0.1:9101.', 'Agent Offline');
+      }
+      return { connected: false };
+    } finally {
+      setTestingAgent(false);
+    }
+  };
+
+  const handleTestAgentPrint = async () => {
+    setTestingAgent(true);
+    try {
+      const target = localAgentStatus.defaultPrinter || 'TSC TE244';
+      const res = await testAgentPrint(target);
+      if (res.ok) {
+        notify?.success(`Self-test label sent directly to "${target}".`, 'Test Print Success');
+      } else {
+        notify?.error(`Failed to print test label: ${res.error || res.message || 'Unknown error'}`, 'Test Print Failed');
+      }
+    } catch (e) {
+      notify?.error('Print test failed: ' + e.message, 'Test Print Failed');
+    } finally {
+      setTestingAgent(false);
+    }
+  };
+
   const handleRefreshSystemPrinters = async (showToast = false) => {
+    setLoadingSystemPrinters(true);
     if (window.electron && window.electron.getPrinters) {
-      setLoadingSystemPrinters(true);
       try {
         const liveList = await window.electron.getPrinters();
         if (Array.isArray(liveList)) {
           setSystemPrinters(liveList);
-          if (showToast) {
-            notify.success(`Found ${liveList.length} Windows printer(s).`, 'Printers Refreshed');
-          }
+          if (showToast) notify?.success(`Found ${liveList.length} Windows printer(s).`, 'Printers Refreshed');
         }
       } catch (err) {
         console.warn('[AdminPanel] Failed to fetch system printers:', err);
-        if (showToast) {
-          notify.error('Could not query Windows printer list.', 'Printer Scan Error');
-        }
+        if (showToast) notify?.error('Could not query Windows printer list.', 'Printer Scan Error');
       } finally {
         setLoadingSystemPrinters(false);
       }
+      return;
+    }
+
+    // In Web Browser: query Local Print Agent
+    try {
+      const agentRes = await getAgentPrinters(3000);
+      if (agentRes.ok && Array.isArray(agentRes.printers)) {
+        setSystemPrinters(agentRes.printers);
+        if (showToast) notify?.success(`Discovered ${agentRes.printers.length} printer(s) via Local Print Agent.`, 'Printers Refreshed');
+      } else if (showToast) {
+        notify?.warning('Local Print Agent not reachable on 127.0.0.1:9101.', 'Agent Offline');
+      }
+    } catch (e) {
+      console.warn('Failed to refresh printers via agent:', e);
+    } finally {
+      setLoadingSystemPrinters(false);
     }
   };
   
@@ -1494,6 +1551,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
           setGatewayDevices([]);
         }
 
+        handleCheckLocalAgent(false);
         handleRefreshSystemPrinters(false);
       } else if (activeTab === 3) {
         let url = '/api/reports/admin';
@@ -2112,7 +2170,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuBarcodeImageUrl('');
     setBarcodeDuplicate(null);
 
-    // Reset Petpooja additions
+    // Reset inventory additions
     setMenuGoodsOrService('Goods');
     setMenuItemCode('');
     setMenuHsnCode('');
@@ -2203,7 +2261,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuBarcodeImageUrl(item.barcode_image_url || '');
     setBarcodeDuplicate(null);
 
-    // Populate Petpooja additions
+    // Populate inventory additions
     setMenuGoodsOrService(item.goods_or_service || 'Goods');
     setMenuItemCode(item.item_code || '');
     setMenuHsnCode(item.hsn_code || '');
@@ -2249,9 +2307,13 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     setMenuMinStock(item.min_stock !== undefined && item.min_stock !== null ? item.min_stock.toString() : (item.low_stock_threshold ? item.low_stock_threshold.toString() : ''));
     setMenuLinkedSalesAccount(item.linked_sales_account || 'Sales');
     setMenuLinkedPurchaseAccount(item.linked_purchase_account || 'Purchase');
-    setMenuOpenQtyPopup(Boolean(Number(item.open_qty_popup)));
-    setMenuOpenPricePopup(Boolean(Number(item.open_price_popup)));
-    setMenuNotForSale(Boolean(Number(item.not_for_sale)));
+    const parseFlag = (v1, v2, v3) => {
+      const v = v1 !== undefined ? v1 : (v2 !== undefined ? v2 : v3);
+      return v === true || v === 1 || v === '1' || v === 'true';
+    };
+    setMenuOpenQtyPopup(parseFlag(item.open_qty_popup, item.openQuantityPopup, item.open_quantity_popup));
+    setMenuOpenPricePopup(parseFlag(item.open_price_popup, item.openPricePopup, item.open_price_popup));
+    setMenuNotForSale(parseFlag(item.not_for_sale, item.notForSale));
 
     setDialogOpen(true);
   };
@@ -2292,7 +2354,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     if (menuPrinterId) formData.append('printer_id', menuPrinterId);
     if (menuBarcodeImageUrl) formData.append('barcode_image_url', menuBarcodeImageUrl);
 
-    // Petpooja additions
+    // Inventory additions
     formData.append('goods_or_service', menuGoodsOrService);
     formData.append('item_code', menuItemCode);
     formData.append('hsn_code', menuHsnCode);
@@ -3464,27 +3526,26 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexShrink: 0 }}>
-                {window.electron && (
-                  <Button
-                    variant="outlined"
-                    color="primary"
-                    startIcon={loadingSystemPrinters ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={14} />}
-                    onClick={() => {
-                      handleRefreshSystemPrinters(true);
-                      fetchData();
-                    }}
-                    disabled={loadingSystemPrinters}
-                    sx={{
-                      fontWeight: 800,
-                      px: { xs: 1.25, sm: 2 },
-                      py: { xs: 0.5, sm: 1 },
-                      fontSize: { xs: '0.75rem', sm: '0.875rem' },
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    Refresh Printers
-                  </Button>
-                )}
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  startIcon={loadingSystemPrinters ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={14} />}
+                  onClick={() => {
+                    handleRefreshSystemPrinters(true);
+                    handleCheckLocalAgent(true);
+                    fetchData();
+                  }}
+                  disabled={loadingSystemPrinters || testingAgent}
+                  sx={{
+                    fontWeight: 800,
+                    px: { xs: 1.25, sm: 2 },
+                    py: { xs: 0.5, sm: 1 },
+                    fontSize: { xs: '0.75rem', sm: '0.875rem' },
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  Refresh Printers
+                </Button>
                 <Button
                   variant="outlined"
                   color="success"
@@ -3519,6 +3580,96 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                 </Button>
               </Box>
             </Box>
+
+            {/* --- LOCAL PRINT AGENT & DIRECT TSPL WINDOWS SPOOLER CARD --- */}
+            <Card
+              variant="outlined"
+              sx={{
+                borderRadius: 2.5,
+                background: 'linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 100%)',
+                border: localAgentStatus.connected ? '1.5px solid #10B981' : '1.5px solid #CBD5E1',
+                boxShadow: localAgentStatus.connected ? '0 4px 12px rgba(16, 185, 129, 0.08)' : '0 2px 6px rgba(0,0,0,0.04)',
+                p: { xs: 2, sm: 2.5 }
+              }}
+            >
+              <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', md: 'center' }, gap: 2 }}>
+                <Box sx={{ minWidth: 0, flex: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Printer size={20} color={localAgentStatus.connected ? '#059669' : '#475569'} />
+                      <Typography variant="h6" sx={{ fontWeight: 800, fontSize: { xs: '1rem', sm: '1.15rem' }, color: '#0F172A' }}>
+                        Local Print Agent (Direct TSPL Spooler)
+                      </Typography>
+                    </Box>
+                    <Chip
+                      label={localAgentStatus.connected ? '🟢 Agent Online (Port 9101 • No Dialog)' : '⚪ Agent Disconnected (127.0.0.1:9101)'}
+                      color={localAgentStatus.connected ? 'success' : 'default'}
+                      size="small"
+                      sx={{ fontWeight: 800, fontSize: '11px', height: 24 }}
+                    />
+                    {localAgentStatus.connected && (
+                      <Chip
+                        label={`Default: ${localAgentStatus.defaultPrinter || 'TSC TE244'}`}
+                        size="small"
+                        variant="outlined"
+                        sx={{ fontWeight: 700, fontSize: '11px', height: 24, borderColor: '#A7F3D0', color: '#065F46' }}
+                      />
+                    )}
+                  </Box>
+                  <Typography variant="body2" sx={{ color: '#475569', fontSize: { xs: '0.8rem', sm: '0.85rem' }, lineHeight: 1.45 }}>
+                    Eliminates the Chrome print preview dialog. Dispatches RAW TSPL directly to the Windows Spooler (<code>winspool.drv</code>) for TSC TE244 on USB. Works seamlessly in both local development and production HTTPS web deployments.
+                  </Typography>
+                </Box>
+
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => handleCheckLocalAgent(true)}
+                    disabled={testingAgent}
+                    startIcon={testingAgent ? <CircularProgress size={14} color="inherit" /> : <RefreshCw size={14} />}
+                    sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+                  >
+                    Test Connection
+                  </Button>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="small"
+                    onClick={handleTestAgentPrint}
+                    disabled={testingAgent || !localAgentStatus.connected}
+                    startIcon={<Printer size={14} />}
+                    sx={{ fontWeight: 800, textTransform: 'none', borderRadius: 2 }}
+                  >
+                    Print Self-Test Label
+                  </Button>
+                </Box>
+              </Box>
+
+              {/* Service & Kiosk Setup Information */}
+              <Box sx={{ mt: 2, pt: 1.5, borderTop: '1px dashed #E2E8F0', display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+                <Box sx={{ background: '#F1F5F9', p: 1.5, borderRadius: 2, fontSize: '12px' }}>
+                  <Typography variant="caption" sx={{ fontWeight: 800, color: '#1E293B', display: 'block', mb: 0.5 }}>
+                    🛠️ Solution 1: Auto-Starting Windows Print Agent (Recommended)
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#475569', display: 'block', lineHeight: 1.4 }}>
+                    1. On the store PC, open <code>print-agent</code> folder.<br />
+                    2. Run <strong>install-service.bat</strong> to configure auto-start with Windows startup.<br />
+                    3. To start immediately without restarting, run <strong>start-agent.bat</strong>.
+                  </Typography>
+                </Box>
+                <Box sx={{ background: '#F8FAFC', p: 1.5, borderRadius: 2, border: '1px solid #E2E8F0', fontSize: '12px' }}>
+                  <Typography variant="caption" sx={{ fontWeight: 800, color: '#1E293B', display: 'block', mb: 0.5 }}>
+                    🚀 Solution 2: Chrome Kiosk Printing Shortcut (Alternative Stopgap)
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#475569', display: 'block', lineHeight: 1.4 }}>
+                    Create a desktop Chrome shortcut with target:<br />
+                    <code>chrome.exe --kiosk-printing --user-data-dir="C:\ArisoChrome"</code><br />
+                    Bypasses the print dialog by silently dispatching to the default Windows printer.
+                  </Typography>
+                </Box>
+              </Box>
+            </Card>
 
             <Box
               sx={{

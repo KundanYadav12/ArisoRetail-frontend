@@ -4,6 +4,7 @@ import WeightInputModal from '../components/WeightInputModal';
 import SerialSelectionModal from '../components/SerialSelectionModal';
 import CartQtyEditModal from '../components/CartQtyEditModal';
 import CartPriceEditModal from '../components/CartPriceEditModal';
+import OpenItemModal from '../components/OpenItemModal';
 import KeyboardHelpModal from '../components/KeyboardHelpModal';
 import LanguageSelectorModal from '../components/LanguageSelectorModal';
 import WebBarcodeScannerModal from '../components/WebBarcodeScannerModal';
@@ -36,7 +37,9 @@ import {
   Edit3,
   ArrowRight,
   Tag,
-  PauseCircle
+  PauseCircle,
+  PackagePlus,
+  PlusCircle
 } from 'lucide-react';
 import ProductStickerModal from '../components/ProductStickerModal';
 import HeldReceiptsModal from '../components/HeldReceiptsModal';
@@ -296,7 +299,12 @@ export default function POS({
   const [cartQtyModalOpen, setCartQtyModalOpen] = useState(false);
   const [editingCartItem, setEditingCartItem] = useState(null);
   const [cartPriceModalOpen, setCartPriceModalOpen] = useState(false);
+  const [modalIsPcs, setModalIsPcs] = useState(false);
+  const [modalShowPrice, setModalShowPrice] = useState(false);
   const [editingPriceItem, setEditingPriceItem] = useState(null);
+  const [openItemModalOpen, setOpenItemModalOpen] = useState(false);
+  const [editingOpenItem, setEditingOpenItem] = useState(null);
+  const [editingOpenItemIndex, setEditingOpenItemIndex] = useState(null);
   const cartTableBodyRef = useRef(null);
 
   const [mobileCartSheetOpen, setMobileCartSheetOpen] = useState(false);
@@ -915,7 +923,7 @@ export default function POS({
 
   // Helper: Match cart item against product using ID, SKU, or Barcode
   const isCartItemMatchingProduct = useCallback((cartItem, product) => {
-    if (!cartItem || !product || cartItem.is_weight_based) return false;
+    if (!cartItem || !product || cartItem.is_weight_based || cartItem.is_open_item) return false;
     if (cartItem.serial_number || product.scanned_serial_number) return false;
     const prodId = product.id || product.menu_item_id || product.product_id;
     const prodSku = (product.sku || '').trim().toLowerCase();
@@ -1020,6 +1028,95 @@ export default function POS({
     });
   }, [setCart, cart, isCartItemMatchingProduct, pricingMode]);
 
+  // Adds a PCS line with an explicit quantity and unit price (this sale only; catalog price untouched)
+  const addPcsLine = useCallback((product, qty, unitPrice) => {
+    const isWholesale = pricingMode === 'wholesale';
+    const menuPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+      ? parseFloat(product.wholesale_price)
+      : parseFloat(product.price || product.selling_price || 0);
+    const price = parseFloat(unitPrice);
+    const prodId = product.id || product.menu_item_id || product.product_id;
+    const q = Math.max(1, parseInt(qty, 10) || 1);
+    const overridden = Math.abs(price - menuPrice) > 0.005;
+
+    setCart((prevCart) => {
+      const idx = prevCart.findIndex((item) => isCartItemMatchingProduct(item, product)
+        && !item.is_weight_based && !item.serial_number
+        && Math.abs(parseFloat(item.price !== undefined && item.price !== null ? item.price : item.unit_price) - price) < 0.005);
+      if (idx > -1) {
+        const updated = [...prevCart];
+        const item = updated[idx];
+        const newQty = (parseInt(item.quantity, 10) || 1) + q;
+        updated[idx] = { ...item, quantity: newQty, total_price: (newQty * price).toFixed(2) };
+        return updated;
+      }
+      return [...prevCart, {
+        product_id: prodId,
+        name: product.name,
+        sku: product.sku || '',
+        barcode: product.barcode || '',
+        price: price,
+        unit_price: price,
+        unit_rate: price,
+        original_rate: menuPrice,
+        rate_overridden: overridden,
+        quantity: q,
+        unit: product.base_unit || product.unit || 'pcs',
+        is_weight_based: false,
+        total_price: (q * price).toFixed(2),
+        gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
+        notes: '',
+        serial_number: null
+      }];
+    });
+    setSelectedCartIndex(cart.length);
+  }, [setCart, cart.length, isCartItemMatchingProduct, pricingMode]);
+
+  // Adds a weight line (default 1 kg) with given rate; returns false if blocked by stock
+  const addWeightLine = useCallback((product, weightKg, rate) => {
+    const isWholesale = pricingMode === 'wholesale';
+    const menuPrice = (isWholesale && product.wholesale_price && parseFloat(product.wholesale_price) > 0)
+      ? parseFloat(product.wholesale_price)
+      : parseFloat(product.price || product.selling_price || 0);
+    const price = rate !== undefined && rate !== null ? parseFloat(rate) : menuPrice;
+    if (product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined) {
+      const available = Math.max(0, parseFloat(product.current_stock || 0) - parseFloat(product.reserved_stock || 0));
+      if (weightKg > available) {
+        notify?.warning(
+          `Requested ${weightKg.toFixed(3)} kg exceeds available stock of ${available.toFixed(3)} kg.`,
+          'Stock Limit Exceeded',
+          5000
+        );
+        return false;
+      }
+    }
+    const unit = product.base_unit || product.unit || 'kg';
+    setCart((prevCart) => [...prevCart, {
+      product_id: product.id || product.menu_item_id,
+      name: product.name,
+      sku: product.sku || '',
+      barcode: product.barcode || '',
+      price: price,
+      unit_price: price,
+      base_unit_price: price,
+      original_rate: menuPrice,
+      unit_rate: price,
+      rate_overridden: Math.abs(price - menuPrice) > 0.005,
+      item_weight: weightKg,
+      displayWeight: weightKg,
+      weight_unit: unit,
+      unit: unit,
+      quantity: 1,
+      is_weight_based: true,
+      total_price: (weightKg * price).toFixed(2),
+      gst_rate: parseFloat(product.gst_rate !== undefined && product.gst_rate !== null ? product.gst_rate : 5),
+      notes: '',
+      serial_number: null
+    }]);
+    setSelectedCartIndex(cart.length);
+    return true;
+  }, [setCart, cart.length, pricingMode, notify]);
+
   // Product Selection & Cart Actions
   const handleSelectProduct = useCallback((product, fromEnterKey = false) => {
     if (!product) return;
@@ -1031,68 +1128,49 @@ export default function POS({
       return;
     }
 
-    // 2. Weight-based Items (Enter Weight opens immediately)
-    if (isProductWeightBased(product)) {
-      setSelectedWeightProduct(product);
-      setEditingCartIndex(null);
-      setWeightModalVisible(true);
-      return;
-    }
+    const isWeight = isProductWeightBased(product);
 
-    // 3. Serial Number Items (Serial Picker opens immediately)
-    if (isProductSerialTracked(product)) {
+    // 2. Serial Number Items (Serial Picker unchanged)
+    if (!isWeight && isProductSerialTracked(product)) {
       setSelectedSerialProduct(product);
       setSerialModalVisible(true);
       return;
     }
 
-    // 4. Open Price Popup (if enabled for this item)
-    const isOpenPrice = product.open_price_popup === 1 || product.open_price_popup === true || product.open_price_popup === '1';
-    if (isOpenPrice) {
+    const truthy = (v) => v === 1 || v === true || v === '1';
+    const isQ = truthy(product.open_qty_popup);
+    const isP = truthy(product.open_price_popup);
+
+    // Legacy global "Enter key opens qty popup" setting (only for new PCS lines, both toggles OFF)
+    const legacyEnterQty = !isQ && !isP && !isWeight && fromEnterKey && isEnterKeyQtyPopupEnabled
+      && !cart.some((item) => isCartItemMatchingProduct(item, product));
+
+    // Q ON (with or without P): quantity/weight popup, price field only when P is ON
+    if (isQ || legacyEnterQty) {
+      setSelectedWeightProduct(product);
+      setEditingCartIndex(null);
+      setModalIsPcs(!isWeight);
+      setModalShowPrice(isP);
+      setWeightModalVisible(true);
+      return;
+    }
+
+    // Q OFF, P ON: only the Enter Unit Price popup
+    if (isP) {
       setEditingPriceItem(product);
       setCartPriceModalOpen(true);
       return;
     }
 
-    // 5. Open Quantity Popup (if enabled for this PCS item, opens immediately on first tile click)
-    const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
-    if (isOpenQty) {
-      setSelectedCartIndex(cart.length);
-      setEditingCartIndex(null);
-      setEditingCartItem({
-        ...product,
-        product_id: product.id || product.menu_item_id,
-        quantity: 1
-      });
-      setCartQtyModalOpen(true);
-      return;
-    }
-
-    // 6. Default PCS behavior (add directly, or open qty on Enter key if enabled)
-    const existingIdx = cart.findIndex((item) => isCartItemMatchingProduct(item, product));
-    if (fromEnterKey && isEnterKeyQtyPopupEnabled) {
-      if (existingIdx > -1) {
-        // Item already in cart — directly increment quantity on scan
-        addPieceItemToCart(product);
-        setSearchQuery('');
-        autoFocusSearch();
-      } else {
-        // New item — open quantity popup
-        setSelectedCartIndex(cart.length);
-        setEditingCartIndex(null);
-        setEditingCartItem({
-          ...product,
-          product_id: product.id || product.menu_item_id,
-          quantity: 1
-        });
-        setCartQtyModalOpen(true);
-      }
+    // Q OFF, P OFF: straight into cart with defaults
+    if (isWeight) {
+      if (!addWeightLine(product, 1)) return;
     } else {
       addPieceItemToCart(product);
-      setSearchQuery('');
-      autoFocusSearch();
     }
-  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct, isProductWeightBased, isProductSerialTracked, addPieceItemToCart, notify, autoFocusSearch]);
+    setSearchQuery('');
+    autoFocusSearch();
+  }, [cart, isEnterKeyQtyPopupEnabled, isCartItemMatchingProduct, isProductWeightBased, isProductSerialTracked, addPieceItemToCart, addWeightLine, notify, autoFocusSearch]);
 
   const handleSerialConfirm = useCallback((selectedSerials, product) => {
     if (!product || !Array.isArray(selectedSerials) || selectedSerials.length === 0) return;
@@ -1123,6 +1201,33 @@ export default function POS({
       rate_overridden,
       calculatedTotal
     } = weightData;
+
+    // PCS quantity (Open Quantity Popup on a non-weight item)
+    if (weightData.isPcs && product) {
+      const qty = parseInt(weightData.quantity, 10) || 1;
+      const rate = parseFloat(weightData.pricePerBaseUnit);
+      if (product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined) {
+        const available = Math.max(0, parseFloat(product.current_stock || 0) - parseFloat(product.reserved_stock || 0));
+        const inCartQty = cart
+          .filter((item) => isCartItemMatchingProduct(item, product) && !item.is_weight_based)
+          .reduce((s, item) => s + (parseInt(item.quantity, 10) || 0), 0);
+        if (inCartQty + qty > available) {
+          notify?.warning(
+            `Requested qty exceeds available stock of ${available} ${product.unit || 'pcs'}.`,
+            'Stock Limit Reached',
+            5000
+          );
+          return;
+        }
+      }
+      addPcsLine(product, qty, rate);
+      setWeightModalVisible(false);
+      setSelectedWeightProduct(null);
+      setEditingCartIndex(null);
+      setSearchQuery('');
+      autoFocusSearch();
+      return;
+    }
 
     // Dynamic Available Stock Check for Weight items
     if (product && product.track_inventory !== 0 && product.current_stock !== null && product.current_stock !== undefined) {
@@ -1317,29 +1422,111 @@ export default function POS({
   // Handles saving custom price when open_price_popup is triggered
   const handleSaveCartPrice = (newPrice) => {
     if (!editingPriceItem) return;
-    const product = { ...editingPriceItem, price: newPrice, unit_price: newPrice };
-    const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
+    const product = editingPriceItem;
+    const price = parseFloat(newPrice);
+    if (isNaN(price) || price < 0) return;
 
-    if (isOpenQty) {
-      setSelectedCartIndex(cart.length);
-      setEditingCartIndex(null);
-      setEditingCartItem({
-        ...product,
-        product_id: product.id || product.menu_item_id,
-        quantity: 1
-      });
-      setCartPriceModalOpen(false);
-      setEditingPriceItem(null);
-      setCartQtyModalOpen(true);
-      return;
+    if (isProductWeightBased(product)) {
+      if (!addWeightLine(product, 1, price)) return;
+    } else {
+      addPcsLine(product, 1, price);
     }
-
-    addPieceItemToCart(product);
     setCartPriceModalOpen(false);
     setEditingPriceItem(null);
     setSearchQuery('');
     autoFocusSearch();
   };
+
+  const handleOpenAddOpenItem = useCallback(() => {
+    setEditingOpenItem(null);
+    setEditingOpenItemIndex(null);
+    setOpenItemModalOpen(true);
+  }, []);
+
+  const handleSaveOpenItem = useCallback((itemData) => {
+    const {
+      name,
+      price,
+      quantity,
+      unit,
+      gst_rate,
+      is_tax_exempt,
+      hsn_code,
+      discount_amount,
+      discount_type,
+      discount_value,
+      linked_product,
+      total_price
+    } = itemData;
+
+    const linkedProd = linked_product || null;
+    const prodId = linkedProd ? (linkedProd.id || linkedProd.menu_item_id) : null;
+    const numericQty = parseFloat(quantity) || 1;
+    const unitPrice = parseFloat(price);
+
+    // Stock check if linked to inventory-tracked product
+    if (linkedProd && linkedProd.track_inventory !== 0 && linkedProd.current_stock !== null && linkedProd.current_stock !== undefined) {
+      const available = Math.max(0, parseFloat(linkedProd.current_stock || 0) - parseFloat(linkedProd.reserved_stock || 0));
+      const inCartQty = cart
+        .filter((item, i) => i !== editingOpenItemIndex && isCartItemMatchingProduct(item, linkedProd))
+        .reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+      if (inCartQty + numericQty > available) {
+        notify?.warning(
+          `Requested qty (${numericQty}) exceeds available stock of ${available} ${linkedProd.unit || 'pcs'}.`,
+          'Stock Limit Reached',
+          5000
+        );
+        return;
+      }
+    }
+
+    const newItem = {
+      product_id: prodId,
+      menu_item_id: prodId,
+      name: name.trim(),
+      sku: linkedProd?.sku || 'CUSTOM',
+      barcode: linkedProd?.barcode || '',
+      price: unitPrice,
+      unit_price: unitPrice,
+      unit_rate: unitPrice,
+      original_rate: unitPrice,
+      rate_overridden: false,
+      quantity: numericQty,
+      unit: unit || linkedProd?.unit || 'pcs',
+      is_weight_based: Boolean(linkedProd?.is_weight_based),
+      is_open_item: true,
+      is_stock_linked: Boolean(linkedProd),
+      linked_product_name: linkedProd?.name || null,
+      hsn_code: hsn_code || null,
+      gst_rate: is_tax_exempt ? 0 : parseFloat(gst_rate || 0),
+      is_tax_exempt: Boolean(is_tax_exempt),
+      discount_amount: parseFloat(discount_amount || 0),
+      discount_type: discount_type || 'amount',
+      discount_value: parseFloat(discount_value || 0),
+      total_price: parseFloat(total_price).toFixed(2),
+      notes: linkedProd ? `Linked: ${linkedProd.name}` : 'Open Item'
+    };
+
+    if (editingOpenItemIndex !== null && editingOpenItemIndex >= 0 && editingOpenItemIndex < cart.length) {
+      setCart((prevCart) => {
+        const updated = [...prevCart];
+        updated[editingOpenItemIndex] = newItem;
+        return updated;
+      });
+      setSelectedCartIndex(editingOpenItemIndex);
+      notify?.success(`Updated "${newItem.name}" in cart.`, 'Item Updated');
+    } else {
+      setCart((prevCart) => [...prevCart, newItem]);
+      setSelectedCartIndex(cart.length);
+      notify?.success(`Added "${newItem.name}" to cart.`, 'Item Added');
+    }
+
+    setOpenItemModalOpen(false);
+    setEditingOpenItem(null);
+    setEditingOpenItemIndex(null);
+    setSearchQuery('');
+    autoFocusSearch();
+  }, [cart, editingOpenItemIndex, isCartItemMatchingProduct, notify, autoFocusSearch, setCart]);
 
   const openCartItemEdit = (index) => {
     const idx = index !== undefined && index !== null ? index : selectedCartIndex;
@@ -1347,7 +1534,11 @@ export default function POS({
     if (!item) return;
     setSelectedCartIndex(idx);
     setEditingCartIndex(idx);
-    if (item.is_weight_based) {
+    if (item.is_open_item) {
+      setEditingOpenItem(item);
+      setEditingOpenItemIndex(idx);
+      setOpenItemModalOpen(true);
+    } else if (item.is_weight_based) {
       const catalogItem = (menuItems || []).find(p => (p.id || p.menu_item_id) === (item.product_id || item.id));
       setSelectedWeightProduct({
         id: item.product_id,
@@ -1383,21 +1574,46 @@ export default function POS({
     const item = cart[index];
     if (!item || item.is_weight_based || item.serial_number) return;
 
-    const currentQty = parseInt(item.quantity, 10) || 1;
+    const currentQty = parseFloat(item.quantity) || 1;
     const newQty = currentQty + delta;
     if (newQty <= 0) {
       removeCartItem(index);
       return;
     }
 
+    // Stock check if linked to inventory-tracked product
+    if (item.is_stock_linked && item.product_id && delta > 0) {
+      const catalogItem = (menuItems || []).find(p => (p.id || p.menu_item_id) === item.product_id);
+      if (catalogItem && catalogItem.track_inventory !== 0 && catalogItem.current_stock !== null && catalogItem.current_stock !== undefined) {
+        const available = Math.max(0, parseFloat(catalogItem.current_stock || 0) - parseFloat(catalogItem.reserved_stock || 0));
+        const totalInCartExceptThis = cart
+          .filter((it, i) => i !== index && isCartItemMatchingProduct(it, catalogItem))
+          .reduce((sum, it) => sum + (parseFloat(it.quantity) || 0), 0);
+        if (totalInCartExceptThis + newQty > available) {
+          notify?.warning(
+            `Cannot increase quantity. Available stock for "${catalogItem.name}" is ${available} ${catalogItem.unit || 'pcs'}.`,
+            'Stock Limit Reached'
+          );
+          return;
+        }
+      }
+    }
+
     const unitPrice = parseFloat(item.price !== undefined && item.price !== null ? item.price : (item.unit_price || item.selling_price || 0));
+    let discountAmt = parseFloat(item.discount_amount || 0);
+    if (item.is_open_item && item.discount_type === 'percentage' && parseFloat(item.discount_value) > 0) {
+      discountAmt = ((newQty * unitPrice) * Math.min(100, parseFloat(item.discount_value))) / 100;
+    }
+    const lineTotal = Math.max(0, (newQty * unitPrice) - discountAmt);
+
     setCart((prevCart) => {
       if (!prevCart || index < 0 || index >= prevCart.length) return prevCart;
       const updated = [...prevCart];
       updated[index] = {
         ...updated[index],
         quantity: newQty,
-        total_price: (newQty * unitPrice).toFixed(2)
+        discount_amount: discountAmt,
+        total_price: lineTotal.toFixed(2)
       };
       return updated;
     });
@@ -1454,42 +1670,22 @@ export default function POS({
       return;
     }
 
-    if (isProductWeightBased(product)) {
-      setSelectedWeightProduct(product);
-      setEditingCartIndex(null);
-      setWeightModalVisible(true);
-      return;
-    } else if (isProductSerialTracked(product) && !product.scanned_serial_number) {
-      setSelectedSerialProduct(product);
-      setSerialModalVisible(true);
-      return;
-    } else {
-      const isOpenPrice = product.open_price_popup === 1 || product.open_price_popup === true || product.open_price_popup === '1';
-      if (isOpenPrice) {
-        setEditingPriceItem(product);
-        setCartPriceModalOpen(true);
-        return;
-      }
-
-      const isOpenQty = product.open_qty_popup === 1 || product.open_qty_popup === true || product.open_qty_popup === '1';
-      if (isOpenQty) {
-        setSelectedCartIndex(cart.length);
-        setEditingCartIndex(null);
-        setEditingCartItem({
-          ...product,
-          product_id: product.id || product.menu_item_id,
-          quantity: 1
-        });
-        setCartQtyModalOpen(true);
-        return;
-      }
-
+    // Scanned serial number: add that exact unit directly
+    if (product.scanned_serial_number && !isProductWeightBased(product)) {
       addPieceItemToCart(product);
+      setSearchQuery('');
+      autoFocusSearch();
+      playBarcodeSuccess();
+      return;
     }
-    setSearchQuery('');
-    autoFocusSearch();
-    playBarcodeSuccess();
-  }, [addPieceItemToCart, isProductWeightBased, isProductSerialTracked, autoFocusSearch, notify, cart.length]);
+
+    // Everything else follows the same Q/P toggle flow as a click
+    const truthy = (v) => v === 1 || v === true || v === '1';
+    const opensPopup = truthy(product.open_qty_popup) || truthy(product.open_price_popup)
+      || (!isProductWeightBased(product) && isProductSerialTracked(product));
+    handleSelectProduct(product, false);
+    if (!opensPopup) playBarcodeSuccess();
+  }, [handleSelectProduct, addPieceItemToCart, isProductWeightBased, isProductSerialTracked, autoFocusSearch, notify]);
 
   // Global USB Barcode Scanner Keyboard Emulation Interceptor
   useEffect(() => {
@@ -2480,6 +2676,7 @@ export default function POS({
 
   const isAnyModalOpen = cartQtyModalOpen ||
                          weightModalVisible ||
+                         openItemModalOpen ||
                          checkoutVisible ||
                          pendingOrdersModalOpen ||
                          keyboardHelpVisible ||
@@ -2490,6 +2687,24 @@ export default function POS({
 
   // Keyboard Shortcuts Registration
   useKeyboardShortcuts({
+    'F1': (e) => {
+      e?.preventDefault();
+      if (!isAnyModalOpen) {
+        handleOpenAddOpenItem();
+      }
+    },
+    'Ctrl+O': (e) => {
+      e?.preventDefault();
+      if (!isAnyModalOpen) {
+        handleOpenAddOpenItem();
+      }
+    },
+    'Alt+O': (e) => {
+      e?.preventDefault();
+      if (!isAnyModalOpen) {
+        handleOpenAddOpenItem();
+      }
+    },
     'F2': (e) => {
       e?.preventDefault();
       autoFocusSearch();
@@ -2523,6 +2738,8 @@ export default function POS({
       const selected = filteredProducts[selectedProductIndex];
       if (selected) {
         setSelectedWeightProduct(selected);
+        setModalIsPcs(false);
+        setModalShowPrice(true);
         setWeightModalVisible(true);
       }
     },
@@ -2930,6 +3147,29 @@ export default function POS({
               title="Open Barcode Sticker Designer & Printer"
             >
               <Tag size={14} /> Stickers
+            </button>
+
+            {/* Open / Custom Item Button (F1 / Ctrl+O) */}
+            <button
+              type="button"
+              id="pos-open-item-btn"
+              className="pos-control-pill"
+              style={{
+                ...styles.controlPill,
+                backgroundColor: isDark ? '#1E293B' : '#F1F5F9',
+                color: colors.accentOrange,
+                borderColor: colors.accentOrange,
+                fontWeight: '800',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: '0 1px 3px rgba(249, 115, 22, 0.2)'
+              }}
+              onClick={handleOpenAddOpenItem}
+              title="Add Custom / Open Item to Sale (F1 or Ctrl+O)"
+            >
+              <PackagePlus size={14} /> Open Item (F1)
             </button>
 
             {/* Pending Orders Button (Shows live count badge and opens Pending Orders Modal) */}
@@ -3564,7 +3804,30 @@ export default function POS({
                 {pricingMode === 'wholesale' ? 'Wholesale Rate' : 'Retail Rate'}
               </span>
             </div>
-            <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button
+                type="button"
+                id="pos-cart-open-item-btn"
+                onClick={handleOpenAddOpenItem}
+                style={{
+                  backgroundColor: isDark ? 'rgba(249, 115, 22, 0.15)' : '#FFEDD5',
+                  color: colors.accentOrange,
+                  border: `1px solid ${colors.accentOrange}`,
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+                title="Add Custom / Open Item (F1 / Ctrl+O)"
+              >
+                <PackagePlus size={12} /> Open Item (F1)
+              </button>
+              <button style={styles.clearCartBtn} onClick={handleClearCart}>{t('clearCart')} (Esc)</button>
+            </div>
           </div>
 
           {activeHoldId && (
@@ -3666,7 +3929,11 @@ export default function POS({
                             </div>
                           )}
                           <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                            {item.serial_number ? (
+                            {item.is_open_item ? (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#0ea5e9', fontWeight: 800 }}>
+                                <PackagePlus size={11} />OPEN ITEM
+                              </span>
+                            ) : item.serial_number ? (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#9333ea', fontWeight: 700 }}>
                                 <Tag size={10} />SERIAL
                               </span>
@@ -3676,6 +3943,16 @@ export default function POS({
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>
                             )}
                           </div>
+                          {parseFloat(item.discount_amount || 0) > 0 && (
+                            <div style={{ fontSize: '10px', color: '#F59E0B', fontWeight: '700', marginTop: '1px' }}>
+                              Disc: -₹{parseFloat(item.discount_amount).toFixed(2)}
+                            </div>
+                          )}
+                          {item.is_stock_linked && item.linked_product_name && (
+                            <div style={{ fontSize: '10px', color: '#38BDF8', fontWeight: '600', marginTop: '1px' }}>
+                              Stock: {item.linked_product_name}
+                            </div>
+                          )}
                         </td>
                         <td style={{ ...styles.td, color: colors.textPrimary }}>
                           {item.serial_number ? (
@@ -4004,7 +4281,11 @@ export default function POS({
                               </div>
                             )}
                             <div style={{ fontSize: '11px', color: colors.accentOrange }}>
-                              {item.serial_number ? (
+                              {item.is_open_item ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#0ea5e9', fontWeight: 800 }}>
+                                  <PackagePlus size={11} />OPEN ITEM
+                                </span>
+                              ) : item.serial_number ? (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#9333ea', fontWeight: 700 }}>
                                   <Tag size={10} />SERIAL
                                 </span>
@@ -4014,6 +4295,16 @@ export default function POS({
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Package size={10} />{t('pcsBadge')}</span>
                               )}
                             </div>
+                            {parseFloat(item.discount_amount || 0) > 0 && (
+                              <div style={{ fontSize: '10px', color: '#F59E0B', fontWeight: '700', marginTop: '1px' }}>
+                                Disc: -₹{parseFloat(item.discount_amount).toFixed(2)}
+                              </div>
+                            )}
+                            {item.is_stock_linked && item.linked_product_name && (
+                              <div style={{ fontSize: '10px', color: '#38BDF8', fontWeight: '600', marginTop: '1px' }}>
+                                Stock: {item.linked_product_name}
+                              </div>
+                            )}
                           </td>
                           <td style={{ ...styles.td, color: colors.textPrimary }}>
                             {item.serial_number ? (
@@ -4324,6 +4615,8 @@ export default function POS({
         initialRate={editingCartIndex !== null ? (cart[editingCartIndex]?.unit_rate ?? cart[editingCartIndex]?.price) : null}
         user={user}
         receiptSettings={receiptSettings}
+        isPcs={modalIsPcs && editingCartIndex === null}
+        showPrice={modalShowPrice || editingCartIndex !== null}
         onConfirm={handleWeightConfirm}
         onClose={() => {
           setWeightModalVisible(false);
@@ -4368,6 +4661,20 @@ export default function POS({
         onClose={() => {
           setCartPriceModalOpen(false);
           setEditingPriceItem(null);
+          autoFocusSearch();
+        }}
+      />
+
+      <OpenItemModal
+        isOpen={openItemModalOpen}
+        initialItem={editingOpenItem}
+        menuItems={menuItems}
+        receiptSettings={receiptSettings}
+        onConfirm={handleSaveOpenItem}
+        onClose={() => {
+          setOpenItemModalOpen(false);
+          setEditingOpenItem(null);
+          setEditingOpenItemIndex(null);
           autoFocusSearch();
         }}
       />

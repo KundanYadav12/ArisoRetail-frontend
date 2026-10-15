@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Verifying Portrait Sheet</title>
+</head>
+<body>
+  <div id="root">Generating sheet...</div>
+  <script type="module">
+    import { buildPortraitSheetPrintDocument } from '/src/utils/stickerGenerator.js';
+
+    const testItem1 = {
+      id: '101',
+      name: 'Basmati Rice (Premium) Test',
+      salePrice: 90.0,
+      price: 90.0,
+      mrp: 112.5,
+      barcode: 'BAR-101-B',
+      sku: 'BAR-101-B',
+      weight: '1 kg',
+      size: 'L',
+      color: 'Standard'
+    };
+
+    const testItem2 = {
+      id: '102',
+      name: 'Organic Whole Wheat Flour (Chakki Fresh)',
+      salePrice: 245.0,
+      price: 245.0,
+      mrp: 299.0,
+      barcode: 'SKU-9876543',
+      sku: 'SKU-9876543',
+      weight: '5 kg',
+      size: 'XL',
+      color: 'Natural'
+    };
+
+    const shopData = {
+      name: 'ARISO RETAIL FLAGSHIP',
+      restaurant_name: 'ARISO RETAIL FLAGSHIP',
+      address: 'Lokhandwala, Kandivali (East)'
+    };
+
+    const config = {
+      size: '38x50',
+      rows: 2,
+      sheetColumns: 2,
+      dpi: 203,
+      printMode: 'portrait_sheet',
+      paperSizeName: 'USER',
+      paperWidthMm: 104,
+      paperHeightMm: 106,
+      showShopName: true,
+      showAddress: true,
+      showProductName: true,
+      showMrp: true,
+      showSellingPrice: true,
+      showMfgDate: true,
+      showExpDate: false,
+      showBarcode: true,
+      defaultMfgDate: '2026-10-13',
+      fontFamily: 'default'
+    };
+
+    const fullHtml = buildPortraitSheetPrintDocument([testItem1, testItem2], config, shopData);
+    document.open();
+    document.write(fullHtml);
+    document.close();
+  </script>
+</body>
+</html>

@@ -308,7 +308,7 @@ export default function SalesOrderVoucherModal({
         </DialogTitle>
 
         <DialogContent sx={{ p: 3 }}>
-          {/* Petpooja-style Order Lifecycle Progression */}
+          {/* Order Lifecycle Progression */}
           <Paper variant="outlined" sx={{ p: 2, mb: 2.5, borderRadius: 2.5, bgcolor: '#f8fafc', border: '1px solid #e2e8f0' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="caption" sx={{ fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>

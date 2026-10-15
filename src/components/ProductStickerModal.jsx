@@ -24,7 +24,8 @@ import {
   Download,
   Type,
   Scale,
-  ScanLine
+  ScanLine,
+  Copy
 } from 'lucide-react';
 import {
   STICKER_SIZES,
@@ -39,6 +40,7 @@ import {
   fitTextToWidth,
   generateCode128Svg,
   validateBarcodeCode128,
+  renderSingleStickerHtml,
   printStickers,
   printCalibrationStickers,
   renderCalibrationStickerHtml,
@@ -56,305 +58,41 @@ import {
   parseDisplayToIsoDate,
   resolveItemSize,
   resolveItemColor,
-  resolveItemWeight
+  resolveItemWeight,
+  resolveSheetLayout,
+  renderOrientationTestStickerHtml,
+  renderFullWidthRulerSvg
 } from '../utils/stickerGenerator';
 import { apiFetch } from '../utils/api';
+import {
+  checkAgentHealth,
+  getAgentPrinters,
+  printViaAgent,
+  testAgentPrint,
+  DEFAULT_AGENT_URL
+} from '../utils/printAgentService';
 
 /**
  * Shared StickerCard component for pixel-perfect 1:1 Live Preview
  * Matches the exact HTML/CSS generated in print document
  */
 function StickerCard({ item, config, shopData = {} }) {
-  const sizeDef = STICKER_SIZES[config.size] || STICKER_SIZES['50x25'];
-  const fontFamilyCss = getFontFamilyCss(config.fontFamily);
-
-  const shopName = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
-  const rawAddress = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
-  const isCompact25 = sizeDef.height <= 25;
-  const addressLines = formatStickerAddress(rawAddress, isCompact25 ? 1 : 2);
-  const productName = resolveStickerProductName(item, config);
-
-  const prices = resolveStickerPrices(item, config);
-  const priceVal = prices.salePrice;
-  const mrpVal = prices.mrp;
-
-  const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const rawMfg = config.defaultMfgDate;
-  const mfgDate = rawMfg ? formatIsoToDisplayDate(rawMfg) : todayStr;
-  const expDate = config.defaultExpDate ? formatIsoToDisplayDate(config.defaultExpDate) : '';
-
-  const hasWeight = config.printWeight && config.weightValue;
-  const weightLine = hasWeight ? `Wt: ${config.weightValue} ${config.weightUnit || 'g'}` : '';
-
-  const safePadding = parseFloat(config?.safePaddingMm !== undefined ? config.safePaddingMm : 2.5) || 2.5;
-  const usableWidthMm = Math.max(16, sizeDef.width - (safePadding * 2));
-
-  const barcodeValue = (item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
-  const barcodeSvg = config.showBarcode ? generateCode128Svg(barcodeValue, {
-    widthMm: sizeDef.width,
-    usableWidthMm,
-    heightMm: sizeDef.barcodeHeightMm,
-    labelHeightMm: sizeDef.height,
-    dpi: config.dpi || 203,
-    safePaddingMm: safePadding,
-    displayValue: true
-  }) : '';
-
-  const itemSize = resolveItemSize(item, config);
-  const itemColor = resolveItemColor(item, config);
-  const itemWeight = resolveItemWeight(item, config);
-  const showSize = !!config.showSize && !!itemSize;
-  const showColor = !!config.showColor && !!itemColor;
-  const showWeight = !!config.showWeight && !!itemWeight && !hasWeight;
-  const displaySize = showSize ? (/^size:\s*/i.test(itemSize) ? itemSize : `Size: ${itemSize}`) : '';
-  const displayColor = showColor ? (/^color:\s*/i.test(itemColor) ? itemColor : `Color: ${itemColor}`) : '';
-  const displayWeight = showWeight ? (/^(wt|weight|qty|net\s*wt):\s*/i.test(itemWeight) ? itemWeight : `Net Wt: ${itemWeight}`) : '';
-
-  const variantParts = [];
-  if (showWeight) variantParts.push(displayWeight);
-  if (showSize) variantParts.push(displaySize);
-  if (showColor) variantParts.push(displayColor);
-  const variantStr = variantParts.join(' • ');
-
-  // Fit text with 0.25 pt step-down to usable width
-  const shopFit = (config.showShopName && shopName)
-    ? fitTextToWidth(shopName, isCompact25 ? 7.5 : 8.5, 5.5, usableWidthMm, true, fontFamilyCss, 1)
-    : null;
-
-  const fittedAddressLines = (config.showAddress && addressLines.length > 0)
-    ? addressLines.slice(0, isCompact25 ? 1 : 2).map(line => fitTextToWidth(line, isCompact25 ? 6.0 : 7.0, 5.0, usableWidthMm, false, fontFamilyCss, 1).lines[0] || line)
-    : [];
-
-  const prodFit = (config.showProductName && productName)
-    ? fitTextToWidth(productName, isCompact25 ? 7.5 : 8.5, 6.0, usableWidthMm, true, fontFamilyCss, isCompact25 ? 1 : 2)
-    : null;
-
-  const weightFit = hasWeight
-    ? fitTextToWidth(weightLine, 7.0, 5.5, usableWidthMm, true, fontFamilyCss, 1)
-    : null;
-
-  const variantFit = (!hasWeight && variantParts.length > 0)
-    ? fitTextToWidth(variantStr, 7.0, 5.5, usableWidthMm, false, fontFamilyCss, 1)
-    : null;
-
-  const dateParts = [];
-  if (config.showMfgDate && mfgDate) dateParts.push(`Mfg: ${mfgDate}`);
-  if (config.showExpDate && expDate) dateParts.push(`Exp: ${expDate}`);
-  const dateStr = dateParts.join('  ');
-  const dateFit = dateParts.length > 0
-    ? fitTextToWidth(dateStr, 6.5, 5.0, usableWidthMm, false, fontFamilyCss, 1)
-    : null;
+  const html = useMemo(() => {
+    return renderSingleStickerHtml(item, config, shopData);
+  }, [item, config, shopData]);
 
   return (
     <div
-      className={`sticker-card sticker-${config.size}`}
       style={{
-        width: `${sizeDef.width}mm`,
-        height: `${sizeDef.height}mm`,
-        maxWidth: `${sizeDef.width}mm`,
-        maxHeight: `${sizeDef.height}mm`,
-        backgroundColor: '#ffffff',
-        color: '#000000',
-        fontFamily: fontFamilyCss,
-        boxSizing: 'border-box',
+        width: '100%',
+        height: '100%',
         position: 'relative',
+        boxSizing: 'border-box',
         overflow: 'hidden',
-        flexShrink: 0
+        pointerEvents: 'none'
       }}
-    >
-      <div
-        className="sticker-inner"
-        style={{
-          width: '100%',
-          height: '100%',
-          padding: `${Math.min(safePadding, 1.8)}mm ${safePadding}mm`,
-          fontFamily: fontFamilyCss,
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'flex-start',
-          alignItems: 'center',
-          textAlign: 'center',
-          gap: '0.5mm',
-          boxSizing: 'border-box',
-          overflow: 'hidden'
-        }}
-      >
-        {shopFit && shopFit.lines.length > 0 && (
-          <div
-            className="field-shop"
-            style={{
-              fontWeight: 900,
-              textTransform: 'uppercase',
-              letterSpacing: '0.2px',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              width: '100%',
-              lineHeight: 1.1,
-              textAlign: 'center',
-              fontSize: `${shopFit.fontSizePt}pt`
-            }}
-          >
-            {shopFit.lines[0]}
-          </div>
-        )}
-
-        {fittedAddressLines.length > 0 && (
-          <div
-            className="field-address"
-            style={{
-              fontWeight: 500,
-              color: '#333333',
-              width: '100%',
-              lineHeight: 1.1,
-              textAlign: 'center',
-              overflow: 'hidden',
-              fontSize: isCompact25 ? '6pt' : '6.5pt'
-            }}
-          >
-            {fittedAddressLines.map((line, idx) => (
-              <div key={idx} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
-                {line}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {prodFit && prodFit.lines.length > 0 && (
-          <div
-            className="field-product"
-            style={{
-              fontWeight: 800,
-              width: '100%',
-              lineHeight: 1.15,
-              overflow: 'hidden',
-              textAlign: 'center',
-              fontSize: `${prodFit.fontSizePt}pt`
-            }}
-          >
-            {prodFit.lines.map((l, idx) => (
-              <div key={idx} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {l}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {weightFit && weightFit.lines.length > 0 && (
-          <div
-            className="field-weight-row"
-            style={{
-              fontWeight: 700,
-              width: '100%',
-              lineHeight: 1.1,
-              textAlign: 'center',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              fontSize: `${weightFit.fontSizePt}pt`
-            }}
-          >
-            {weightFit.lines[0]}
-          </div>
-        )}
-
-        {variantFit && variantFit.lines.length > 0 && (
-          <div
-            className="field-variant-row"
-            style={{
-              fontWeight: 600,
-              color: '#1e293b',
-              width: '100%',
-              lineHeight: 1.1,
-              textAlign: 'center',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              fontSize: `${variantFit.fontSizePt}pt`
-            }}
-          >
-            {variantFit.lines[0]}
-          </div>
-        )}
-
-        {(config.showMrp || config.showSellingPrice) && (priceVal > 0 || mrpVal > 0) && (
-          <div
-            className="field-price-row"
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              justifyContent: 'center',
-              alignItems: 'center',
-              columnGap: '1.5mm',
-              rowGap: '0.2mm',
-              width: '100%',
-              lineHeight: 1.15,
-              textAlign: 'center'
-            }}
-          >
-            {config.showMrp && config.showSellingPrice ? (
-              mrpVal > priceVal ? (
-                <>
-                  <span style={{ textDecoration: 'line-through', color: '#444444', fontWeight: 700, whiteSpace: 'nowrap', fontSize: isCompact25 ? '6.5pt' : '7pt' }}>
-                    MRP: ₹{mrpVal.toFixed(2)}
-                  </span>
-                  <span style={{ fontWeight: 900, color: '#000000', whiteSpace: 'nowrap', fontSize: isCompact25 ? '7.5pt' : '8pt' }}>
-                    Our Price: ₹{priceVal.toFixed(2)}
-                  </span>
-                </>
-              ) : (
-                <span style={{ fontWeight: 900, color: '#000000', whiteSpace: 'nowrap', fontSize: isCompact25 ? '7.5pt' : '8pt' }}>
-                  {(prices.hasValidMrp && !prices.hasValidSalePrice ? 'MRP: ' : 'Price: ')}₹{priceVal.toFixed(2)}
-                </span>
-              )
-            ) : config.showSellingPrice ? (
-              <span style={{ fontWeight: 900, color: '#000000', whiteSpace: 'nowrap', fontSize: isCompact25 ? '7.5pt' : '8pt' }}>
-                {(prices.hasValidMrp && !prices.hasValidSalePrice ? 'MRP: ' : 'Our Price: ')}₹{priceVal.toFixed(2)}
-              </span>
-            ) : (
-              <span style={{ fontWeight: 900, color: '#000000', whiteSpace: 'nowrap', fontSize: isCompact25 ? '7.5pt' : '8pt' }}>
-                MRP: ₹{mrpVal.toFixed(2)}
-              </span>
-            )}
-          </div>
-        )}
-
-        {dateFit && dateFit.lines.length > 0 && (
-          <div
-            className="field-date-row"
-            style={{
-              fontSize: `${dateFit.fontSizePt}pt`,
-              fontWeight: 600,
-              color: '#222222',
-              width: '100%',
-              lineHeight: 1.1,
-              textAlign: 'center',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden'
-            }}
-          >
-            {dateFit.lines[0]}
-          </div>
-        )}
-
-        {config.showBarcode && barcodeSvg && (
-          <div
-            className="field-barcode"
-            style={{
-              width: '100%',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              flexShrink: 0,
-              marginTop: 'auto',
-              paddingTop: '0.4mm',
-              overflow: 'hidden'
-            }}
-            dangerouslySetInnerHTML={{ __html: barcodeSvg }}
-          />
-        )}
-      </div>
-    </div>
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
   );
 }
 
@@ -377,6 +115,9 @@ export default function ProductStickerModal({
       offsetXmm: saved.offsetXmm !== undefined ? saved.offsetXmm : 0,
       offsetYmm: saved.offsetYmm !== undefined ? saved.offsetYmm : 0,
       safePaddingMm: saved.safePaddingMm !== undefined ? saved.safePaddingMm : 2.5,
+      mediaAlignment: saved.mediaAlignment || 'centre',
+      printheadWidthMm: saved.printheadWidthMm !== undefined ? saved.printheadWidthMm : 104,
+      linerWidthMm: saved.linerWidthMm !== undefined ? saved.linerWidthMm : 83,
       mediaWidthMm: saved.mediaWidthMm !== undefined ? saved.mediaWidthMm : '',
       driverLeftMarginMm: saved.driverLeftMarginMm !== undefined ? saved.driverLeftMarginMm : 0,
       directThermalMode: saved.directThermalMode !== undefined ? saved.directThermalMode : false,
@@ -397,7 +138,13 @@ export default function ProductStickerModal({
       weightValue: saved.weightValue !== undefined ? saved.weightValue : '500',
       weightUnit: saved.weightUnit || 'g',
       speed: saved.speed || 4,
-      density: saved.density || 8
+      density: saved.density || 8,
+      printMode: saved.printMode || 'portrait_sheet',
+      paperSizeName: saved.paperSizeName || 'USER',
+      paperWidthMm: saved.paperWidthMm !== undefined ? saved.paperWidthMm : '',
+      paperHeightMm: saved.paperHeightMm !== undefined ? saved.paperHeightMm : '',
+      sheetColumns: saved.sheetColumns !== undefined ? saved.sheetColumns : (saved.rows === 1 ? 1 : 2),
+      sheetRows: saved.sheetRows !== undefined ? saved.sheetRows : ''
     };
   });
 
@@ -451,38 +198,79 @@ export default function ProductStickerModal({
 
   // Printing state
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isPreparingLabels, setIsPreparingLabels] = useState(false);
+  const [popupBlocked, setPopupBlocked] = useState(false);
+  const lastPrintActionRef = useRef(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [printSuccessMsg, setPrintSuccessMsg] = useState('');
   const [systemPrinters, setSystemPrinters] = useState([]);
-  const [selectedPrinter, setSelectedPrinter] = useState('');
+  const [selectedPrinter, setSelectedPrinter] = useState('__browser_print__');
+  const [agentStatus, setAgentStatus] = useState('checking'); // 'checking' | 'connected' | 'offline'
+  const [agentInfo, setAgentInfo] = useState(null);
+  const [agentChecking, setAgentChecking] = useState(false);
 
-  // Detect available Windows printers (Electron native or backend dynamic discovery)
-  useEffect(() => {
+  // Detect available Windows printers (Local Print Agent or Electron or backend dynamic discovery)
+  const refreshPrintersList = async () => {
+    setAgentChecking(true);
     if (window.electron && typeof window.electron.getPrinters === 'function') {
-      window.electron.getPrinters().then((printers) => {
+      try {
+        const printers = await window.electron.getPrinters();
         if (Array.isArray(printers)) {
           setSystemPrinters(printers);
           const defaultPrn = printers.find(p => p.isDefault) || printers[0];
-          if (defaultPrn) setSelectedPrinter(defaultPrn.name);
+          if (defaultPrn && selectedPrinter === '__browser_print__') setSelectedPrinter(defaultPrn.name);
+          setAgentStatus('connected');
+          setAgentInfo({ connected: true, agent: 'Electron Native Spooler', defaultPrinter: defaultPrn?.name });
         }
-      }).catch((e) => console.warn('Could not fetch system printers:', e));
-    } else {
-      // In web browser: dynamically query backend for connected printers (USB and LAN)
-      apiFetch('/api/printers/discover')
-        .then(res => res.json())
-        .then(data => {
-          const list = (data.discovered || data.printers || []).filter(p => !p.is_virtual);
-          if (Array.isArray(list) && list.length > 0) {
-            setSystemPrinters(list);
-            const preferred = list.find(p => p.is_label || /tsc|te244|zebra|label|barcode/i.test(p.name))
-                           || list.find(p => p.type === 'usb')
-                           || list[0];
-            if (preferred) setSelectedPrinter(preferred.name);
-          }
-        })
-        .catch(e => console.warn('Could not fetch backend printers:', e));
+      } catch (e) {
+        console.warn('Could not fetch electron printers:', e);
+      } finally {
+        setAgentChecking(false);
+      }
+      return;
     }
-  }, []);
+
+    // Web Browser: Query Local Print Agent first for direct Win32 Spooler printers (Zero Dialog)
+    try {
+      const health = await checkAgentHealth(1500);
+      if (health.connected) {
+        setAgentStatus('connected');
+        setAgentInfo(health);
+        const agentPrintersRes = await getAgentPrinters(3500);
+        if (agentPrintersRes.ok && Array.isArray(agentPrintersRes.printers) && agentPrintersRes.printers.length > 0) {
+          setSystemPrinters(agentPrintersRes.printers);
+          setAgentChecking(false);
+          return;
+        }
+      } else {
+        setAgentStatus('offline');
+        setAgentInfo(null);
+      }
+    } catch (agentErr) {
+      console.warn('Agent check failed:', agentErr);
+      setAgentStatus('offline');
+    }
+
+    // Secondary fallback: Query backend /api/printers/discover
+    try {
+      const res = await apiFetch('/api/printers/discover');
+      const data = await res.json();
+      const list = (data.discovered || data.printers || []).filter(p => !p.is_virtual);
+      if (Array.isArray(list) && list.length > 0) {
+        setSystemPrinters(list);
+      }
+    } catch (e) {
+      console.warn('Could not fetch backend printers:', e);
+    } finally {
+      setAgentChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open) {
+      refreshPrintersList();
+    }
+  }, [open]);
 
   // Load saved printer profile configuration when selectedPrinter changes
   useEffect(() => {
@@ -495,11 +283,66 @@ export default function ProductStickerModal({
           offsetXmm: printerProfile.offsetXmm !== undefined ? printerProfile.offsetXmm : prev.offsetXmm,
           offsetYmm: printerProfile.offsetYmm !== undefined ? printerProfile.offsetYmm : prev.offsetYmm,
           safePaddingMm: printerProfile.safePaddingMm !== undefined ? printerProfile.safePaddingMm : prev.safePaddingMm,
-          mediaWidthMm: printerProfile.mediaWidthMm !== undefined ? printerProfile.mediaWidthMm : prev.mediaWidthMm
+          mediaAlignment: printerProfile.mediaAlignment !== undefined ? printerProfile.mediaAlignment : prev.mediaAlignment,
+          printheadWidthMm: printerProfile.printheadWidthMm !== undefined ? printerProfile.printheadWidthMm : prev.printheadWidthMm,
+          linerWidthMm: printerProfile.linerWidthMm !== undefined ? printerProfile.linerWidthMm : prev.linerWidthMm,
+          mediaWidthMm: printerProfile.mediaWidthMm !== undefined ? printerProfile.mediaWidthMm : prev.mediaWidthMm,
+          printMode: printerProfile.printMode !== undefined ? printerProfile.printMode : prev.printMode,
+          paperSizeName: printerProfile.paperSizeName !== undefined ? printerProfile.paperSizeName : prev.paperSizeName,
+          paperWidthMm: printerProfile.paperWidthMm !== undefined ? printerProfile.paperWidthMm : prev.paperWidthMm,
+          paperHeightMm: printerProfile.paperHeightMm !== undefined ? printerProfile.paperHeightMm : prev.paperHeightMm,
+          sheetColumns: printerProfile.sheetColumns !== undefined ? printerProfile.sheetColumns : prev.sheetColumns,
+          sheetRows: printerProfile.sheetRows !== undefined ? printerProfile.sheetRows : prev.sheetRows
         }));
       }
     }
   }, [selectedPrinter]);
+
+  // Find active printer details from detected systemPrinters
+  const selectedPrinterObj = useMemo(() => {
+    if (!selectedPrinter || selectedPrinter === '__browser_print__') return null;
+    return systemPrinters.find(p => p.name === selectedPrinter || p.displayName === selectedPrinter) || null;
+  }, [selectedPrinter, systemPrinters]);
+
+  // Auto-prefill Paper WxH from driver form if designer values are blank
+  useEffect(() => {
+    if (selectedPrinterObj && selectedPrinterObj.paperWidthMm > 0 && selectedPrinterObj.paperHeightMm > 0) {
+      if (!config.paperWidthMm && !config.paperHeightMm) {
+        setConfig(prev => ({
+          ...prev,
+          paperWidthMm: selectedPrinterObj.paperWidthMm,
+          paperHeightMm: selectedPrinterObj.paperHeightMm,
+          paperSizeName: selectedPrinterObj.formName || prev.paperSizeName
+        }));
+      }
+    }
+  }, [selectedPrinterObj]);
+
+  // Copy driver custom form setup steps to clipboard
+  const handleCopySetupSteps = () => {
+    const stepsText = `TSC TE244 Windows Driver Form Setup Steps:
+1. Open Windows Control Panel → Devices and Printers (or Settings → Printers & Scanners).
+2. Right-click "TSC TE244" (or your label printer) → select "Printing Preferences".
+3. Navigate to the "Page Setup" tab.
+4. Click "New..." (or Edit custom stock).
+5. Name: ${layout.paperSizeName}
+6. Width: ${layout.paperW} mm
+7. Height: ${layout.paperH} mm
+8. Type: Die-Cut Label with ${layout.gap} mm gap
+9. Orientation: Portrait, Rotation: 0°
+10. Click OK → Apply → OK.
+11. In Chrome print dialog: Paper size must show ${layout.paperSizeName} (${layout.paperW}×${layout.paperH} mm), Margins None, Scale 100%.`;
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(stepsText).then(() => {
+        setPrintSuccessMsg('Windows form setup steps copied to clipboard!');
+      }).catch(() => {
+        alert(stepsText);
+      });
+    } else {
+      alert(stepsText);
+    }
+  };
 
   // Update item quantities when items prop changes
   useEffect(() => {
@@ -541,6 +384,28 @@ export default function ProductStickerModal({
     }, 0);
   }, [itemQuantities]);
 
+  const layout = useMemo(() => {
+    return resolveSheetLayout(config);
+  }, [config]);
+
+  const driverFormMismatch = useMemo(() => {
+    if (!selectedPrinterObj || !selectedPrinterObj.paperWidthMm || !selectedPrinterObj.paperHeightMm) {
+      return null;
+    }
+    const diffW = Math.abs(selectedPrinterObj.paperWidthMm - layout.paperW);
+    const diffH = Math.abs(selectedPrinterObj.paperHeightMm - layout.paperH);
+    if (diffW > 1.5 || diffH > 1.5) {
+      return {
+        driverW: selectedPrinterObj.paperWidthMm,
+        driverH: selectedPrinterObj.paperHeightMm,
+        formName: selectedPrinterObj.formName || 'Current Form',
+        designerW: layout.paperW,
+        designerH: layout.paperH
+      };
+    }
+    return null;
+  }, [selectedPrinterObj, layout.paperW, layout.paperH]);
+
   const currentSizeDef = STICKER_SIZES[config.size] || STICKER_SIZES['50x25'];
   const is2Row = parseInt(config.rows, 10) === 2;
   const cols = is2Row ? 2 : 1;
@@ -561,14 +426,25 @@ export default function ProductStickerModal({
   const cell2Left = totalLeftOffset + currentSizeDef.width + gapMm;
   const cellTop = totalTopOffset;
 
-  // Number of roll rows dynamically computed based on quantity to accurately reflect preview
+  const isPortraitSheetMode = config.printMode !== 'legacy_landscape';
+
+  const targetStickersCount = useMemo(() => {
+    if (items.length === 1) {
+      const itKey = currentPreviewItem?.id || previewItemIndex;
+      return Math.max(1, parseInt(itemQuantities[itKey], 10) || 1);
+    }
+    return Math.max(1, totalStickersCount || 1);
+  }, [items.length, currentPreviewItem, previewItemIndex, itemQuantities, totalStickersCount]);
+
+  const totalSheetsNeeded = useMemo(() => {
+    return Math.max(1, Math.ceil(targetStickersCount / layout.stickersPerSheet));
+  }, [targetStickersCount, layout.stickersPerSheet]);
+
+  // Number of roll rows dynamically computed based on quantity for legacy preview
   const rollRowsCount = useMemo(() => {
-    const itKey = currentPreviewItem?.id || previewItemIndex;
-    const currentItemQty = parseInt(itemQuantities[itKey], 10) || 1;
-    const targetCount = items.length === 1 ? currentItemQty : (totalStickersCount || 1);
-    const rowsNeeded = is2Row ? Math.ceil(targetCount / 2) : targetCount;
+    const rowsNeeded = is2Row ? Math.ceil(targetStickersCount / 2) : targetStickersCount;
     return Math.min(Math.max(1, rowsNeeded), 20);
-  }, [itemQuantities, currentPreviewItem, previewItemIndex, items.length, totalStickersCount, is2Row]);
+  }, [targetStickersCount, is2Row]);
 
   const rollRows = useMemo(() => {
     return Array.from({ length: rollRowsCount }, (_, i) => i + 1);
@@ -604,14 +480,24 @@ export default function ProductStickerModal({
     );
   }, [previewRotation, currentSizeDef.width, currentSizeDef.height]);
 
-  const naturalSingleWidthPx = singleRotTransform.pageWidthMm * 3.779528;
-  const naturalSingleHeightPx = singleRotTransform.pageHeightMm * 3.779528;
+  const naturalSingleWidthPx = currentSizeDef.width * 3.779528;
+  const naturalSingleHeightPx = currentSizeDef.height * 3.779528;
   const singleScaleFactor = useMemo(() => {
     return Math.min(2.0, Math.max(1.1, 290 / Math.max(naturalSingleWidthPx, naturalSingleHeightPx)));
   }, [naturalSingleWidthPx, naturalSingleHeightPx]);
   const singlePreviewBoxWidth = Math.round(naturalSingleWidthPx * singleScaleFactor);
   const singlePreviewBoxHeight = Math.round(naturalSingleHeightPx * singleScaleFactor);
 
+  // Portrait sheet preview dimensions
+  const naturalSheetWidthPx = layout.paperW * 3.779528;
+  const naturalSheetHeightPx = layout.paperH * 3.779528;
+  const sheetScaleFactor = useMemo(() => {
+    return Math.min(1.3, Math.max(0.65, 340 / Math.max(naturalSheetWidthPx, naturalSheetHeightPx)));
+  }, [naturalSheetWidthPx, naturalSheetHeightPx]);
+  const sheetBoxWidth = Math.round(naturalSheetWidthPx * sheetScaleFactor);
+  const sheetBoxHeight = Math.round(naturalSheetHeightPx * sheetScaleFactor);
+
+  // Legacy roll preview dimensions
   const naturalRollWidthPx = rotTransform.pageWidthMm * 3.779528;
   const naturalRollHeightPx = rotTransform.pageHeightMm * 3.779528;
   const rollScaleFactor = useMemo(() => {
@@ -623,8 +509,8 @@ export default function ProductStickerModal({
 
   const previewBarcodeValue = (currentPreviewItem.barcode || currentPreviewItem.sku || ('PRD' + (currentPreviewItem.id || '101'))).trim();
   const previewBarcodeValidation = useMemo(() => {
-    return validateBarcodeCode128(previewBarcodeValue);
-  }, [previewBarcodeValue]);
+    return validateBarcodeCode128(previewBarcodeValue, { widthMm: currentSizeDef.width, dpi: config.dpi || 203 });
+  }, [previewBarcodeValue, currentSizeDef.width, config.dpi]);
 
   const handleConfigChange = (key, value) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
@@ -666,11 +552,26 @@ export default function ProductStickerModal({
     }
   };
 
-  const handlePrintInternal = async (itemsToPrint, isTestPrint = false) => {
+  const handlePrintInternal = async (itemsToPrint, isTestPrint = false, preOpenedWin = null) => {
     if (config.printWeight) {
       const v = validateWeightInput(config);
       if (!v.isValid) {
+        if (preOpenedWin && !preOpenedWin.closed) {
+          try { preOpenedWin.close(); } catch (_) {}
+        }
         alert('Weight validation error: ' + v.error);
+        return;
+      }
+    }
+
+    if (driverFormMismatch) {
+      const proceed = window.confirm(
+        `Driver Form Mismatch Warning:\n\nDetected Windows driver form is ${driverFormMismatch.driverW}×${driverFormMismatch.driverH} mm ("${driverFormMismatch.formName}"), but the designer sheet is configured as ${driverFormMismatch.designerW}×${driverFormMismatch.designerH} mm.\n\nPrinting with mismatched form size may cause labels to print misaligned or skip rows.\n\nDo you want to continue anyway?`
+      );
+      if (!proceed) {
+        if (preOpenedWin && !preOpenedWin.closed) {
+          try { preOpenedWin.close(); } catch (_) {}
+        }
         return;
       }
     }
@@ -679,158 +580,221 @@ export default function ProductStickerModal({
     setPrintSuccessMsg('');
     try {
       await ensureStickerFontLoaded(config.fontFamily);
-      const isBrowserPrintTarget = !selectedPrinter || selectedPrinter === '__browser_print__';
+      const isBrowserPrintTarget = selectedPrinter === '__browser_print__' || (!window.electron && agentStatus !== 'connected');
+      const targetPrinter = selectedPrinter || agentInfo?.defaultPrinter || 'TSC TE244';
 
-      // 1. Electron Desktop Native Direct TSPL Spooler Printing (Exact ScanGo method)
+      // 1. Electron Desktop Native Direct TSPL Spooler Printing (if running in desktop app)
       if (!isBrowserPrintTarget && window.electron && typeof window.electron.printWindowsRaw === 'function') {
         const tsplRes = await buildTsplStickerPayload(itemsToPrint, config, shopData);
         if (tsplRes?.b64Payload) {
-          const rawRes = await window.electron.printWindowsRaw(selectedPrinter, tsplRes.b64Payload);
+          const rawRes = await window.electron.printWindowsRaw(targetPrinter, tsplRes.b64Payload);
           if (rawRes && rawRes.success !== false) {
-            setPrintSuccessMsg(isTestPrint ? 'Test sticker printed!' : `Printed ${itemsToPrint.length} sticker(s) to "${selectedPrinter}"!`);
+            setPrintSuccessMsg(isTestPrint ? 'Test sticker printed!' : `Printed ${itemsToPrint.length} sticker(s) to "${targetPrinter}"!`);
             setTimeout(() => setPrintSuccessMsg(''), 4500);
             return;
           }
         }
       }
 
-      // 2. Web Browser: Send Raw TSPL Payload to Backend API for Native TSPL Windows Spooler Printing
-      const targetPrnObj = systemPrinters.find(p => p.name === selectedPrinter);
-      const isThermalHardware = targetPrnObj?.is_label || targetPrnObj?.protocol === 'tspl' || targetPrnObj?.type === 'usb' || /tsc|te244|te200|da210|ttp|gprinter|hprt|xprinter|godex|argox|label|barcode/i.test(selectedPrinter || '');
-
-      if (!isBrowserPrintTarget && isThermalHardware) {
+      // 2. Web Browser: Local Print Agent Direct Win32 Spooler Printing (only if agent is actively connected)
+      if (!isBrowserPrintTarget && agentStatus === 'connected') {
         try {
           const tsplRes = await buildTsplStickerPayload(itemsToPrint, config, shopData);
-          if (tsplRes?.b64Payload) {
-            const firstItem = itemsToPrint[0] || {};
-            const firstPrices = resolveStickerPrices(firstItem, config);
-            const totalCopies = itemsToPrint.reduce((acc, it) => acc + (it.printQty || 1), 0);
-
-            const res = await apiFetch('/api/printers/print-label', {
-              method: 'POST',
-              body: {
-                printer_name: selectedPrinter,
-                payload_base64: tsplRes.b64Payload,
-                copies: totalCopies,
-                label_data: {
-                  storeName: (config.customShopName || shopData.restaurant_name || shopData.name || 'ARISO RETAIL').trim(),
-                  productName: resolveStickerProductName(firstItem, config),
-                  barcode: (firstItem.barcode || firstItem.sku || '').trim(),
-                  sku: firstItem.sku || '',
-                  price: firstPrices.salePrice,
-                  mrp: firstPrices.mrp,
-                  rows: parseInt(config.rows, 10) || 1,
-                  gapMm: parseFloat(config.spacingMm) || 3,
-                  fontFamily: config.fontFamily,
-                  localProductName: config.localProductName,
-                  printWeight: config.printWeight,
-                  weightValue: config.weightValue,
-                  weightUnit: config.weightUnit,
-                  speed: config.speed || 4,
-                  density: config.density || 8
-                }
-              }
+          if (tsplRes?.tsplPayload) {
+            const agentRes = await printViaAgent(targetPrinter, tsplRes.tsplPayload, {
+              docTitle: isTestPrint ? 'Ariso Test Sticker' : `Ariso Product Labels (${itemsToPrint.length})`
             });
-
-            const result = await res.json();
-            if (res.ok && (result.success || result.details?.success)) {
-              setPrintSuccessMsg(isTestPrint ? 'Test sticker printed!' : `Printed stickers to "${selectedPrinter}"!`);
+            if (agentRes && agentRes.success) {
+              setPrintSuccessMsg(isTestPrint ? 'Test sticker printed directly to printer!' : `Printed ${itemsToPrint.length} sticker(s) to "${targetPrinter}"!`);
               setTimeout(() => setPrintSuccessMsg(''), 4500);
               return;
-            } else {
-              throw new Error(result.error || `Failed to print to "${selectedPrinter}".`);
             }
           }
-        } catch (backendErr) {
-          console.warn('[ProductStickerModal] Direct backend hardware print failed, falling back to browser print dialog:', backendErr);
-        }
+        } catch (_) {}
       }
 
-      // 3. Fallback: Unified Cross-Platform Isolated Print Iframe
-      const res = await printStickers(itemsToPrint, config, shopData, selectedPrinter || null);
+      // 3. Browser Print Dialog (Dedicated Blob Window Popup - zero agent requirement)
+      const res = await printStickers(itemsToPrint, config, shopData, selectedPrinter || null, {
+        popupWindow: preOpenedWin
+      });
+
+      if (res?.popupBlocked) {
+        setPopupBlocked(true);
+        return;
+      }
+
+      setPopupBlocked(false);
       if (res && res.success) {
-        setPrintSuccessMsg(isTestPrint ? 'Test sticker print dialog opened!' : `Stickers printed successfully!`);
+        setPrintSuccessMsg(isTestPrint ? 'Test sticker print dialog opened!' : `Stickers print dialog opened!`);
         setTimeout(() => setPrintSuccessMsg(''), 4500);
       }
     } catch (err) {
+      if (preOpenedWin && !preOpenedWin.closed) {
+        try { preOpenedWin.close(); } catch (_) {}
+      }
       alert('Sticker printing error: ' + (err.message || 'Unknown printing failure'));
     } finally {
       setIsPrinting(false);
+      setIsPreparingLabels(false);
     }
   };
 
-  const handlePrint = () => {
-    handlePrintInternal(printItemsList, false);
+  const handlePrint = async () => {
+    lastPrintActionRef.current = handlePrint;
+    const isBrowserPrintTarget = selectedPrinter === '__browser_print__' || (!window.electron && agentStatus !== 'connected');
+    let preOpenedWin = null;
+
+    if (isBrowserPrintTarget) {
+      try {
+        preOpenedWin = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+        if (preOpenedWin) {
+          try {
+            preOpenedWin.document.write(`<!DOCTYPE html><html><head><title>Ariso Label Print</title></head><body style="background:#525659;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;"><div style="text-align:center;"><div style="font-size:16px;font-weight:700;">Preparing labels...</div><div style="font-size:12px;color:#cbd5e1;margin-top:6px;">Generating ${totalStickersCount} label(s)...</div></div></body></html>`);
+          } catch (_) {}
+        } else {
+          setPopupBlocked(true);
+          return;
+        }
+      } catch (err) {
+        console.warn('Popup blocked:', err);
+        setPopupBlocked(true);
+        return;
+      }
+    }
+
+    if (totalStickersCount > 50) {
+      setIsPreparingLabels(true);
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    handlePrintInternal(printItemsList, false, preOpenedWin);
   };
 
   const handleTestPrint = () => {
+    lastPrintActionRef.current = handleTestPrint;
     const is2Row = parseInt(config.rows, 10) === 2;
     const testItem = [{
       ...currentPreviewItem,
       printQty: is2Row ? 2 : 1
     }];
-    handlePrintInternal(testItem, true);
+
+    const isBrowserPrintTarget = selectedPrinter === '__browser_print__' || (!window.electron && agentStatus !== 'connected');
+    let preOpenedWin = null;
+
+    if (isBrowserPrintTarget) {
+      try {
+        preOpenedWin = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+        if (preOpenedWin) {
+          try {
+            preOpenedWin.document.write(`<!DOCTYPE html><html><head><title>Ariso Test Print</title></head><body style="background:#525659;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;"><div style="text-align:center;"><div style="font-size:16px;font-weight:700;">Preparing test sticker...</div></div></body></html>`);
+          } catch (_) {}
+        } else {
+          setPopupBlocked(true);
+          return;
+        }
+      } catch (err) {
+        setPopupBlocked(true);
+        return;
+      }
+    }
+
+    handlePrintInternal(testItem, true, preOpenedWin);
   };
 
   const handleCalibrationPrint = async () => {
+    lastPrintActionRef.current = handleCalibrationPrint;
+    const isBrowserPrintTarget = selectedPrinter === '__browser_print__' || (!window.electron && agentStatus !== 'connected');
+    let preOpenedWin = null;
+
+    if (isBrowserPrintTarget) {
+      try {
+        preOpenedWin = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+        if (preOpenedWin) {
+          try {
+            preOpenedWin.document.write(`<!DOCTYPE html><html><head><title>Ariso Calibration Print</title></head><body style="background:#525659;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;"><div style="text-align:center;"><div style="font-size:16px;font-weight:700;">Preparing calibration test...</div></div></body></html>`);
+          } catch (_) {}
+        } else {
+          setPopupBlocked(true);
+          return;
+        }
+      } catch (err) {
+        setPopupBlocked(true);
+        return;
+      }
+    }
+
+    if (driverFormMismatch) {
+      const proceed = window.confirm(
+        `Driver Form Mismatch Warning:\n\nDetected Windows driver form is ${driverFormMismatch.driverW}×${driverFormMismatch.driverH} mm ("${driverFormMismatch.formName}"), but the designer sheet is configured as ${driverFormMismatch.designerW}×${driverFormMismatch.designerH} mm.\n\nDo you want to continue anyway?`
+      );
+      if (!proceed) {
+        if (preOpenedWin && !preOpenedWin.closed) {
+          try { preOpenedWin.close(); } catch (_) {}
+        }
+        return;
+      }
+    }
+
     setIsPrinting(true);
     setPrintSuccessMsg('');
     try {
       await ensureStickerFontLoaded(config.fontFamily);
-      const isBrowserPrintTarget = !selectedPrinter || selectedPrinter === '__browser_print__';
-      const targetPrnObj = systemPrinters.find(p => p.name === selectedPrinter);
-      const isThermalHardware = targetPrnObj?.is_label || targetPrnObj?.protocol === 'tspl' || targetPrnObj?.type === 'usb' || /tsc|te244|te200|da210|ttp|gprinter|hprt|xprinter|godex|argox|label|barcode/i.test(selectedPrinter || '');
+      const targetPrinter = selectedPrinter || agentInfo?.defaultPrinter || 'TSC TE244';
 
       // 1. Electron Desktop Native Direct TSPL Spooler Printing
       if (!isBrowserPrintTarget && window.electron && typeof window.electron.printWindowsRaw === 'function') {
         const tsplPayload = buildCalibrationTsplPayload(config, shopData);
         if (tsplPayload) {
           const b64 = btoa(unescape(encodeURIComponent(tsplPayload)));
-          const rawRes = await window.electron.printWindowsRaw(selectedPrinter, b64);
+          const rawRes = await window.electron.printWindowsRaw(targetPrinter, b64);
           if (rawRes && rawRes.success !== false) {
-            setPrintSuccessMsg(`Calibration test row printed directly to "${selectedPrinter}"!`);
+            setPrintSuccessMsg(`Calibration test row printed directly to "${targetPrinter}"!`);
             setTimeout(() => setPrintSuccessMsg(''), 4500);
             return;
           }
         }
       }
 
-      // 2. Direct backend hardware spooler printing
-      if (!isBrowserPrintTarget && isThermalHardware) {
+      // 2. Web Browser: Local Print Agent Direct Win32 Spooler Printing (only if agent is actively connected)
+      if (!isBrowserPrintTarget && agentStatus === 'connected') {
         try {
           const tsplPayload = buildCalibrationTsplPayload(config, shopData);
           if (tsplPayload) {
-            const b64Payload = btoa(unescape(encodeURIComponent(tsplPayload)));
-            const res = await apiFetch('/api/printers/print-label', {
-              method: 'POST',
-              body: {
-                printer_name: selectedPrinter,
-                payload_base64: b64Payload,
-                copies: 1
-              }
+            const agentRes = await printViaAgent(targetPrinter, tsplPayload, {
+              docTitle: 'Ariso Calibration Label'
             });
-            const result = await res.json();
-            if (res.ok && (result.success || result.details?.success)) {
-              setPrintSuccessMsg(`Calibration test row printed to "${selectedPrinter}"!`);
+            if (agentRes && agentRes.success) {
+              setPrintSuccessMsg(`Calibration test row printed directly to "${targetPrinter}"!`);
               setTimeout(() => setPrintSuccessMsg(''), 4500);
               return;
             }
           }
-        } catch (backendErr) {
-          console.warn('[ProductStickerModal] Calibration direct hardware print failed, falling back to browser print:', backendErr);
-        }
+        } catch (_) {}
       }
 
-      // 3. Fallback: Browser print dialog / iframe
-      const res = await printCalibrationStickers(config, shopData, selectedPrinter || null);
+      // 3. Browser Print Dialog (Dedicated Blob Window Popup - zero agent requirement)
+      const res = await printCalibrationStickers(config, shopData, selectedPrinter || null, {
+        popupWindow: preOpenedWin
+      });
+
+      if (res?.popupBlocked) {
+        setPopupBlocked(true);
+        return;
+      }
+
+      setPopupBlocked(false);
       if (res && res.success) {
-        setPrintSuccessMsg('Calibration test row printed!');
+        setPrintSuccessMsg('Calibration test row print dialog opened!');
         setTimeout(() => setPrintSuccessMsg(''), 4500);
       }
     } catch (err) {
+      if (preOpenedWin && !preOpenedWin.closed) {
+        try { preOpenedWin.close(); } catch (_) {}
+      }
       alert('Calibration print error: ' + (err.message || 'Unknown error'));
     } finally {
       setIsPrinting(false);
+      setIsPreparingLabels(false);
     }
   };
 
@@ -896,9 +860,50 @@ export default function ProductStickerModal({
               </p>
             </div>
           </div>
-          <button style={styles.closeBtn} onClick={onClose} title="Close">
-            <X size={18} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {agentStatus === 'connected' ? (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 10px',
+                  background: '#ECFDF5',
+                  border: '1px solid #A7F3D0',
+                  borderRadius: '20px',
+                  fontSize: '11px',
+                  fontWeight: '800',
+                  color: '#065F46'
+                }}
+                title="Direct Win32 RAW Spooling enabled via 127.0.0.1:9101 (Zero dialog, pixel-perfect 203 DPI)"
+              >
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981' }}></span>
+                <span>Print Agent Active: {selectedPrinter || agentInfo?.defaultPrinter || 'TSC TE244'}</span>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 10px',
+                  background: '#F0F9FF',
+                  border: '1px solid #BAE6FD',
+                  borderRadius: '20px',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  color: '#0369A1'
+                }}
+                title="Browser print mode active (Direct Chrome dialog - no agent needed)"
+              >
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#0284C7' }}></span>
+                <span>Browser Print Ready</span>
+              </div>
+            )}
+            <button style={styles.closeBtn} onClick={onClose} title="Close">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* MODAL BODY: 2-COLUMN SPLIT */}
@@ -985,6 +990,184 @@ export default function ProductStickerModal({
               <label style={styles.sectionLabel}>
                 <Columns size={14} style={{ marginRight: 6 }} /> Roll Format & Spacing
               </label>
+
+              {/* Print Mode Selector */}
+              <div style={{ marginBottom: '10px' }}>
+                <div style={{ fontSize: '11px', fontWeight: '700', color: '#475569', marginBottom: '5px' }}>
+                  Print Mode (Browser & Driver):
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.pillBtn,
+                      textAlign: 'left',
+                      padding: '8px 10px',
+                      ...(config.printMode !== 'legacy_landscape' ? styles.pillBtnActive : {})
+                    }}
+                    onClick={() => handleConfigChange('printMode', 'portrait_sheet')}
+                  >
+                    <div style={{ fontWeight: '800', fontSize: '12px' }}>Portrait sheet (recommended)</div>
+                    <div style={{ fontSize: '9.5px', opacity: 0.85 }}>Vertical Portrait Sheet · Upright</div>
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.pillBtn,
+                      textAlign: 'left',
+                      padding: '8px 10px',
+                      ...(config.printMode === 'legacy_landscape' ? styles.pillBtnActive : {})
+                    }}
+                    onClick={() => handleConfigChange('printMode', 'legacy_landscape')}
+                  >
+                    <div style={{ fontWeight: '800', fontSize: '12px' }}>Legacy 2-up row (landscape)</div>
+                    <div style={{ fontSize: '9.5px', opacity: 0.85 }}>Single row · Driver rotated</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Driver Form Configuration for Portrait Sheet */}
+              {isPortraitSheetMode && (
+                <div style={{ background: '#F8FAFC', border: '1px solid #CBD5E1', borderRadius: '8px', padding: '10px', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11.5px', fontWeight: '800', color: '#0F172A' }}>
+                      TSC TE244 Driver Form Settings:
+                    </span>
+                    <span style={{ fontSize: '10px', background: '#E0F2FE', color: '#0369A1', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>
+                      Portrait Sheet
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '10.5px', fontWeight: '700', color: '#475569' }}>Paper Size Name:</span>
+                      <input
+                        type="text"
+                        value={config.paperSizeName || ''}
+                        onChange={(e) => handleConfigChange('paperSizeName', e.target.value)}
+                        placeholder="USER"
+                        style={{ ...styles.textInput, padding: '4px 8px', fontSize: '11px', marginTop: '2px' }}
+                        title="Form name in TSC TE244 Windows Printing Preferences (default 'USER')"
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '10.5px', fontWeight: '700', color: '#475569' }}>Columns / Sheet:</span>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginTop: '2px' }}>
+                        {[1, 2].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            style={{
+                              ...styles.pillBtn,
+                              padding: '4px 6px',
+                              fontSize: '11px',
+                              fontWeight: '700',
+                              ...(layout.cols === c ? styles.pillBtnActive : {})
+                            }}
+                            onClick={() => {
+                              handleConfigChange('sheetColumns', c);
+                              handleConfigChange('rows', c);
+                            }}
+                          >
+                            {c} Col
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '8px' }}>
+                    <div>
+                      <span style={{ fontSize: '10px', fontWeight: '700', color: '#475569' }}>Paper W (mm):</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="10"
+                        max="150"
+                        value={config.paperWidthMm !== undefined ? config.paperWidthMm : ''}
+                        onChange={(e) => handleConfigChange('paperWidthMm', e.target.value)}
+                        placeholder={String(layout.paperW)}
+                        style={{ ...styles.numberInput, width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                        title={`Form width in mm (default ${layout.paperW} mm)`}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '10px', fontWeight: '700', color: '#475569' }}>Paper H (mm):</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="10"
+                        max="300"
+                        value={config.paperHeightMm !== undefined ? config.paperHeightMm : ''}
+                        onChange={(e) => handleConfigChange('paperHeightMm', e.target.value)}
+                        placeholder={String(layout.paperH)}
+                        style={{ ...styles.numberInput, width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                        title={`Form height in mm (must be > Paper W for portrait, default ${layout.paperH} mm)`}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '10px', fontWeight: '700', color: '#475569' }}>Rows / Sheet:</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        max="20"
+                        value={config.sheetRows !== undefined ? config.sheetRows : ''}
+                        onChange={(e) => handleConfigChange('sheetRows', e.target.value)}
+                        placeholder={String(layout.rows)}
+                        style={{ ...styles.numberInput, width: '100%', boxSizing: 'border-box', marginTop: '2px' }}
+                        title={`Rows per sheet (default floor(paperH / (labelH + gap)) = ${layout.rows})`}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '10px', color: '#0369A1', marginTop: '6px', fontWeight: '600' }}>
+                    Form: <strong>{layout.paperSizeName} ({layout.paperW} × {layout.paperH} mm)</strong> · Grid: <strong>{layout.cols} col × {layout.rows} row ({layout.stickersPerSheet} labels/sheet)</strong>
+                  </div>
+
+                  {/* Chrome Print Dialog Checklist & Copy Setup Steps Button (Requirement 2) */}
+                  <div style={{
+                    marginTop: '8px',
+                    padding: '8px 10px',
+                    background: '#F0FDF4',
+                    border: '1px solid #BBF7D0',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                      <div style={{ fontSize: '10.5px', fontWeight: '800', color: '#166534', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span>📋 Chrome Print Dialog Checklist:</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCopySetupSteps}
+                        style={{
+                          ...styles.pillBtn,
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          backgroundColor: '#DCFCE7',
+                          color: '#15803D',
+                          border: '1px solid #86EFAC',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title="Copy steps to create the custom form in Windows driver"
+                      >
+                        <Copy size={11} /> Copy setup steps
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#14532D', lineHeight: 1.45 }}>
+                      In Chrome's print dialog the Paper size must show <strong>{layout.paperSizeName} ({layout.paperW}×{layout.paperH} mm)</strong>, Margins <strong>None</strong>, Scale <strong>100%</strong>.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Roll Format: 1-Row vs 2-Row */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <button
                   type="button"
@@ -992,7 +1175,10 @@ export default function ProductStickerModal({
                     ...styles.pillBtn,
                     ...(parseInt(config.rows, 10) === 1 ? styles.pillBtnActive : {})
                   }}
-                  onClick={() => handleConfigChange('rows', 1)}
+                  onClick={() => {
+                    handleConfigChange('rows', 1);
+                    handleConfigChange('sheetColumns', 1);
+                  }}
                 >
                   <div style={{ fontWeight: '800', fontSize: '12.5px' }}>1-Row Sticker Roll</div>
                   <div style={{ fontSize: '10px', opacity: 0.85 }}>Single label per row</div>
@@ -1003,7 +1189,10 @@ export default function ProductStickerModal({
                     ...styles.pillBtn,
                     ...(parseInt(config.rows, 10) === 2 ? styles.pillBtnActive : {})
                   }}
-                  onClick={() => handleConfigChange('rows', 2)}
+                  onClick={() => {
+                    handleConfigChange('rows', 2);
+                    handleConfigChange('sheetColumns', 2);
+                  }}
                 >
                   <div style={{ fontWeight: '800', fontSize: '12.5px' }}>2-Row Sticker Roll</div>
                   <div style={{ fontSize: '10px', opacity: 0.85 }}>Twin labels side-by-side</div>
@@ -1050,47 +1239,94 @@ export default function ProductStickerModal({
                 Usable label area: <strong>{((currentSizeDef.width) - 2 * (config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5)).toFixed(1)} × {((currentSizeDef.height) - 2 * (config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5)).toFixed(1)} mm</strong> (all text & barcode stay inside).
               </div>
 
-              {/* Media Width & Auto-Center */}
+              {/* MEDIA ALIGNMENT, PRINTHEAD & LINER DIMENSIONS (Requirement 3) */}
               <div style={{ marginTop: '8px', background: 'rgba(0,0,0,0.03)', padding: '8px 10px', borderRadius: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ fontSize: '11px', fontWeight: '700', color: '#475569' }}>
-                    Media Width (Backing Roll):
+                    Media alignment on printhead:
                   </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min={pageW}
-                      max="150"
-                      placeholder={String(pageW)}
-                      value={config.mediaWidthMm ?? ''}
-                      onChange={(e) => handleConfigChange('mediaWidthMm', e.target.value)}
-                      style={{ ...styles.numberInput, width: '56px' }}
-                      title={`Physical roll backing width in mm (default pageW = ${pageW} mm)`}
-                    />
-                    <span style={{ fontSize: '11px', fontWeight: '800', color: '#0F172A' }}>mm</span>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {[
+                      { id: 'left', label: 'Left' },
+                      { id: 'centre', label: 'Centre' },
+                      { id: 'right', label: 'Right' }
+                    ].map(al => (
+                      <button
+                        key={al.id}
+                        type="button"
+                        onClick={() => handleConfigChange('mediaAlignment', al.id)}
+                        style={{
+                          ...styles.pillBtn,
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          backgroundColor: (config.mediaAlignment || 'centre') === al.id ? '#0284C7' : '#F1F5F9',
+                          color: (config.mediaAlignment || 'centre') === al.id ? '#FFFFFF' : '#475569',
+                          border: (config.mediaAlignment || 'centre') === al.id ? '1px solid #0284C7' : '1px solid #CBD5E1'
+                        }}
+                      >
+                        {al.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', fontSize: '10.5px' }}>
-                  <span style={{ color: '#475569' }}>
-                    Auto-center Left Offset: <strong>{leftOffset_auto >= 0 ? `+${leftOffset_auto.toFixed(1)}` : leftOffset_auto.toFixed(1)} mm</strong>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FFFFFF', padding: '5px 8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '10.5px', fontWeight: '700', color: '#475569' }}>Printhead Width:</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="50"
+                        max="160"
+                        value={config.printheadWidthMm ?? 104}
+                        onChange={(e) => handleConfigChange('printheadWidthMm', parseFloat(e.target.value) || 104)}
+                        style={{ ...styles.numberInput, width: '48px', padding: '2px 4px', fontSize: '11px' }}
+                        title="TSC TE244 printhead width (default 104 mm)"
+                      />
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: '#0F172A' }}>mm</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FFFFFF', padding: '5px 8px', borderRadius: '6px', border: '1px solid #E2E8F0' }}>
+                    <span style={{ fontSize: '10.5px', fontWeight: '700', color: '#475569' }}>Liner Width:</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="20"
+                        max="160"
+                        value={config.linerWidthMm ?? 83}
+                        onChange={(e) => handleConfigChange('linerWidthMm', parseFloat(e.target.value) || 83)}
+                        style={{ ...styles.numberInput, width: '48px', padding: '2px 4px', fontSize: '11px' }}
+                        title="Backing paper liner width (default 83 mm for 79 mm labels)"
+                      />
+                      <span style={{ fontSize: '10px', fontWeight: '800', color: '#0F172A' }}>mm</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* COMPUTED COLUMN X INDICATOR */}
+                <div style={{
+                  marginTop: '8px',
+                  padding: '5px 8px',
+                  background: '#F0F9FF',
+                  border: '1px solid #BAE6FD',
+                  borderRadius: '6px',
+                  fontSize: '10.5px',
+                  color: '#0369A1',
+                  fontWeight: '700',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <span>
+                    Computed Label X: Left label X = <strong>{layout.col0X.toFixed(1)} mm</strong>{layout.cols > 1 ? `, Right label X = ${layout.col1X.toFixed(1)} mm` : ''}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => handleConfigChange('offsetXmm', leftOffset_auto)}
-                    style={{
-                      padding: '2px 8px',
-                      fontSize: '10.5px',
-                      fontWeight: '700',
-                      color: '#0284C7',
-                      background: '#E0F2FE',
-                      border: '1px solid #BAE6FD',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Apply Auto-Center
-                  </button>
+                  <span style={{ fontSize: '9.5px', color: '#0284C7', fontWeight: '600' }}>
+                    (mediaLeft: {layout.mediaLeft.toFixed(1)} mm)
+                  </span>
                 </div>
               </div>
 
@@ -1102,12 +1338,12 @@ export default function ProductStickerModal({
                     <input
                       type="number"
                       step="0.5"
-                      min="-30"
-                      max="30"
+                      min="-50"
+                      max="50"
                       value={config.offsetXmm ?? 0}
                       onChange={(e) => handleConfigChange('offsetXmm', parseFloat(e.target.value) || 0)}
                       style={styles.numberInput}
-                      title="Row Left Offset fine-tuning (-30 to +30 mm)"
+                      title="Left Offset accepts negative and positive values, applied once to whole sheet"
                     />
                     <span style={{ fontSize: '11px', fontWeight: '800', color: '#0F172A' }}>mm</span>
                   </div>
@@ -1118,12 +1354,12 @@ export default function ProductStickerModal({
                     <input
                       type="number"
                       step="0.5"
-                      min="-30"
-                      max="30"
+                      min="-50"
+                      max="50"
                       value={config.offsetYmm ?? 0}
                       onChange={(e) => handleConfigChange('offsetYmm', parseFloat(e.target.value) || 0)}
                       style={styles.numberInput}
-                      title="Row Top Offset fine-tuning (-30 to +30 mm)"
+                      title="Row Top Offset fine-tuning (-50 to +50 mm)"
                     />
                     <span style={{ fontSize: '11px', fontWeight: '800', color: '#0F172A' }}>mm</span>
                   </div>
@@ -1135,10 +1371,10 @@ export default function ProductStickerModal({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontSize: '11px', fontWeight: '700', color: '#475569' }}>
-                      Driver Left Margin Comp:
+                      Driver Fine-Tune Shift:
                     </div>
                     <div style={{ fontSize: '9.5px', color: '#64748B' }}>
-                      Compensates non-printable margin (saved per printer)
+                      Nudge labels horizontally across printhead
                     </div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1150,13 +1386,10 @@ export default function ProductStickerModal({
                       value={config.driverLeftMarginMm ?? 0}
                       onChange={(e) => handleConfigChange('driverLeftMarginMm', parseFloat(e.target.value) || 0)}
                       style={styles.numberInput}
-                      title="Driver hardware non-printable margin (default 0 mm, e.g. +6 mm for TSC TE244)"
+                      title="Driver hardware non-printable margin adjustment"
                     />
                     <span style={{ fontSize: '11px', fontWeight: '800', color: '#0F172A' }}>mm</span>
                   </div>
-                </div>
-                <div style={{ fontSize: '10px', fontWeight: '700', color: '#0284C7', marginTop: '4px' }}>
-                  Total Effective Left: <strong>{totalLeftOffset >= 0 ? `+${totalLeftOffset.toFixed(1)}` : totalLeftOffset.toFixed(1)} mm</strong> (Left: {offX}mm + Driver: {driverLeftComp}mm)
                 </div>
                 <div style={{ display: 'flex', gap: '5px', marginTop: '6px', flexWrap: 'wrap' }}>
                   <button
@@ -1165,7 +1398,7 @@ export default function ProductStickerModal({
                     style={{
                       ...styles.pillBtn,
                       padding: '3px 7px',
-                      fontSize: '10.5px',
+                      fontSize: '10px',
                       fontWeight: '700',
                       backgroundColor: (config.driverLeftMarginMm || 0) === 0 ? '#E0F2FE' : '#F1F5F9',
                       color: (config.driverLeftMarginMm || 0) === 0 ? '#0284C7' : '#475569',
@@ -1176,34 +1409,48 @@ export default function ProductStickerModal({
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleConfigChange('driverLeftMarginMm', 2.0)}
+                    style={{
+                      ...styles.pillBtn,
+                      padding: '3px 7px',
+                      fontSize: '10px',
+                      fontWeight: '700',
+                      backgroundColor: (config.driverLeftMarginMm || 0) === 2.0 ? '#DCFCE7' : '#F1F5F9',
+                      color: (config.driverLeftMarginMm || 0) === 2.0 ? '#16A34A' : '#475569',
+                      border: (config.driverLeftMarginMm || 0) === 2.0 ? '1px solid #86EFAC' : '1px solid #CBD5E1'
+                    }}
+                  >
+                    +2.0 mm
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleConfigChange('driverLeftMarginMm', 4.0)}
                     style={{
                       ...styles.pillBtn,
                       padding: '3px 7px',
-                      fontSize: '10.5px',
+                      fontSize: '10px',
                       fontWeight: '700',
-                      backgroundColor: (config.driverLeftMarginMm || 0) === 4.0 ? '#DCFCE7' : '#F1F5F9',
-                      color: (config.driverLeftMarginMm || 0) === 4.0 ? '#16A34A' : '#475569',
-                      border: (config.driverLeftMarginMm || 0) === 4.0 ? '1px solid #86EFAC' : '1px solid #CBD5E1'
+                      backgroundColor: (config.driverLeftMarginMm || 0) === 4.0 ? '#FEF3C7' : '#F1F5F9',
+                      color: (config.driverLeftMarginMm || 0) === 4.0 ? '#D97706' : '#475569',
+                      border: (config.driverLeftMarginMm || 0) === 4.0 ? '1px solid #FCD34D' : '1px solid #CBD5E1'
                     }}
-                    title="Recommended compensation for 2-row rolls on TSC TE244 driver to center left and right labels"
                   >
-                    +4.0 mm (TSC TE244 Center)
+                    +4.0 mm
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleConfigChange('driverLeftMarginMm', 6.0)}
+                    onClick={() => handleConfigChange('driverLeftMarginMm', -2.0)}
                     style={{
                       ...styles.pillBtn,
                       padding: '3px 7px',
-                      fontSize: '10.5px',
+                      fontSize: '10px',
                       fontWeight: '700',
-                      backgroundColor: (config.driverLeftMarginMm || 0) === 6.0 ? '#FEF3C7' : '#F1F5F9',
-                      color: (config.driverLeftMarginMm || 0) === 6.0 ? '#D97706' : '#475569',
-                      border: (config.driverLeftMarginMm || 0) === 6.0 ? '1px solid #FCD34D' : '1px solid #CBD5E1'
+                      backgroundColor: (config.driverLeftMarginMm || 0) === -2.0 ? '#FEE2E2' : '#F1F5F9',
+                      color: (config.driverLeftMarginMm || 0) === -2.0 ? '#DC2626' : '#475569',
+                      border: (config.driverLeftMarginMm || 0) === -2.0 ? '1px solid #FCA5A5' : '1px solid #CBD5E1'
                     }}
                   >
-                    +6.0 mm (Wide Backing)
+                    -2.0 mm
                   </button>
                 </div>
               </div>
@@ -1215,74 +1462,88 @@ export default function ProductStickerModal({
                 <label style={styles.sectionLabel}>
                   <Compass size={14} style={{ marginRight: 6 }} /> Print Orientation / Rotation
                 </label>
-                <span style={{ fontSize: '10.5px', fontWeight: '800', color: effectiveRotation !== 0 ? '#0284C7' : '#64748B' }}>
-                  Effective: {effectiveRotation}°
+                <span style={{ fontSize: '10.5px', fontWeight: '800', color: isPortraitSheetMode ? '#059669' : (effectiveRotation !== 0 ? '#0284C7' : '#64748B') }}>
+                  {isPortraitSheetMode ? 'Portrait Lock: 0° Upright' : `Effective: ${effectiveRotation}°`}
                 </span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
-                {[0, 90, 180, 270].map((deg) => (
-                  <button
-                    key={deg}
-                    type="button"
-                    style={{
-                      ...styles.pillBtn,
-                      padding: '6px 4px',
-                      ...((parseInt(config.rotation, 10) || 0) === deg ? styles.pillBtnActive : {})
-                    }}
-                    onClick={() => handleConfigChange('rotation', deg)}
-                  >
-                    <div style={{ fontWeight: '800', fontSize: '12px' }}>{deg}°</div>
-                    <div style={{ fontSize: '9.5px', opacity: 0.85 }}>
-                      {deg === 0 ? 'Normal' : deg === 90 ? '90° CW' : deg === 180 ? '180° Inv' : '270° CCW'}
-                    </div>
-                  </button>
-                ))}
-              </div>
 
-              {/* Driver base offset dropdown */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px', background: 'rgba(0,0,0,0.03)', padding: '6px 10px', borderRadius: '8px' }}>
-                <span style={{ fontSize: '11.5px', fontWeight: '700', color: '#475569' }}>
-                  Driver base offset:
-                </span>
-                <select
-                  value={config.driverBaseOffset !== undefined ? config.driverBaseOffset : 0}
-                  onChange={(e) => handleConfigChange('driverBaseOffset', parseInt(e.target.value, 10))}
-                  style={{
-                    padding: '3px 8px',
-                    fontSize: '11.5px',
-                    fontWeight: '700',
-                    color: '#0F172A',
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #CBD5E1',
-                    borderRadius: '6px',
-                    outline: 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  <option value={0}>0° (None / Raw)</option>
-                  <option value={90}>90° (TSC / Seagull Default)</option>
-                  <option value={180}>180° (Inverted)</option>
-                  <option value={270}>270° (CCW)</option>
-                </select>
-              </div>
-
-              {/* Auto-fix orientation checkbox */}
-              <div style={{ marginTop: '8px', padding: '8px 10px', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '8px' }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={!!config.autoFixOrientation}
-                    onChange={(e) => handleConfigChange('autoFixOrientation', e.target.checked)}
-                    style={{ ...styles.checkbox, marginTop: '2px' }}
-                  />
-                  <div style={{ fontSize: '11.5px', lineHeight: 1.35, color: '#0369A1' }}>
-                    <strong>Auto-fix orientation (Driver Compensation)</strong>
-                    <div style={{ fontSize: '10.5px', color: '#0284C7', marginTop: '2px' }}>
-                      Applies counter-rotation (+270°) to prevent thermal print drivers from automatically rotating 2-up landscape rolls.
-                    </div>
+              {isPortraitSheetMode ? (
+                <div style={{ padding: '9px 11px', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '8px', marginTop: '2px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#166534', fontWeight: '800', fontSize: '12px' }}>
+                    <Check size={15} /> 0° Upright Portrait Mode Active
                   </div>
-                </label>
-              </div>
+                  <div style={{ fontSize: '11px', color: '#15803D', marginTop: '3px', lineHeight: 1.4 }}>
+                    Chrome sends native vertical pages ({layout.paperW}×{layout.paperH} mm) matching the TSC TE244 "{layout.paperSizeName}" driver form. Rotation is locked to 0° upright with zero software transformation so labels print along roll without rotating.
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+                    {[0, 90, 180, 270].map((deg) => (
+                      <button
+                        key={deg}
+                        type="button"
+                        style={{
+                          ...styles.pillBtn,
+                          padding: '6px 4px',
+                          ...((parseInt(config.rotation, 10) || 0) === deg ? styles.pillBtnActive : {})
+                        }}
+                        onClick={() => handleConfigChange('rotation', deg)}
+                      >
+                        <div style={{ fontWeight: '800', fontSize: '12px' }}>{deg}°</div>
+                        <div style={{ fontSize: '9.5px', opacity: 0.85 }}>
+                          {deg === 0 ? 'Normal' : deg === 90 ? '90° CW' : deg === 180 ? '180° Inv' : '270° CCW'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Driver base offset dropdown */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px', background: 'rgba(0,0,0,0.03)', padding: '6px 10px', borderRadius: '8px' }}>
+                    <span style={{ fontSize: '11.5px', fontWeight: '700', color: '#475569' }}>
+                      Driver base offset:
+                    </span>
+                    <select
+                      value={config.driverBaseOffset !== undefined ? config.driverBaseOffset : 0}
+                      onChange={(e) => handleConfigChange('driverBaseOffset', parseInt(e.target.value, 10))}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: '11.5px',
+                        fontWeight: '700',
+                        color: '#0F172A',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #CBD5E1',
+                        borderRadius: '6px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <option value={0}>0° (None / Raw)</option>
+                      <option value={90}>90° (TSC / Seagull Default)</option>
+                      <option value={180}>180° (Inverted)</option>
+                      <option value={270}>270° (CCW)</option>
+                    </select>
+                  </div>
+
+                  {/* Auto-fix orientation checkbox */}
+                  <div style={{ marginTop: '8px', padding: '8px 10px', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '8px' }}>
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={!!config.autoFixOrientation}
+                        onChange={(e) => handleConfigChange('autoFixOrientation', e.target.checked)}
+                        style={{ ...styles.checkbox, marginTop: '2px' }}
+                      />
+                      <div style={{ fontSize: '11.5px', lineHeight: 1.35, color: '#0369A1' }}>
+                        <strong>Auto-fix orientation (Driver Compensation)</strong>
+                        <div style={{ fontSize: '10.5px', color: '#0284C7', marginTop: '2px' }}>
+                          Applies counter-rotation (+270°) to prevent thermal print drivers from automatically rotating 2-up landscape rolls.
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </>
+              )}
 
               {/* Direct Thermal Command Mode toggle */}
               <div style={{ marginTop: '6px', padding: '8px 10px', background: 'rgba(0,0,0,0.02)', border: '1px solid #E2E8F0', borderRadius: '8px' }}>
@@ -1713,23 +1974,70 @@ export default function ProductStickerModal({
                   </span>
                 )}
               </div>
+
+              {agentStatus === 'connected' ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: '6px', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', fontWeight: '800', color: '#065F46' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981' }}></span>
+                    <span>Local Print Agent Active (Port 9101 • Win32 RAW Spooler)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={refreshPrintersList}
+                    disabled={agentChecking}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', color: '#047857', fontWeight: '800', textDecoration: 'underline' }}
+                  >
+                    {agentChecking ? '...' : 'Refresh'}
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '8px 10px', background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: '6px', marginBottom: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', fontWeight: '800', color: '#0369A1' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#0284C7' }}></span>
+                    <span>Browser Print Active (No Agent Required)</span>
+                  </div>
+                  <div style={{ fontSize: '10.5px', color: '#0284C7', lineHeight: 1.35 }}>
+                    Prints directly through the Chrome print preview dialog using upright portrait sheets ({layout.paperW}×{layout.paperH} mm).
+                  </div>
+                </div>
+              )}
+
               <select
                 value={selectedPrinter || '__browser_print__'}
-                onChange={(e) => setSelectedPrinter(e.target.value === '__browser_print__' ? '' : e.target.value)}
+                onChange={(e) => setSelectedPrinter(e.target.value)}
                 style={styles.selectInput}
               >
+                <option value="__browser_print__">
+                  🌐 Browser Print Dialog (Portrait Sheet - Recommended)
+                </option>
                 {systemPrinters.map((p) => {
-                  const tag = p.is_label ? 'Thermal Label / TSPL Direct - Recommended' : (p.type === 'usb' ? 'USB Spooler' : 'Windows Spooler');
+                  const tag = p.is_label ? 'Direct Spooler' : (p.type === 'usb' ? 'USB Spooler' : 'Windows Spooler');
                   return (
                     <option key={p.name} value={p.name}>
-                      🖨️ Direct: {p.name} ({tag}) {p.isDefault ? '• Default' : ''}
+                      🖨️ Direct Spooler: {p.name} ({tag}) {p.isDefault ? '• Default' : ''}
                     </option>
                   );
                 })}
-                <option value="__browser_print__">
-                  🌐 Browser Print Dialog (Any Thermal / Laser Printer / Save to PDF)
-                </option>
               </select>
+
+              {/* Chrome Print Dialog Hint */}
+              <div style={{
+                marginTop: '8px',
+                padding: '7px 10px',
+                background: '#F0F9FF',
+                border: '1px solid #BAE6FD',
+                borderRadius: '8px',
+                fontSize: '11px',
+                color: '#0369A1',
+                lineHeight: 1.4
+              }}>
+                <div style={{ fontWeight: '800', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Info size={13} style={{ flexShrink: 0 }} /> Chrome Print Preview Values:
+                </div>
+                <div>
+                  Printer: <strong>{selectedPrinter && selectedPrinter !== '__browser_print__' ? selectedPrinter : (agentInfo?.defaultPrinter || 'TSC TE244')}</strong> · Paper size: <strong>{layout.paperSizeName || 'USER'} ({layout.paperW}×{layout.paperH} mm)</strong> · Margins: <strong>None</strong> · Scale: <strong>100%</strong>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1776,17 +2084,88 @@ export default function ProductStickerModal({
               </div>
             </div>
 
-            {/* BARCODE VALIDATION ERROR BANNER */}
-            {!previewBarcodeValidation.valid && (
+            {/* BARCODE VALIDATION ERROR & SCAN RELIABILITY BANNER */}
+            {!previewBarcodeValidation.valid ? (
               <div style={styles.barcodeErrorBanner}>
                 <AlertTriangle size={15} style={{ flexShrink: 0 }} />
                 <span>Barcode Warning: {previewBarcodeValidation.error}</span>
+              </div>
+            ) : previewBarcodeValidation.isDense ? (
+              <div style={{ ...styles.barcodeErrorBanner, backgroundColor: '#FFFBEB', borderColor: '#FCD34D', color: '#92400E' }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0, color: '#D97706' }} />
+                <span>Barcode value too long, scan reliability reduced</span>
+              </div>
+            ) : null}
+
+            {/* DRIVER FORM MISMATCH WARNING BANNER */}
+            {driverFormMismatch && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                backgroundColor: '#FFFBEB',
+                border: '1px solid #FCD34D',
+                borderRadius: '6px',
+                marginBottom: '8px',
+                color: '#92400E',
+                fontSize: '11px',
+                lineHeight: 1.4
+              }}>
+                <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>Driver Form Mismatch:</strong> Windows driver reports <strong>{driverFormMismatch.driverW}×{driverFormMismatch.driverH} mm ({driverFormMismatch.formName})</strong>, but designer is set to <strong>{driverFormMismatch.designerW}×{driverFormMismatch.designerH} mm ({layout.paperSizeName})</strong>. Match the Windows driver form to prevent misalignment.
+                </span>
+              </div>
+            )}
+
+            {/* CONTENT TALLER THAN PAGE / ROWS SHRUNK NOTICE */}
+            {layout.rowsShrunk && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                backgroundColor: '#EFF6FF',
+                border: '1px solid #93C5FD',
+                borderRadius: '6px',
+                marginBottom: '8px',
+                color: '#1E40AF',
+                fontSize: '11px',
+                lineHeight: 1.4
+              }}>
+                <Info size={16} color="#2563EB" style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>Rows Shrunk:</strong> Requested {layout.requestedRows} rows exceed page height ({layout.paperH} mm). Automatically reduced to <strong>{layout.rows} row{layout.rows > 1 ? 's' : ''}</strong> per sheet to prevent overflow.
+                </span>
+              </div>
+            )}
+
+            {/* OUT OF BOUNDS WARNING BANNER */}
+            {layout.isOutOfBounds && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FCA5A5',
+                borderRadius: '6px',
+                marginBottom: '8px',
+                color: '#991B1B',
+                fontSize: '11px',
+                lineHeight: 1.4
+              }}>
+                <AlertTriangle size={16} color="#DC2626" style={{ flexShrink: 0 }} />
+                <span>
+                  <strong>Printable Area Warning:</strong> Label content falls outside printable form boundary (Left edge: {layout.col0X.toFixed(1)} mm, Right edge: {layout.rightEdgeX.toFixed(1)} mm, Page: {layout.paperW} mm). Adjust Left Offset or Media Alignment.
+                </span>
               </div>
             )}
 
             <div style={styles.previewContainer}>
               {previewMode === 'single' ? (
-                /* SINGLE STICKER DETAILED PREVIEW (EXACT 1:1 SCALED WITH ROTATION & OFFSETS) */
+                /* SINGLE STICKER DETAILED PREVIEW */
                 <div style={styles.singlePreviewWrapper}>
                   <div
                     style={{
@@ -1800,37 +2179,25 @@ export default function ProductStickerModal({
                       border: '1px solid #94A3B8'
                     }}
                   >
-                    {/* Simulated Virtual Print Page Box */}
-                    <div
-                      style={{
-                        width: `${singleRotTransform.pageWidthMm}mm`,
-                        height: `${singleRotTransform.pageHeightMm}mm`,
-                        transform: `scale(${singleScaleFactor})`,
-                        transformOrigin: 'top left',
-                        position: 'relative',
-                        pointerEvents: 'none'
-                      }}
-                    >
-                      {/* Rotated & Translated Sticker Content */}
+                    {isPortraitSheetMode ? (
+                      /* Upright Single Sticker (Zero Rotation) */
                       <div
                         style={{
                           width: `${currentSizeDef.width}mm`,
                           height: `${currentSizeDef.height}mm`,
-                          transform: singleRotTransform.sheetTransform || 'none',
+                          transform: `scale(${singleScaleFactor})`,
                           transformOrigin: 'top left',
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          overflow: 'hidden'
+                          position: 'relative',
+                          pointerEvents: 'none'
                         }}
                       >
                         <div
                           style={{
-                            position: 'absolute',
-                            left: `${totalLeftOffset}mm`,
-                            top: `${totalTopOffset}mm`,
                             width: `${currentSizeDef.width}mm`,
                             height: `${currentSizeDef.height}mm`,
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
                             overflow: 'hidden'
                           }}
                         >
@@ -1841,76 +2208,192 @@ export default function ProductStickerModal({
                           />
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      /* Legacy Rotated Simulated Virtual Print Page Box */
+                      <div
+                        style={{
+                          width: `${singleRotTransform.pageWidthMm}mm`,
+                          height: `${singleRotTransform.pageHeightMm}mm`,
+                          transform: `scale(${singleScaleFactor})`,
+                          transformOrigin: 'top left',
+                          position: 'relative',
+                          pointerEvents: 'none'
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: `${currentSizeDef.width}mm`,
+                            height: `${currentSizeDef.height}mm`,
+                            transform: singleRotTransform.sheetTransform || 'none',
+                            transformOrigin: 'top left',
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            overflow: 'hidden'
+                          }}
+                        >
+                          <div
+                            style={{
+                              position: 'absolute',
+                              left: `${totalLeftOffset}mm`,
+                              top: `${totalTopOffset}mm`,
+                              width: `${currentSizeDef.width}mm`,
+                              height: `${currentSizeDef.height}mm`,
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <StickerCard
+                              item={currentPreviewItem}
+                              config={config}
+                              shopData={shopData}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div style={{ marginTop: '10px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
-                    Label: <strong>{currentSizeDef.width}×{currentSizeDef.height}mm</strong> • Page: <strong>{singleRotTransform.pageWidthMm}×{singleRotTransform.pageHeightMm}mm</strong> @ <strong>{effectiveRotation}°</strong> • Offset: [Left: {config.offsetXmm || 0}mm (Total: {totalLeftOffset}mm), Top: {config.offsetYmm || 0}mm] • Safe: {config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5}mm
+                    Label: <strong>{currentSizeDef.width}×{currentSizeDef.height}mm</strong> {isPortraitSheetMode ? '(Upright Portrait)' : `@ ${effectiveRotation}°`} • Offset: [Left: {config.offsetXmm || 0}mm (Total: {totalLeftOffset}mm), Top: {config.offsetYmm || 0}mm] • Safe: {config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5}mm
                   </div>
                 </div>
               ) : previewMode === 'roll' ? (
-                /* ROLL FEED CONTINUOUS SIMULATION (EXACT 1:1 SCALED, UNCLIPPED 2-ROW WITH ROTATION & OFFSETS) */
-                <div style={styles.rollFeedWrapper}>
-                  <div style={styles.rollLiner}>
-                    {rollRows.map((rowIdx) => (
-                      <div
-                        key={rowIdx}
-                        style={{
-                          width: `${rollBoxWidth}px`,
-                          height: `${rollBoxHeight}px`,
-                          position: 'relative',
-                          marginBottom: `${rollGapPx}px`,
-                          boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
-                          borderRadius: '3px',
-                          overflow: 'hidden',
-                          backgroundColor: '#FFFFFF',
-                          border: '1px solid #CBD5E1'
-                        }}
-                      >
-                        {/* Simulated Print Page Box */}
-                        <div
-                          style={{
-                            width: `${rotTransform.pageWidthMm}mm`,
-                            height: `${rotTransform.pageHeightMm}mm`,
-                            transform: `scale(${rollScaleFactor})`,
-                            transformOrigin: 'top left',
-                            position: 'relative',
-                            pointerEvents: 'none'
-                          }}
-                        >
-                          {/* Rotated & Translated Sheet Content */}
+                /* ROLL / SHEET FEED PREVIEW */
+                isPortraitSheetMode ? (
+                  /* PORTRAIT SHEET PREVIEW (Portrait Sheet: Grid of cells, page boundary & page count) */
+                  <div style={styles.rollFeedWrapper}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+                      {Array.from({ length: Math.min(totalSheetsNeeded, 4) }).map((_, sheetIdx) => (
+                        <div key={sheetIdx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <div style={{ fontSize: '10.5px', fontWeight: '800', color: '#0369A1', marginBottom: '4px' }}>
+                            Sheet {sheetIdx + 1} of {totalSheetsNeeded} ({layout.paperSizeName} {layout.paperW}×{layout.paperH} mm)
+                          </div>
                           <div
                             style={{
-                              width: `${pageW}mm`,
-                              height: `${pageH}mm`,
-                              transform: rotTransform.sheetTransform || 'none',
+                              width: `${sheetBoxWidth}px`,
+                              height: `${sheetBoxHeight}px`,
+                              position: 'relative',
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                              borderRadius: '3px',
+                              overflow: 'hidden',
+                              backgroundColor: '#FFFFFF',
+                              border: '1px solid #94A3B8'
+                            }}
+                          >
+                            {/* Simulated Portrait Print Sheet Box */}
+                            <div
+                              style={{
+                                width: `${layout.paperW}mm`,
+                                height: `${layout.paperH}mm`,
+                                transform: `scale(${sheetScaleFactor})`,
+                                transformOrigin: 'top left',
+                                position: 'relative',
+                                pointerEvents: 'none'
+                              }}
+                            >
+                              {Array.from({ length: layout.rows }).map((_, r) => (
+                                Array.from({ length: layout.cols }).map((_, c) => {
+                                  const linearIdx = sheetIdx * layout.stickersPerSheet + r * layout.cols + c;
+                                  const pos = layout.getCellPosition(c, r);
+                                  const isFilled = linearIdx < targetStickersCount;
+                                  const stickerItem = isFilled ? (items[linearIdx % items.length] || currentPreviewItem) : null;
+                                  return (
+                                    <div
+                                      key={`cell-${c}-${r}`}
+                                      style={{
+                                        position: 'absolute',
+                                        left: `${pos.x}mm`,
+                                        top: `${pos.y}mm`,
+                                        width: `${layout.labelW}mm`,
+                                        height: `${layout.labelH}mm`,
+                                        overflow: 'hidden',
+                                        backgroundColor: isFilled ? '#FFFFFF' : 'rgba(241, 245, 249, 0.4)',
+                                        border: isFilled ? '1px dashed #CBD5E1' : '1px dashed #E2E8F0',
+                                        boxSizing: 'border-box'
+                                      }}
+                                    >
+                                      {isFilled ? (
+                                        <StickerCard
+                                          item={stickerItem}
+                                          config={config}
+                                          shopData={shopData}
+                                        />
+                                      ) : (
+                                        <div style={{
+                                          width: '100%',
+                                          height: '100%',
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          color: '#94A3B8',
+                                          fontSize: '9.5px',
+                                          fontWeight: '700'
+                                        }}>
+                                          [ Blank / Unused ]
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {totalSheetsNeeded > 4 && (
+                        <div style={{ fontSize: '11px', color: '#64748B', fontStyle: 'italic' }}>
+                          + {totalSheetsNeeded - 4} more sheet{totalSheetsNeeded - 4 > 1 ? 's' : ''} will print in sequence
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ marginTop: '10px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
+                      Portrait sheet preview: <strong>{totalSheetsNeeded} sheet{totalSheetsNeeded > 1 ? 's' : ''} for {targetStickersCount} sticker{targetStickersCount > 1 ? 's' : ''}</strong> • Form: <strong>{layout.paperSizeName} ({layout.paperW}×{layout.paperH}mm)</strong> • Grid: <strong>{layout.cols} col × {layout.rows} row ({layout.stickersPerSheet} per sheet)</strong> • Inter-label gap: {layout.gap}mm
+                    </div>
+                  </div>
+                ) : (
+                  /* LEGACY CONTINUOUS ROLL FEED SIMULATION */
+                  <div style={styles.rollFeedWrapper}>
+                    <div style={styles.rollLiner}>
+                      {rollRows.map((rowIdx) => (
+                        <div
+                          key={rowIdx}
+                          style={{
+                            width: `${rollBoxWidth}px`,
+                            height: `${rollBoxHeight}px`,
+                            position: 'relative',
+                            marginBottom: `${rollGapPx}px`,
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            backgroundColor: '#FFFFFF',
+                            border: '1px solid #CBD5E1'
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${rotTransform.pageWidthMm}mm`,
+                              height: `${rotTransform.pageHeightMm}mm`,
+                              transform: `scale(${rollScaleFactor})`,
                               transformOrigin: 'top left',
-                              position: 'absolute',
-                              top: 0,
-                              left: 0,
-                              overflow: 'hidden'
+                              position: 'relative',
+                              pointerEvents: 'none'
                             }}
                           >
                             <div
                               style={{
+                                width: `${pageW}mm`,
+                                height: `${pageH}mm`,
+                                transform: rotTransform.sheetTransform || 'none',
+                                transformOrigin: 'top left',
                                 position: 'absolute',
-                                left: `${cell1Left}mm`,
-                                top: `${cellTop}mm`,
-                                width: `${currentSizeDef.width}mm`,
-                                height: `${currentSizeDef.height}mm`,
+                                top: 0,
+                                left: 0,
                                 overflow: 'hidden'
                               }}
                             >
-                              <StickerCard
-                                item={currentPreviewItem}
-                                config={config}
-                                shopData={shopData}
-                              />
-                            </div>
-                            {is2Row && (
                               <div
                                 style={{
                                   position: 'absolute',
-                                  left: `${cell2Left}mm`,
+                                  left: `${cell1Left}mm`,
                                   top: `${cellTop}mm`,
                                   width: `${currentSizeDef.width}mm`,
                                   height: `${currentSizeDef.height}mm`,
@@ -1923,85 +2406,207 @@ export default function ProductStickerModal({
                                   shopData={shopData}
                                 />
                               </div>
-                            )}
+                              {is2Row && (
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: `${cell2Left}mm`,
+                                    top: `${cellTop}mm`,
+                                    width: `${currentSizeDef.width}mm`,
+                                    height: `${currentSizeDef.height}mm`,
+                                    overflow: 'hidden'
+                                  }}
+                                >
+                                  <StickerCard
+                                    item={currentPreviewItem}
+                                    config={config}
+                                    shopData={shopData}
+                                  />
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                    <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
+                      Roll simulation: <strong>{is2Row ? '2 stickers per row' : '1 sticker per row'}</strong> with <strong>{gapMm}mm inter-label gap</strong> • Page: <strong>{rotTransform.pageWidthMm}×{rotTransform.pageHeightMm}mm</strong> @ <strong>{effectiveRotation}°</strong> • Cell 1: {cell1Left}mm{is2Row ? `, Cell 2: ${cell2Left}mm` : ''}
+                    </div>
                   </div>
-                  <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
-                    Roll simulation: <strong>{is2Row ? '2 stickers per row' : '1 sticker per row'}</strong> with <strong>{gapMm}mm inter-label gap</strong> • Page: <strong>{rotTransform.pageWidthMm}×{rotTransform.pageHeightMm}mm</strong> @ <strong>{effectiveRotation}°</strong> • Cell 1: {cell1Left}mm{is2Row ? `, Cell 2: ${cell2Left}mm` : ''}
-                  </div>
-                </div>
+                )
               ) : (
                 /* CALIBRATION GRID VIEW */
                 <div style={styles.rollFeedWrapper}>
-                  <div style={styles.rollLiner}>
-                    <div
-                      style={{
-                        width: `${rollBoxWidth}px`,
-                        height: `${rollBoxHeight}px`,
-                        position: 'relative',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-                        borderRadius: '3px',
-                        overflow: 'hidden',
-                        backgroundColor: '#FFFFFF',
-                        border: '1px solid #CBD5E1'
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${rotTransform.pageWidthMm}mm`,
-                          height: `${rotTransform.pageHeightMm}mm`,
-                          transform: `scale(${rollScaleFactor})`,
-                          transformOrigin: 'top left',
-                          position: 'relative',
-                          pointerEvents: 'none'
-                        }}
-                      >
+                  {isPortraitSheetMode ? (
+                    /* PORTRAIT SHEET ORIENTATION TEST & CALIBRATION VIEW */
+                    <>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                        <div style={{ fontSize: '10.5px', fontWeight: '800', color: '#0369A1', marginBottom: '4px' }}>
+                          Diagnostic Orientation Test Sheet (Form: {layout.paperSizeName} {layout.paperW}×{layout.paperH} mm)
+                        </div>
                         <div
                           style={{
-                            width: `${pageW}mm`,
-                            height: `${pageH}mm`,
-                            transform: rotTransform.sheetTransform || 'none',
-                            transformOrigin: 'top left',
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            overflow: 'hidden'
+                            width: `${sheetBoxWidth}px`,
+                            height: `${sheetBoxHeight}px`,
+                            position: 'relative',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            backgroundColor: '#FFFFFF',
+                            border: '1px solid #94A3B8'
                           }}
                         >
                           <div
                             style={{
-                              position: 'absolute',
-                              left: `${cell1Left}mm`,
-                              top: `${cellTop}mm`,
-                              width: `${currentSizeDef.width}mm`,
-                              height: `${currentSizeDef.height}mm`,
-                              overflow: 'hidden'
+                              width: `${layout.paperW}mm`,
+                              height: `${layout.paperH}mm`,
+                              transform: `scale(${sheetScaleFactor})`,
+                              transformOrigin: 'top left',
+                              position: 'relative',
+                              pointerEvents: 'none'
                             }}
-                            dangerouslySetInnerHTML={{ __html: renderCalibrationStickerHtml(is2Row ? 'LEFT LABEL' : 'LABEL 1', currentSizeDef, config) }}
-                          />
-                          {is2Row && (
+                          >
+                            {/* Full-width 0 to W mm Calibration Ruler across the page */}
                             <div
                               style={{
                                 position: 'absolute',
-                                left: `${cell2Left}mm`,
-                                top: `${cellTop}mm`,
-                                width: `${currentSizeDef.width}mm`,
-                                height: `${currentSizeDef.height}mm`,
+                                top: 0,
+                                left: 0,
+                                width: `${layout.paperW}mm`,
+                                zIndex: 10,
                                 overflow: 'hidden'
                               }}
-                              dangerouslySetInnerHTML={{ __html: renderCalibrationStickerHtml('RIGHT LABEL', currentSizeDef, config) }}
+                              dangerouslySetInnerHTML={{
+                                __html: renderFullWidthRulerSvg(layout, config)
+                              }}
                             />
-                          )}
+                            {Array.from({ length: layout.rows }).map((_, r) => (
+                              Array.from({ length: layout.cols }).map((_, c) => {
+                                const pos = layout.getCellPosition(c, r);
+                                return (
+                                  <div
+                                    key={`cal-${c}-${r}`}
+                                    style={{
+                                      position: 'absolute',
+                                      left: `${pos.x}mm`,
+                                      top: `${pos.y}mm`,
+                                      width: `${layout.labelW}mm`,
+                                      height: `${layout.labelH}mm`,
+                                      overflow: 'hidden'
+                                    }}
+                                    dangerouslySetInnerHTML={{
+                                      __html: renderOrientationTestStickerHtml(`CELL (${c + 1}, ${r + 1})`, currentSizeDef, config, layout)
+                                    }}
+                                  />
+                                );
+                              })
+                            ))}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                  <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
-                    Diagnostic Calibration Grid: 0.3mm outer die-cut border, dashed safe padding box ({config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5}mm), crosshairs, and offsets.
-                  </div>
+
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
+                        Orientation Test Grid: Upright arrows <strong>TOP ↑</strong> & <strong>FEED ↓</strong> in every cell, 0.3mm cut borders, and paper {layout.paperW}×{layout.paperH}mm.
+                      </div>
+
+                      {/* Driver Setup Instructions Card */}
+                      <div style={{
+                        marginTop: '12px',
+                        padding: '12px 14px',
+                        background: '#EFF6FF',
+                        border: '1px solid #BFDBFE',
+                        borderRadius: '8px',
+                        textAlign: 'left',
+                        width: '100%',
+                        maxWidth: `${Math.max(sheetBoxWidth, 380)}px`,
+                        boxSizing: 'border-box'
+                      }}>
+                        <div style={{ fontSize: '12px', fontWeight: '800', color: '#1E40AF', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                          <Compass size={15} color="#2563EB" /> TSC TE244 Driver "USER" Form Setup Steps:
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#1E3A8A', lineHeight: 1.45 }}>
+                          If test labels come out rotated sideways, configure the driver stock form:
+                          <ol style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                            <li>Open <strong>Control Panel → Devices and Printers → TSC TE244</strong> → <strong>Printing Preferences</strong>.</li>
+                            <li>Go to <strong>Page Setup</strong> tab, click <strong>New...</strong> and set Name: <strong>"{layout.paperSizeName}"</strong>.</li>
+                            <li>Set <strong>Width: {layout.paperW} mm</strong>, <strong>Height: {layout.paperH} mm</strong>, Type: <strong>Die-Cut with {layout.gap} mm gap</strong>.</li>
+                            <li>Set <strong>Orientation: Portrait</strong> and <strong>Rotation: 0°</strong>.</li>
+                            <li>In Chrome print dialog: select Paper size <strong>"{layout.paperSizeName}"</strong>, Margins: <strong>None</strong>, Scale: <strong>100%</strong>.</li>
+                          </ol>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    /* LEGACY CALIBRATION ROW VIEW */
+                    <>
+                      <div style={styles.rollLiner}>
+                        <div
+                          style={{
+                            width: `${rollBoxWidth}px`,
+                            height: `${rollBoxHeight}px`,
+                            position: 'relative',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                            borderRadius: '3px',
+                            overflow: 'hidden',
+                            backgroundColor: '#FFFFFF',
+                            border: '1px solid #CBD5E1'
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${rotTransform.pageWidthMm}mm`,
+                              height: `${rotTransform.pageHeightMm}mm`,
+                              transform: `scale(${rollScaleFactor})`,
+                              transformOrigin: 'top left',
+                              position: 'relative',
+                              pointerEvents: 'none'
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${pageW}mm`,
+                                height: `${pageH}mm`,
+                                transform: rotTransform.sheetTransform || 'none',
+                                transformOrigin: 'top left',
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                overflow: 'hidden'
+                              }}
+                            >
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  left: `${cell1Left}mm`,
+                                  top: `${cellTop}mm`,
+                                  width: `${currentSizeDef.width}mm`,
+                                  height: `${currentSizeDef.height}mm`,
+                                  overflow: 'hidden'
+                                }}
+                                dangerouslySetInnerHTML={{ __html: renderCalibrationStickerHtml(is2Row ? 'LEFT LABEL' : 'LABEL 1', currentSizeDef, config) }}
+                              />
+                              {is2Row && (
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    left: `${cell2Left}mm`,
+                                    top: `${cellTop}mm`,
+                                    width: `${currentSizeDef.width}mm`,
+                                    height: `${currentSizeDef.height}mm`,
+                                    overflow: 'hidden'
+                                  }}
+                                  dangerouslySetInnerHTML={{ __html: renderCalibrationStickerHtml('RIGHT LABEL', currentSizeDef, config) }}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: '8px', fontSize: '11px', color: '#64748B', textAlign: 'center' }}>
+                        Diagnostic Calibration Grid: 0.3mm outer die-cut border, dashed safe padding box ({config.safePaddingMm !== undefined ? config.safePaddingMm : 2.5}mm), crosshairs, and offsets.
+                      </div>
+                    </>
+                  )}
 
                   {/* USB SCANNER CALIBRATION TEST */}
                   <div style={{
@@ -2012,7 +2617,7 @@ export default function ProductStickerModal({
                     borderRadius: '8px',
                     textAlign: 'left',
                     width: '100%',
-                    maxWidth: `${Math.max(rollBoxWidth, 360)}px`,
+                    maxWidth: `${Math.max(sheetBoxWidth, rollBoxWidth, 360)}px`,
                     boxSizing: 'border-box'
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
@@ -2098,11 +2703,25 @@ export default function ProductStickerModal({
 
               {/* THERMAL PRINT SETUP HELPER BOX */}
               <div style={styles.thermalHelperBox}>
-                <div style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px', color: '#92400E' }}>
-                  <Info size={14} style={{ flexShrink: 0 }} /> Thermal Printer Chrome Print Setup:
+                <div style={{ fontWeight: '800', display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '4px', color: '#92400E' }}>
+                  <Info size={14} style={{ flexShrink: 0 }} /> Chrome Thermal Print Settings (CRITICAL):
                 </div>
-                <div style={{ lineHeight: 1.45, color: '#78350F' }}>
-                  Set <strong>Paper size</strong> to match sheet ({rotTransform.pageWidthMm}×{rotTransform.pageHeightMm} mm), set <strong>Margins = None</strong>, <strong>Scale = 100%</strong>, and turn off <strong>Headers and footers</strong>. Current Rotation: <strong>{effectiveRotation}°</strong> (Swaps page dimensions when 90° or 270° to defeat driver auto-rotation).
+                <div style={{ lineHeight: 1.45, color: '#78350F', fontSize: '11px' }}>
+                  {isPortraitSheetMode ? (
+                    <>
+                      <div>1. <strong>Margins:</strong> Set to <strong>None</strong></div>
+                      <div>2. <strong>Headers and footers:</strong> <strong>UNCHECK / TURN OFF</strong> (Prevents Chrome from printing date/time like <em>") 3 PM"</em> across labels)</div>
+                      <div>3. <strong>Scale:</strong> Set to <strong>100% (Default)</strong></div>
+                      <div style={{ marginTop: '3px', fontWeight: '700', color: '#0369A1' }}>
+                        Auto-centered for TSC TE244 (104 mm printhead): Left Label = {layout.getCellPosition(0, 0).x.toFixed(1)} mm {layout.cols === 2 ? `| Right Label = ${layout.getCellPosition(1, 0).x.toFixed(1)} mm` : ''} ({layout.cols} col × {layout.rows} row portrait sheet).
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>1. Set <strong>Paper size</strong> to match sheet ({rotTransform.pageWidthMm}×{rotTransform.pageHeightMm} mm)</div>
+                      <div>2. Set <strong>Margins = None</strong> and <strong>UNCHECK Headers and footers</strong></div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2116,6 +2735,49 @@ export default function ProductStickerModal({
             </div>
           </div>
         </div>
+
+        {/* POPUP BLOCKED WARNING BANNER */}
+        {popupBlocked && (
+          <div style={{
+            margin: '0 20px 10px 20px',
+            padding: '10px 14px',
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FCA5A5',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            boxShadow: '0 2px 8px rgba(220, 38, 38, 0.1)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#991B1B', fontSize: '12.5px', fontWeight: '600' }}>
+              <AlertTriangle size={17} color="#DC2626" style={{ flexShrink: 0 }} />
+              <span>Allow pop-ups for this site to print labels. Chrome blocked the print preview window.</span>
+            </div>
+            <button
+              type="button"
+              style={{
+                backgroundColor: '#DC2626',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                flexShrink: 0
+              }}
+              onClick={() => {
+                setPopupBlocked(false);
+                if (typeof lastPrintActionRef.current === 'function') {
+                  lastPrintActionRef.current();
+                }
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
 
         {/* MODAL FOOTER */}
         <div style={styles.footer}>
@@ -2150,7 +2812,7 @@ export default function ProductStickerModal({
               type="button"
               style={styles.btnCalibration}
               onClick={handleCalibrationPrint}
-              disabled={isPrinting}
+              disabled={isPrinting || isPreparingLabels}
               title="Print a diagnostic calibration row with boundary lines and arrows to check orientation & alignment"
             >
               <Crosshair size={14} /> Calibration Print
@@ -2162,7 +2824,7 @@ export default function ProductStickerModal({
               type="button"
               style={styles.btnTestPrint}
               onClick={handleTestPrint}
-              disabled={isPrinting}
+              disabled={isPrinting || isPreparingLabels}
               title="Print a single test sticker to verify alignment and scanning"
             >
               <Printer size={15} /> Test Print (1 Sticker)
@@ -2171,9 +2833,13 @@ export default function ProductStickerModal({
               type="button"
               style={styles.btnPrint}
               onClick={handlePrint}
-              disabled={isPrinting || totalStickersCount === 0}
+              disabled={isPrinting || isPreparingLabels || totalStickersCount === 0}
             >
-              {isPrinting ? (
+              {isPreparingLabels ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <RotateCw size={16} className="spin" /> Preparing labels...
+                </span>
+              ) : isPrinting ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                   <RotateCw size={16} className="spin" /> Printing...
                 </span>
