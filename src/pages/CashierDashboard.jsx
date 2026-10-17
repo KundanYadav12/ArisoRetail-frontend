@@ -7,7 +7,9 @@ import PaymentIcon from '@mui/icons-material/Payment';
 import SearchIcon from '@mui/icons-material/Search';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
-import { apiFetch } from '../utils/api';
+import { FileText } from 'lucide-react';
+import { apiFetch, getApiUrl } from '../utils/api';
+import { generateLocalHtmlReceipt, generateLocalEscPosReceipt, safeUtf8ToBase64, is2InchPaper, printHtmlSilentlyViaIframe } from '../utils/localReceiptGenerator';
 import { useNotify } from '../context/NotificationContext';
 import { useDataRefresh } from '../context/DataRefreshContext';
 import CashDenominationModal from '../components/day_end/CashDenominationModal';
@@ -208,7 +210,29 @@ export default function CashierDashboard({ user, token, onLogout }) {
         method: 'POST'
       });
       if (res.ok) {
+        const reprintData = await res.json();
         notify.success('Receipt reprint duplicate enqueued.', 'Reprint Done', 1000);
+        if (reprintData?.order && reprintData?.items) {
+          const orderPayload = {
+            ...reprintData.order,
+            is_duplicate: true,
+            reprint_count: (reprintData.order.reprint_count || 0) + 1
+          };
+          const targetPrinter = receiptSettings?.default_printer_name || '';
+          const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinter) ? '58mm' : '80mm';
+          if (window.electron?.printThermalReceipt) {
+            await window.electron.printThermalReceipt(targetPrinter, orderPayload, reprintData.items, user || {}, receiptSettings);
+          } else if (window.electron?.printWindowsRaw) {
+            const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+            await window.electron.printWindowsRaw(targetPrinter, safeUtf8ToBase64(rawEscPos));
+          } else if (window.electron?.printSystemSilent) {
+            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+            await window.electron.printSystemSilent(htmlReceipt, targetPrinter, { paperSize: effectivePaperSize });
+          } else {
+            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+            printHtmlSilentlyViaIframe(htmlReceipt);
+          }
+        }
       } else {
         const err = await res.json();
         notify.error(err.message || 'Reprint failed.', 'Reprint Error');
@@ -216,6 +240,16 @@ export default function CashierDashboard({ user, token, onLogout }) {
     } catch (err) {
       console.error(err);
       notify.error('Failed to reprint receipt.', 'Printer Error');
+    }
+  };
+
+  const handleOpenOrderPdf = (order) => {
+    const tokenVal = localStorage.getItem('ARISO_RETAIL_TOKEN') || token || '';
+    const pdfUrl = getApiUrl(`/orders/${order.id}/pdf?token=${encodeURIComponent(tokenVal)}`);
+    if (window.electron?.openExternal) {
+      window.electron.openExternal(pdfUrl);
+    } else {
+      window.open(pdfUrl, '_blank');
     }
   };
 
@@ -559,6 +593,11 @@ export default function CashierDashboard({ user, token, onLogout }) {
                                   <PrintIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
+                              <Tooltip title="Download PDF Receipt">
+                                <IconButton size="small" color="primary" onClick={() => handleOpenOrderPdf(order)}>
+                                  <FileText size={16} />
+                                </IconButton>
+                              </Tooltip>
                             </Box>
                           </TableCell>
                         </TableRow>
@@ -627,8 +666,11 @@ export default function CashierDashboard({ user, token, onLogout }) {
                             Pay
                           </Button>
                         )}
-                        <IconButton size="small" color="warning" onClick={() => handleReprintOrder(order.id)} title="Reprint">
+                        <IconButton size="small" color="warning" onClick={() => handleReprintOrder(order.id)} title="Reprint Duplicate">
                           <PrintIcon style={{ fontSize: 16 }} />
+                        </IconButton>
+                        <IconButton size="small" color="primary" onClick={() => handleOpenOrderPdf(order)} title="Download PDF">
+                          <FileText size={16} />
                         </IconButton>
                       </Box>
                     </Box>

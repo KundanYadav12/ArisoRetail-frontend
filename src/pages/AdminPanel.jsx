@@ -773,6 +773,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     header_alignment: 'center',
     show_logo: 1,
     show_qr_code: 1,
+    show_mrp_savings: 1,
     show_customer_details: 1,
     show_cashier_name: 1,
     show_tax_details: 1,
@@ -4838,6 +4839,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                       {[
                         { key: 'show_logo', label: 'Show Retail Logo' },
                         { key: 'show_qr_code', label: 'Show QR Code' },
+                        { key: 'show_mrp_savings', label: 'Show MRP column and You Saved' },
                         { key: 'show_customer_details', label: 'Show Customer Details' },
                         { key: 'show_cashier_name', label: 'Show Cashier Name' },
                         { key: 'show_tax_details', label: 'Show GST / Tax Breakup' },
@@ -5503,33 +5505,79 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
                         <div style={{ borderBottom: '1px dashed #475569', margin: '4px 0' }} />
 
-                        {/* Items Header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-                          <span>Item</span>
-                          <span>Qty</span>
-                          <span>Price</span>
-                        </div>
-                        <div style={{ borderBottom: '1px dashed #475569' }} />
+                        {Boolean(receiptSettings.show_mrp_savings) ? (
+                          <>
+                            {/* Items Header (6-column) */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 28px 45px 45px 50px', fontWeight: 'bold', fontSize: '10px', textAlign: 'right' }}>
+                              <span style={{ textAlign: 'left' }}>SN</span>
+                              <span style={{ textAlign: 'left' }}>ITEM</span>
+                              <span style={{ textAlign: 'center' }}>QTY</span>
+                              <span>MRP</span>
+                              <span>PRICE</span>
+                              <span>AMOUNT</span>
+                            </div>
+                            <div style={{ borderBottom: '1px dashed #475569', margin: '2px 0' }} />
 
-                        {/* Sample Items */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>Paneer Butter Masala</span>
-                          <span>1</span>
-                          <span>220.00</span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: '#64748b' }}>* Extra Gravy</div>
+                            {/* Sample Items with MRP */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 28px 45px 45px 50px', fontSize: '10.5px', textAlign: 'right', alignItems: 'flex-start' }}>
+                              <span style={{ textAlign: 'left' }}>1</span>
+                              <span style={{ textAlign: 'left', wordBreak: 'break-word' }}>Paneer Butter Masala</span>
+                              <span style={{ textAlign: 'center' }}>1</span>
+                              <span>250.00</span>
+                              <span>220.00</span>
+                              <span>220.00</span>
+                            </div>
+                            <div style={{ fontSize: '9px', color: '#64748b', paddingLeft: '18px' }}>* Extra Gravy</div>
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>Garlic Naan</span>
-                          <span>2</span>
-                          <span>80.00</span>
-                        </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 28px 45px 45px 50px', fontSize: '10.5px', textAlign: 'right', alignItems: 'flex-start', marginTop: '2px' }}>
+                              <span style={{ textAlign: 'left' }}>2</span>
+                              <span style={{ textAlign: 'left' }}>Garlic Naan</span>
+                              <span style={{ textAlign: 'center' }}>2</span>
+                              <span>80.00</span>
+                              <span>80.00</span>
+                              <span>160.00</span>
+                            </div>
 
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>Mango Lassi</span>
-                          <span>1</span>
-                          <span>50.00</span>
-                        </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '18px 1fr 28px 45px 45px 50px', fontSize: '10.5px', textAlign: 'right', alignItems: 'flex-start', marginTop: '2px' }}>
+                              <span style={{ textAlign: 'left' }}>3</span>
+                              <span style={{ textAlign: 'left' }}>General Item</span>
+                              <span style={{ textAlign: 'center' }}>1</span>
+                              <span>60.00</span>
+                              <span>25.00</span>
+                              <span>25.00</span>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Items Header */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
+                              <span>Item</span>
+                              <span>Qty</span>
+                              <span>Price</span>
+                            </div>
+                            <div style={{ borderBottom: '1px dashed #475569' }} />
+
+                            {/* Sample Items */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Paneer Butter Masala</span>
+                              <span>1</span>
+                              <span>220.00</span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#64748b' }}>* Extra Gravy</div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>Garlic Naan</span>
+                              <span>2</span>
+                              <span>80.00</span>
+                            </div>
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>General Item</span>
+                              <span>1</span>
+                              <span>25.00</span>
+                            </div>
+                          </>
+                        )}
 
                         <div style={{ borderBottom: '1px dashed #475569', margin: '4px 0' }} />
 
@@ -5539,7 +5587,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span>Subtotal:</span>
-                          <span>Rs. 350.00</span>
+                          <span>Rs. 405.00</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                           <span>Discount:</span>
@@ -5548,7 +5596,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                         {Number(receiptSettings.gst_enabled !== undefined ? receiptSettings.gst_enabled : 1) === 1 && Boolean(receiptSettings.show_tax_details) && (
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                             <span>GST Tax (5%):</span>
-                            <span>Rs. 16.25</span>
+                            <span>Rs. 19.00</span>
                           </div>
                         )}
 
@@ -5556,8 +5604,15 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.1em' }}>
                           <span>TOTAL:</span>
-                          <span>Rs. 341.25</span>
+                          <span>Rs. 399.00</span>
                         </div>
+
+                        {Boolean(receiptSettings.show_mrp_savings) && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.05em', color: '#16a34a', borderTop: '1px dashed #475569', paddingTop: '4px', marginTop: '4px' }}>
+                            <span>You Saved (Rs.):</span>
+                            <span>90.00</span>
+                          </div>
+                        )}
 
                         <div style={{ borderBottom: '2px solid #000', margin: '4px 0' }} />
 
@@ -6339,7 +6394,29 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                                   try {
                                     const res = await apiFetch(`/api/orders/${order.id}/reprint`, { method: 'POST' });
                                     if (res.ok) {
+                                      const reprintData = await res.json();
                                       notify.success('Receipt duplicate enqueued to thermal printer.', 'Reprint Success');
+                                      if (reprintData?.order && reprintData?.items) {
+                                        const orderPayload = {
+                                          ...reprintData.order,
+                                          is_duplicate: true,
+                                          reprint_count: (reprintData.order.reprint_count || 0) + 1
+                                        };
+                                        const targetPrinterName = receiptSettings?.default_printer_name || '';
+                                        const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinterName) ? '58mm' : '80mm';
+                                        if (window.electron?.printThermalReceipt) {
+                                          await window.electron.printThermalReceipt(targetPrinterName, orderPayload, reprintData.items, user || {}, receiptSettings);
+                                        } else if (window.electron?.printWindowsRaw) {
+                                          const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                          await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
+                                        } else if (window.electron?.printSystemSilent) {
+                                          const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                          await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
+                                        } else {
+                                          const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                          printHtmlSilentlyViaIframe(htmlReceipt);
+                                        }
+                                      }
                                     } else {
                                       const err = await res.json();
                                       notify.error(err.message || 'Reprint failed.', 'Reprint Error');
@@ -6357,7 +6434,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                                 size="small"
                                 color="primary"
                                 onClick={() => {
-                                  window.open(`/api/orders/${order.id}/pdf?token=${localStorage.getItem('ARISO_RETAIL_TOKEN') || token}`, '_blank');
+                                  const pdfUrl = getApiUrl(`/orders/${order.id}/pdf?token=${encodeURIComponent(localStorage.getItem('ARISO_RETAIL_TOKEN') || token || '')}`);
+                                  if (window.electron?.openExternal) {
+                                    window.electron.openExternal(pdfUrl);
+                                  } else {
+                                    window.open(pdfUrl, '_blank');
+                                  }
                                 }}
                               >
                                 <FileText size={16} />
@@ -6498,7 +6580,29 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                               try {
                                 const res = await apiFetch(`/api/orders/${order.id}/reprint`, { method: 'POST' });
                                 if (res.ok) {
+                                  const reprintData = await res.json();
                                   notify.success('Receipt duplicate enqueued.', 'Reprint Success');
+                                  if (reprintData?.order && reprintData?.items) {
+                                    const orderPayload = {
+                                      ...reprintData.order,
+                                      is_duplicate: true,
+                                      reprint_count: (reprintData.order.reprint_count || 0) + 1
+                                    };
+                                    const targetPrinterName = receiptSettings?.default_printer_name || '';
+                                    const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinterName) ? '58mm' : '80mm';
+                                    if (window.electron?.printThermalReceipt) {
+                                      await window.electron.printThermalReceipt(targetPrinterName, orderPayload, reprintData.items, user || {}, receiptSettings);
+                                    } else if (window.electron?.printWindowsRaw) {
+                                      const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                      await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
+                                    } else if (window.electron?.printSystemSilent) {
+                                      const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                      await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
+                                    } else {
+                                      const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
+                                      printHtmlSilentlyViaIframe(htmlReceipt);
+                                    }
+                                  }
                                 } else {
                                   const err = await res.json();
                                   notify.error(err.message || 'Reprint failed.', 'Reprint Error');
@@ -6515,7 +6619,12 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                             color="primary"
                             title="Download PDF"
                             onClick={() => {
-                              window.open(`/api/orders/${order.id}/pdf?token=${localStorage.getItem('ARISO_RETAIL_TOKEN') || token}`, '_blank');
+                              const pdfUrl = getApiUrl(`/orders/${order.id}/pdf?token=${encodeURIComponent(localStorage.getItem('ARISO_RETAIL_TOKEN') || token || '')}`);
+                              if (window.electron?.openExternal) {
+                                window.electron.openExternal(pdfUrl);
+                              } else {
+                                window.open(pdfUrl, '_blank');
+                              }
                             }}
                           >
                             <FileText size={15} />

@@ -28,6 +28,7 @@ export default function OpenItemModal({
 }) {
   const descRef = useRef(null);
   const priceRef = useRef(null);
+  const mrpRef = useRef(null);
   const qtyRef = useRef(null);
   const unitRef = useRef(null);
   const customGstRef = useRef(null);
@@ -47,8 +48,9 @@ export default function OpenItemModal({
   const gstMode = receiptSettings?.gst_mode || 'excluded';
 
   // Form States
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState('General Item');
   const [price, setPrice] = useState('');
+  const [mrp, setMrp] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [unit, setUnit] = useState('pcs');
   const [selectedGstRate, setSelectedGstRate] = useState(defaultGstRate);
@@ -72,8 +74,9 @@ export default function OpenItemModal({
   useEffect(() => {
     if (isOpen) {
       if (initialItem) {
-        setDescription(initialItem.name || '');
+        setDescription(initialItem.name || 'General Item');
         setPrice(String(initialItem.price !== undefined ? initialItem.price : initialItem.unit_price || ''));
+        setMrp(initialItem.mrp !== undefined && initialItem.mrp !== null ? String(initialItem.mrp) : '');
         setQuantity(String(initialItem.quantity || '1'));
         setUnit(initialItem.unit || 'pcs');
 
@@ -104,16 +107,21 @@ export default function OpenItemModal({
           setLinkedProduct(matched || {
             id: initialItem.product_id || initialItem.menu_item_id,
             name: initialItem.linked_product_name || 'Linked Product',
-            unit: initialItem.unit || 'pcs'
+            unit: initialItem.unit || 'pcs',
+            mrp: initialItem.mrp || null
           });
+          if (matched?.mrp && (!initialItem.mrp || initialItem.mrp === initialItem.price)) {
+            setMrp(String(matched.mrp));
+          }
         } else {
           setLinkToStock(false);
           setLinkedProduct(null);
         }
       } else {
         // New Open Item defaults
-        setDescription('');
+        setDescription('General Item');
         setPrice('');
+        setMrp('');
         setQuantity('1');
         setUnit('pcs');
         setSelectedGstRate(defaultGstRate);
@@ -159,6 +167,14 @@ export default function OpenItemModal({
   const numericQty = parseFloat(quantity || '1');
   const grossAmount = Math.max(0, numericPrice * (isNaN(numericQty) || numericQty <= 0 ? 1 : numericQty));
 
+  const numericMrpRaw = parseFloat(mrp);
+  const hasValidMrp = !isNaN(numericMrpRaw) && String(mrp).trim() !== '' && numericMrpRaw >= 0;
+  const isMrpLowerThanPrice = hasValidMrp && numericMrpRaw < numericPrice;
+  // If MRP is empty or lower than the Unit Price, treat the MRP as equal to the Unit Price (no saving)
+  const effectiveMrp = (hasValidMrp && numericMrpRaw >= numericPrice) ? numericMrpRaw : numericPrice;
+  const unitSaving = Math.max(0, effectiveMrp - numericPrice);
+  const totalSaved = unitSaving * (isNaN(numericQty) || numericQty <= 0 ? 1 : numericQty);
+
   const numericDiscount = parseFloat(discountValue || '0');
   let discountAmount = 0;
   if (!isNaN(numericDiscount) && numericDiscount > 0) {
@@ -201,10 +217,9 @@ export default function OpenItemModal({
 
   // Form Validation
   const validateForm = () => {
+    // If the cashier clears the field and leaves it empty, use "General Item" on add.
     if (!description.trim()) {
-      setError('Item description is required');
-      descRef.current?.focus();
-      return false;
+      setDescription('General Item');
     }
     if (price === '' || isNaN(numericPrice) || numericPrice < 0) {
       setError('Please enter a valid price (≥ 0)');
@@ -231,10 +246,12 @@ export default function OpenItemModal({
 
   const handleConfirm = () => {
     if (!validateForm()) return;
+    const finalDesc = description.trim() || 'General Item';
 
     onConfirm({
-      name: description.trim(),
+      name: finalDesc,
       price: numericPrice,
+      mrp: effectiveMrp,
       quantity: numericQty,
       unit: unit.trim() || (linkedProduct?.unit || 'pcs'),
       gst_rate: effectiveGstRate,
@@ -252,6 +269,10 @@ export default function OpenItemModal({
     setLinkedProduct(p);
     setShowStockDropdown(false);
     setStockSelectedIndex(-1);
+    // Pre-fill MRP from product if available
+    if (p.mrp !== undefined && p.mrp !== null && parseFloat(p.mrp) > 0) {
+      setMrp(String(p.mrp));
+    }
     // Pre-fill unit or HSN if empty
     if (!unit || unit === 'pcs') {
       setUnit(p.unit || p.base_unit || 'pcs');
@@ -304,7 +325,12 @@ export default function OpenItemModal({
     // 4. Alt / Ctrl Hotkeys for rapid field navigation & tax/discount control
     if (isAlt) {
       const lowerKey = e.key.toLowerCase();
-      if (lowerKey === '0') {
+      if (lowerKey === 'm') {
+        e.preventDefault();
+        mrpRef.current?.focus();
+        mrpRef.current?.select();
+        return;
+      } else if (lowerKey === '0') {
         e.preventDefault();
         setSelectedGstRate(0);
         setIsTaxExempt(true);
@@ -405,19 +431,23 @@ export default function OpenItemModal({
       }
     }
 
-    // 6. Enter progression between fields
+    // 6. Enter progression between fields: Name → Unit Price → MRP → Quantity → Add
     if (e.key === 'Enter') {
       if (active === descRef.current) {
         e.preventDefault();
+        if (!description.trim()) setDescription('General Item');
         priceRef.current?.focus();
         priceRef.current?.select();
       } else if (active === priceRef.current) {
         e.preventDefault();
+        mrpRef.current?.focus();
+        mrpRef.current?.select();
+      } else if (active === mrpRef.current) {
+        e.preventDefault();
         qtyRef.current?.focus();
         qtyRef.current?.select();
       } else if (active === qtyRef.current) {
-        // If description and price are already filled, Enter on Qty directly confirms!
-        if (description.trim() && price !== '') {
+        if (price !== '') {
           e.preventDefault();
           handleConfirm();
         }
@@ -448,6 +478,10 @@ export default function OpenItemModal({
         priceRef.current?.select();
       } else if (active === priceRef.current) {
         e.preventDefault();
+        mrpRef.current?.focus();
+        mrpRef.current?.select();
+      } else if (active === mrpRef.current) {
+        e.preventDefault();
         qtyRef.current?.focus();
         qtyRef.current?.select();
       } else if (active === qtyRef.current) {
@@ -459,10 +493,14 @@ export default function OpenItemModal({
         e.preventDefault();
         descRef.current?.focus();
         descRef.current?.select();
-      } else if (active === qtyRef.current) {
+      } else if (active === mrpRef.current) {
         e.preventDefault();
         priceRef.current?.focus();
         priceRef.current?.select();
+      } else if (active === qtyRef.current) {
+        e.preventDefault();
+        mrpRef.current?.focus();
+        mrpRef.current?.select();
       } else if (active === discRef.current) {
         e.preventDefault();
         qtyRef.current?.focus();
@@ -502,6 +540,8 @@ export default function OpenItemModal({
           <span style={{ color: '#475569' }}>•</span>
           <span style={styles.kbdTag}>Ctrl+Enter</span> Add from anywhere
           <span style={{ color: '#475569' }}>•</span>
+          <span style={styles.kbdTag}>Alt+M</span> MRP
+          <span style={{ color: '#475569' }}>•</span>
           <span style={styles.kbdTag}>Alt+D</span> Discount
           <span style={{ color: '#475569' }}>•</span>
           <span style={styles.kbdTag}>Alt+0/5/1/8/2</span> Tax
@@ -534,20 +574,23 @@ export default function OpenItemModal({
                 setDescription(e.target.value);
                 if (error) setError('');
               }}
+              onFocus={handleSelectAllOnFocus}
+              onClick={handleSelectAllOnClick}
+              onMouseUp={handleSelectAllOnMouseUp}
               style={styles.textInput}
               autoFocus
             />
           </div>
 
-          {/* 2. Price & Quantity (Side by side) */}
-          <div style={styles.twoColRow}>
+          {/* 2. Price, MRP & Quantity (3-col row: Unit Price | MRP | Quantity) */}
+          <div style={styles.threeColRow}>
             {/* Price */}
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+            <div style={{ flex: '1 1 0', minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px', gap: '4px' }}>
                 <label style={styles.label}>
                   Unit Price (₹) <span style={{ color: '#EF4444' }}>*</span>:
                 </label>
-                <span style={styles.fieldHint}>Enter ↵ to Qty</span>
+                <span style={styles.fieldHint}>↵ MRP</span>
               </div>
               <div style={styles.inputWithBadge}>
                 <span style={styles.leftBadge}>₹</span>
@@ -570,13 +613,48 @@ export default function OpenItemModal({
               </div>
             </div>
 
+            {/* MRP */}
+            <div style={{ flex: '1 1 0', minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px', gap: '4px' }}>
+                <label style={styles.label}>
+                  MRP (₹):
+                  <span style={styles.shortcutTag}>Alt+M</span>
+                </label>
+                <span style={styles.fieldHint}>↵ Qty</span>
+              </div>
+              <div style={styles.inputWithBadge}>
+                <span style={styles.leftBadge}>₹</span>
+                <input
+                  ref={mrpRef}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={mrp}
+                  onChange={(e) => {
+                    setMrp(sanitizePositiveNumberString(e.target.value, true));
+                    if (error) setError('');
+                  }}
+                  onFocus={handleSelectAllOnFocus}
+                  onClick={handleSelectAllOnClick}
+                  onMouseUp={handleSelectAllOnMouseUp}
+                  style={styles.numberInput}
+                />
+              </div>
+              {isMrpLowerThanPrice && (
+                <div style={{ fontSize: '10px', color: '#F59E0B', marginTop: '3px', lineHeight: 1.2 }}>
+                  MRP &lt; Price: treated as ₹{numericPrice.toFixed(2)}
+                </div>
+              )}
+            </div>
+
             {/* Quantity & Unit */}
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+            <div style={{ flex: '1.2 1 0', minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px', gap: '4px' }}>
                 <label style={styles.label}>
                   Quantity <span style={{ color: '#EF4444' }}>*</span>:
                 </label>
-                <span style={styles.fieldHint}>Enter ↵ to Add</span>
+                <span style={styles.fieldHint}>↵ Add</span>
               </div>
               <div style={styles.inputWithBadge}>
                 <input
@@ -887,6 +965,12 @@ export default function OpenItemModal({
               <span style={styles.summaryLabel}>Gross Subtotal:</span>
               <span style={styles.summaryVal}>₹{grossAmount.toFixed(2)}</span>
             </div>
+            {totalSaved > 0 && (
+              <div style={styles.summaryRow}>
+                <span style={{ ...styles.summaryLabel, color: '#10B981', fontWeight: '700' }}>You Save:</span>
+                <span style={{ ...styles.summaryVal, color: '#10B981', fontWeight: '700' }}>₹{totalSaved.toFixed(2)}</span>
+              </div>
+            )}
             {discountAmount > 0 && (
               <div style={styles.summaryRow}>
                 <span style={{ ...styles.summaryLabel, color: '#F59E0B' }}>Item Discount:</span>
@@ -952,14 +1036,16 @@ const styles = {
   modal: {
     backgroundColor: '#1E293B',
     borderRadius: '16px',
-    width: '520px',
-    maxWidth: '95vw',
+    width: '580px',
+    maxWidth: '96vw',
     maxHeight: '92vh',
     overflowY: 'auto',
+    overflowX: 'hidden',
     padding: '20px',
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
     border: '1px solid #334155',
-    color: '#F8FAFC'
+    color: '#F8FAFC',
+    boxSizing: 'border-box'
   },
   header: {
     display: 'flex',
@@ -1068,6 +1154,13 @@ const styles = {
     display: 'flex',
     gap: '12px'
   },
+  threeColRow: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'flex-start',
+    width: '100%',
+    boxSizing: 'border-box'
+  },
   label: {
     fontSize: '12px',
     fontWeight: '700',
@@ -1091,7 +1184,9 @@ const styles = {
     backgroundColor: '#0F172A',
     border: '1px solid #334155',
     borderRadius: '8px',
-    overflow: 'hidden'
+    overflow: 'hidden',
+    width: '100%',
+    boxSizing: 'border-box'
   },
   leftBadge: {
     padding: '0 10px',
@@ -1101,9 +1196,11 @@ const styles = {
   },
   numberInput: {
     flex: 1,
+    minWidth: 0,
+    width: '100%',
     backgroundColor: 'transparent',
     border: 'none',
-    padding: '9px 10px',
+    padding: '9px 8px',
     fontSize: '14px',
     fontWeight: '700',
     color: '#F8FAFC',
@@ -1115,12 +1212,13 @@ const styles = {
     border: 'none',
     borderLeft: '1px solid #334155',
     color: '#38BDF8',
-    padding: '0 8px',
+    padding: '0 6px',
     height: '36px',
     fontSize: '11px',
     fontWeight: '800',
     cursor: 'pointer',
-    outline: 'none'
+    outline: 'none',
+    flexShrink: 0
   },
   presetGrid: {
     display: 'grid',

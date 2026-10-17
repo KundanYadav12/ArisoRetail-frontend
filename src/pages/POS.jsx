@@ -1050,12 +1050,16 @@ export default function POS({
         updated[idx] = { ...item, quantity: newQty, total_price: (newQty * price).toFixed(2) };
         return updated;
       }
+      const itemMrp = product.mrp !== undefined && product.mrp !== null && parseFloat(product.mrp) > 0
+        ? parseFloat(product.mrp)
+        : price;
       return [...prevCart, {
         product_id: prodId,
         name: product.name,
         sku: product.sku || '',
         barcode: product.barcode || '',
         price: price,
+        mrp: itemMrp,
         unit_price: price,
         unit_rate: price,
         original_rate: menuPrice,
@@ -1091,12 +1095,16 @@ export default function POS({
       }
     }
     const unit = product.base_unit || product.unit || 'kg';
+    const itemMrp = product.mrp !== undefined && product.mrp !== null && parseFloat(product.mrp) > 0
+      ? parseFloat(product.mrp)
+      : price;
     setCart((prevCart) => [...prevCart, {
       product_id: product.id || product.menu_item_id,
       name: product.name,
       sku: product.sku || '',
       barcode: product.barcode || '',
       price: price,
+      mrp: itemMrp,
       unit_price: price,
       base_unit_price: price,
       original_rate: menuPrice,
@@ -1298,6 +1306,9 @@ export default function POS({
           sku: product.sku || '',
           barcode: product.barcode || '',
           price: effectiveRate,
+          mrp: product.mrp !== undefined && product.mrp !== null && parseFloat(product.mrp) > 0
+            ? parseFloat(product.mrp)
+            : effectiveRate,
           unit_price: effectiveRate,
           base_unit_price: effectiveRate,
           original_rate: origRate,
@@ -1447,6 +1458,7 @@ export default function POS({
     const {
       name,
       price,
+      mrp,
       quantity,
       unit,
       gst_rate,
@@ -1463,6 +1475,9 @@ export default function POS({
     const prodId = linkedProd ? (linkedProd.id || linkedProd.menu_item_id) : null;
     const numericQty = parseFloat(quantity) || 1;
     const unitPrice = parseFloat(price);
+    const itemMrp = (mrp !== undefined && mrp !== null && !isNaN(parseFloat(mrp)) && parseFloat(mrp) >= unitPrice)
+      ? parseFloat(mrp)
+      : unitPrice;
 
     // Stock check if linked to inventory-tracked product
     if (linkedProd && linkedProd.track_inventory !== 0 && linkedProd.current_stock !== null && linkedProd.current_stock !== undefined) {
@@ -1487,6 +1502,7 @@ export default function POS({
       sku: linkedProd?.sku || 'CUSTOM',
       barcode: linkedProd?.barcode || '',
       price: unitPrice,
+      mrp: itemMrp,
       unit_price: unitPrice,
       unit_rate: unitPrice,
       original_rate: unitPrice,
@@ -2158,6 +2174,7 @@ export default function POS({
         menu_item_id: i.product_id || i.id,
         name: i.name,
         price: i.price,
+        mrp: parseFloat(i.mrp !== undefined && i.mrp !== null ? i.mrp : i.price),
         quantity: i.quantity || 1,
         item_weight: i.item_weight || null,
         weight_unit: i.weight_unit || i.unit || 'pcs',
@@ -2383,7 +2400,12 @@ export default function POS({
         restoredCart = [];
       }
 
-      setCart(restoredCart);
+      setCart(restoredCart.map((item) => ({
+        ...item,
+        mrp: item.mrp !== undefined && item.mrp !== null && !isNaN(parseFloat(item.mrp))
+          ? parseFloat(item.mrp)
+          : parseFloat(item.price || item.unit_price || 0)
+      })));
       setSelectedCartIndex(0);
 
       // Restore customer information
@@ -2501,31 +2523,9 @@ export default function POS({
     if (shouldPrintReceipt) {
       try {
         if (window.electron) {
-          const isLan = (defaultReceiptPrn?.type === 'lan' || defaultReceiptPrn?.type === 'network') && !!defaultReceiptPrn?.ip_address;
-          if (isLan) {
-            try {
-              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
-              const base64Payload = safeUtf8ToBase64(rawEscPos);
-              await window.electron.printLanRaw(defaultReceiptPrn.ip_address, defaultReceiptPrn.port || 9100, base64Payload);
-            } catch (lanErr) {
-              console.warn('[POS Receipt LAN Failover] LAN socket failed, attempting Windows Spooler fallback...', lanErr.message);
-              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
-              await window.electron.printSystemSilent(htmlReceipt, defaultReceiptPrn?.name || '', { paperSize: effectivePaperSize });
-            }
-          } else {
-            const targetPrinterName = receiptSettings?.default_printer_name || defaultReceiptPrn?.name || '';
-            const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
-            const base64Payload = safeUtf8ToBase64(rawEscPos);
-
-            if (window.electron?.printThermalReceipt) {
-              await window.electron.printThermalReceipt(targetPrinterName, orderData, cartItems, user || {}, receiptSettings);
-            } else if (window.electron?.printWindowsRaw) {
-              await window.electron.printWindowsRaw(targetPrinterName, base64Payload);
-            } else {
-              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
-              await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
-            }
-          }
+          const targetPrinterName = receiptSettings?.default_printer_name || defaultReceiptPrn?.name || '';
+          const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+          await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
         } else {
           // Web Application Flow (Browser + LAN Thermal Printer connected to same Wi-Fi/network)
           const targetPrn = (defaultReceiptPrn?.ip_address ? defaultReceiptPrn : null) ||
@@ -2603,31 +2603,9 @@ export default function POS({
     if (shouldPrintKot) {
       try {
         if (window.electron) {
-          const isLan = (defaultKotPrn?.type === 'lan' || defaultKotPrn?.type === 'network') && !!defaultKotPrn?.ip_address;
-          if (isLan) {
-            try {
-              const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
-              const base64Payload = safeUtf8ToBase64(rawEscPos);
-              await window.electron.printLanRaw(defaultKotPrn.ip_address, defaultKotPrn.port || 9100, base64Payload);
-            } catch (lanKotErr) {
-              console.warn('[POS KOT LAN Failover] LAN socket failed, attempting Windows Spooler fallback...', lanKotErr.message);
-              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
-              await window.electron.printSystemSilent(htmlKot, defaultKotPrn?.name || '', { paperSize: effectivePaperSize });
-            }
-          } else {
-            const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
-            const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
-            const base64Payload = safeUtf8ToBase64(rawEscPos);
-
-            if (window.electron?.printThermalKot) {
-              await window.electron.printThermalKot(targetPrinterName, orderData, cartItems, receiptSettings);
-            } else if (window.electron?.printWindowsRaw) {
-              await window.electron.printWindowsRaw(targetPrinterName, base64Payload);
-            } else {
-              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
-              await window.electron.printSystemSilent(htmlKot, targetPrinterName, { paperSize: effectivePaperSize });
-            }
-          }
+          const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
+          const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
+          await window.electron.printSystemSilent(htmlKot, targetPrinterName, { paperSize: effectivePaperSize });
         } else {
           // Web Application Flow for KOT (Browser + LAN Kitchen Thermal Printer)
           const isLan = (defaultKotPrn?.type === 'lan' || defaultKotPrn?.type === 'network' || !!defaultKotPrn?.ip_address) && !!defaultKotPrn?.ip_address;
@@ -4858,50 +4836,50 @@ export default function POS({
         <div style={styles.modalOverlay} onClick={() => setCheckoutVisible(false)}>
           <div style={{ ...styles.checkoutModal, backgroundColor: colors.bgCard, borderColor: colors.borderColor }} className="pos-checkout-modal" onClick={(e) => e.stopPropagation()}>
             <div style={styles.modalHeader}>
-              <h2 style={{ margin: 0, fontSize: '20px', fontWeight: '800', color: colors.textPrimary, display: 'flex', alignItems: 'center', gap: '8px' }}><CreditCard size={20} /> {t('checkoutModalTitle')}</h2>
-              <button style={styles.closeBtn} onClick={() => setCheckoutVisible(false)}><X size={18} /></button>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '800', color: colors.textPrimary, display: 'flex', alignItems: 'center', gap: '8px' }}><CreditCard size={18} /> {t('checkoutModalTitle')}</h2>
+              <button style={styles.closeBtn} onClick={() => setCheckoutVisible(false)} title="Close (Esc)"><X size={16} /></button>
             </div>
 
             <div style={{ ...styles.billBox, backgroundColor: colors.bgInput, borderColor: colors.borderColor }}>
-              <span style={{ color: colors.textSecondary, fontSize: '12px', fontWeight: '800' }}>{t('payableAmount')}</span>
-              <span style={{ color: colors.accentEmerald, fontSize: '32px', fontWeight: '900' }}>₹{grandTotal.toFixed(2)}</span>
+              <span style={{ color: colors.textSecondary, fontSize: '11px', fontWeight: '800' }}>{t('payableAmount')}</span>
+              <span style={{ color: colors.accentEmerald, fontSize: '26px', fontWeight: '900', lineHeight: 1.1 }}>₹{grandTotal.toFixed(2)}</span>
             </div>
 
             {/* Customer & Store Selection / Auto-Creation */}
             <div style={{
-              marginBottom: '16px',
-              padding: '12px',
-              borderRadius: '10px',
+              marginBottom: '10px',
+              padding: '8px 10px',
+              borderRadius: '8px',
               backgroundColor: isDark ? 'rgba(255,255,255,0.03)' : '#F8FAFC',
               border: `1px solid ${colors.borderColor}`
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <label style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Store size={15} /> Customer / Store Info:
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '11px', fontWeight: '800', color: colors.textSecondary, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <Store size={14} /> Customer / Store Info:
                 </label>
                 {selectedCustomerId ? (
                   <span style={{
-                    fontSize: '11px',
+                    fontSize: '10.5px',
                     fontWeight: '700',
                     color: '#059669',
                     backgroundColor: isDark ? 'rgba(5, 150, 105, 0.2)' : '#ECFDF5',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
+                    padding: '1px 6px',
+                    borderRadius: '10px',
                     border: '1px solid #10B981'
                   }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} /> Existing Customer #{selectedCustomerId}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><CheckCircle2 size={11} /> Existing Customer #{selectedCustomerId}</span>
                   </span>
                 ) : (customerName || storeName || customerPhone ? (
                   <span style={{
-                    fontSize: '11px',
+                    fontSize: '10.5px',
                     fontWeight: '700',
                     color: '#7C3AED',
                     backgroundColor: isDark ? 'rgba(124, 58, 237, 0.2)' : '#F5F3FF',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
+                    padding: '1px 6px',
+                    borderRadius: '10px',
                     border: '1px solid #A78BFA'
                   }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Sparkles size={12} /> Auto-Creates Record</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Sparkles size={11} /> Auto-Creates Record</span>
                   </span>
                 ) : null)}
               </div>
@@ -4913,24 +4891,24 @@ export default function POS({
                   justifyContent: 'space-between',
                   backgroundColor: isDark ? 'rgba(30, 58, 138, 0.25)' : '#EFF6FF',
                   border: `1px solid ${isDark ? '#1E40AF' : '#BFDBFE'}`,
-                  borderRadius: '8px',
-                  padding: '6px 10px',
-                  marginBottom: '8px',
-                  fontSize: '11px',
-                  gap: '8px',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  marginBottom: '6px',
+                  fontSize: '10.5px',
+                  gap: '6px',
                   flexWrap: 'wrap'
                 }}>
                   <span style={{ color: colors.textPrimary, fontWeight: '700' }}>
                     Outstanding: <b style={{ color: '#EF4444' }}>₹{parseFloat(selectedCustomerData.current_balance || 0).toFixed(2)}</b>
                   </span>
                   <span style={{ color: colors.textSecondary }}>
-                    Credit Limit: <b style={{ color: colors.textPrimary }}>{parseFloat(selectedCustomerData.credit_limit || 0) > 0 ? `₹${parseFloat(selectedCustomerData.credit_limit).toFixed(2)}` : 'No Limit'}</b>
+                    Limit: <b style={{ color: colors.textPrimary }}>{parseFloat(selectedCustomerData.credit_limit || 0) > 0 ? `₹${parseFloat(selectedCustomerData.credit_limit).toFixed(2)}` : 'None'}</b>
                   </span>
                   <span style={{ color: colors.textSecondary }}>
                     Available: <b style={{ color: '#10B981' }}>{parseFloat(selectedCustomerData.credit_limit || 0) > 0 ? `₹${Math.max(0, parseFloat(selectedCustomerData.credit_limit) - parseFloat(selectedCustomerData.current_balance || 0)).toFixed(2)}` : 'Unlimited'}</b>
                   </span>
                   {selectedCustomerData.allow_credit === 0 && (
-                    <span style={{ color: '#DC2626', fontWeight: '800', backgroundColor: '#FEE2E2', padding: '1px 6px', borderRadius: '4px' }}>
+                    <span style={{ color: '#DC2626', fontWeight: '800', backgroundColor: '#FEE2E2', padding: '1px 4px', borderRadius: '4px' }}>
                       Credit Disabled
                     </span>
                   )}
@@ -4938,7 +4916,7 @@ export default function POS({
               )}
 
               {/* Autocomplete / Search Input for Existing Customers */}
-              <div style={{ position: 'relative', marginBottom: '8px' }}>
+              <div style={{ position: 'relative', marginBottom: '6px' }}>
                 <input
                   type="text"
                   placeholder="Search existing customer by name or phone..."
@@ -4950,12 +4928,12 @@ export default function POS({
                   onFocus={() => setCustomerDropdownOpen(true)}
                   style={{
                     width: '100%',
-                    padding: '8px 10px',
+                    padding: '6px 8px',
                     borderRadius: '6px',
                     border: `1px solid ${colors.borderColor}`,
                     backgroundColor: colors.bgInput,
                     color: colors.textPrimary,
-                    fontSize: '13px',
+                    fontSize: '12px',
                     fontWeight: '500',
                     outline: 'none',
                     boxSizing: 'border-box'
@@ -4974,7 +4952,7 @@ export default function POS({
                     border: `1px solid ${colors.borderColor}`,
                     borderRadius: '8px',
                     boxShadow: '0 8px 16px rgba(0,0,0,0.15)',
-                    maxHeight: '180px',
+                    maxHeight: '160px',
                     overflowY: 'auto',
                     marginTop: '2px'
                   }}>
@@ -4992,13 +4970,13 @@ export default function POS({
                           key={c.id}
                           onClick={() => handleSelectCustomer(c)}
                           style={{
-                            padding: '8px 12px',
+                            padding: '6px 10px',
                             cursor: 'pointer',
                             borderBottom: `1px solid ${colors.borderColor}`,
                             display: 'flex',
                             justifyContent: 'space-between',
                             alignItems: 'center',
-                            fontSize: '13px',
+                            fontSize: '12px',
                             backgroundColor: selectedCustomerId === c.id ? (isDark ? 'rgba(255,255,255,0.08)' : '#F1F5F9') : 'transparent'
                           }}
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = isDark ? 'rgba(255,255,255,0.06)' : '#F8FAFC'}
@@ -5008,11 +4986,11 @@ export default function POS({
                             <div style={{ fontWeight: '700', color: colors.textPrimary }}>
                               {c.store_name ? `${c.store_name} (${c.name})` : c.name}
                             </div>
-                            <div style={{ fontSize: '11px', color: colors.textSecondary }}>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Phone size={11} /> {c.phone || 'No phone'} {c.address ? <>• <MapPin size={11} /> {c.address}</> : ''}</span>
+                            <div style={{ fontSize: '10.5px', color: colors.textSecondary }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={10} /> {c.phone || 'No phone'} {c.address ? <>• <MapPin size={10} /> {c.address}</> : ''}</span>
                             </div>
                           </div>
-                          <span style={{ fontSize: '11px', fontWeight: '700', color: '#0284C7' }}>Select</span>
+                          <span style={{ fontSize: '10.5px', fontWeight: '700', color: '#0284C7' }}>Select</span>
                         </div>
                       ))}
                     {customersList.filter(c => {
@@ -5022,17 +5000,17 @@ export default function POS({
                              (c.phone && c.phone.includes(q)) ||
                              (c.store_name && c.store_name.toLowerCase().includes(q));
                     }).length === 0 && (
-                      <div style={{ padding: '10px', fontSize: '12px', color: colors.textSecondary, textAlign: 'center' }}>
+                      <div style={{ padding: '8px', fontSize: '11px', color: colors.textSecondary, textAlign: 'center' }}>
                         No existing store/customer matched. Enter details below to auto-create!
                       </div>
                     )}
-                    <div style={{ padding: '4px 8px', borderTop: `1px solid ${colors.borderColor}`, textAlign: 'right' }}>
+                    <div style={{ padding: '3px 8px', borderTop: `1px solid ${colors.borderColor}`, textAlign: 'right' }}>
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); setCustomerDropdownOpen(false); }}
-                        style={{ fontSize: '11px', padding: '2px 8px', background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer' }}
+                        style={{ fontSize: '10.5px', padding: '2px 6px', background: 'none', border: 'none', color: colors.textSecondary, cursor: 'pointer' }}
                       >
-                        Close List <X size={12} style={{ marginLeft: 3, verticalAlign: 'middle' }} />
+                        Close List <X size={11} style={{ marginLeft: 2, verticalAlign: 'middle' }} />
                       </button>
                     </div>
                   </div>
@@ -5040,9 +5018,9 @@ export default function POS({
               </div>
 
               {/* Direct Details Inputs (For existing or new auto-created customer) */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '6px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '4px' }}>
                 <div>
-                  <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Customer Name / Store:</label>
+                  <label style={{ fontSize: '10.5px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Customer Name / Store:</label>
                   <input
                     type="text"
                     placeholder="e.g. Ramesh General Store"
@@ -5050,18 +5028,18 @@ export default function POS({
                     onChange={(e) => setCustomerName(e.target.value)}
                     style={{
                       width: '100%',
-                      padding: '6px 8px',
+                      padding: '5px 7px',
                       borderRadius: '6px',
                       border: `1px solid ${colors.borderColor}`,
                       backgroundColor: colors.bgInput,
                       color: colors.textPrimary,
-                      fontSize: '13px',
+                      fontSize: '12px',
                       boxSizing: 'border-box'
                     }}
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Phone Number:</label>
+                  <label style={{ fontSize: '10.5px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Phone Number:</label>
                   <input
                     type="text"
                     placeholder="e.g. 9876543210"
@@ -5069,21 +5047,21 @@ export default function POS({
                     onChange={(e) => setCustomerPhone(e.target.value)}
                     style={{
                       width: '100%',
-                      padding: '6px 8px',
+                      padding: '5px 7px',
                       borderRadius: '6px',
                       border: `1px solid ${colors.borderColor}`,
                       backgroundColor: colors.bgInput,
                       color: colors.textPrimary,
-                      fontSize: '13px',
+                      fontSize: '12px',
                       boxSizing: 'border-box'
                     }}
                   />
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: '6px' }}>
                 <div>
-                  <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Store Address (Optional):</label>
+                  <label style={{ fontSize: '10.5px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>Store Address (Optional):</label>
                   <input
                     type="text"
                     placeholder="e.g. Market Road, Sector 4"
@@ -5091,18 +5069,18 @@ export default function POS({
                     onChange={(e) => setCustomerAddress(e.target.value)}
                     style={{
                       width: '100%',
-                      padding: '6px 8px',
+                      padding: '5px 7px',
                       borderRadius: '6px',
                       border: `1px solid ${colors.borderColor}`,
                       backgroundColor: colors.bgInput,
                       color: colors.textPrimary,
-                      fontSize: '13px',
+                      fontSize: '12px',
                       boxSizing: 'border-box'
                     }}
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '11px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>GSTIN (Optional):</label>
+                  <label style={{ fontSize: '10.5px', fontWeight: '700', color: colors.textSecondary, display: 'block', marginBottom: '2px' }}>GSTIN (Optional):</label>
                   <input
                     type="text"
                     placeholder="e.g. 27ABCDE1234F1Z5"
@@ -5110,12 +5088,12 @@ export default function POS({
                     onChange={(e) => setCustomerGst(e.target.value)}
                     style={{
                       width: '100%',
-                      padding: '6px 8px',
+                      padding: '5px 7px',
                       borderRadius: '6px',
                       border: `1px solid ${colors.borderColor}`,
                       backgroundColor: colors.bgInput,
                       color: colors.textPrimary,
-                      fontSize: '13px',
+                      fontSize: '12px',
                       boxSizing: 'border-box'
                     }}
                   />
@@ -5123,7 +5101,7 @@ export default function POS({
               </div>
 
               {selectedCustomerId && (
-                <div style={{ marginTop: '8px', textAlign: 'right' }}>
+                <div style={{ marginTop: '6px', textAlign: 'right' }}>
                   <button
                     type="button"
                     onClick={handleClearCustomer}
@@ -5131,31 +5109,31 @@ export default function POS({
                       background: 'none',
                       border: 'none',
                       color: '#EF4444',
-                      fontSize: '11px',
+                      fontSize: '10.5px',
                       fontWeight: '700',
                       cursor: 'pointer',
                       padding: 0
                     }}
                   >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><X size={12} /> Clear & Select Different Customer</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><X size={11} /> Clear & Select Different Customer</span>
                   </button>
                 </div>
               )}
             </div>
 
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ fontSize: '12px', fontWeight: '800', color: colors.textSecondary, display: 'block', marginBottom: '6px', textTransform: 'uppercase' }}>Place of Supply (GST Type):</label>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={{ fontSize: '11px', fontWeight: '800', color: colors.textSecondary, display: 'block', marginBottom: '4px', textTransform: 'uppercase' }}>Place of Supply (GST Type):</label>
               <select
                 value={taxType}
                 onChange={(e) => setTaxType(e.target.value)}
                 style={{
                   width: '100%',
-                  padding: '10px',
-                  borderRadius: '8px',
+                  padding: '6px 8px',
+                  borderRadius: '6px',
                   backgroundColor: colors.bgInput,
                   color: colors.textPrimary,
                   border: `1px solid ${colors.borderColor}`,
-                  fontSize: '14px',
+                  fontSize: '12px',
                   fontWeight: '600',
                   outline: 'none',
                   cursor: 'pointer'
@@ -5348,33 +5326,7 @@ export default function POS({
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '14px' }}>
-              {/* Place Sales Order (Pending / Reserve Stock) */}
-              <button
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  backgroundColor: '#D97706',
-                  color: '#FFFFFF',
-                  border: 'none',
-                  borderRadius: '10px',
-                  fontSize: '15px',
-                  fontWeight: '800',
-                  cursor: submittingSale ? 'not-allowed' : 'pointer',
-                  opacity: submittingSale ? 0.7 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  boxShadow: '0 2px 6px rgba(217, 119, 6, 0.3)'
-                }}
-                onClick={() => !submittingSale && handleCompleteSale(paymentMode || 'pending', 'save_only', 'pending')}
-                disabled={submittingSale}
-                title="Saves order in Pending status and reserves item stocks without deducting physical inventory"
-              >
-                <ClipboardList size={18} /> Place Sales Order (Pending / Reserve Stock)
-              </button>
-
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
               {/* Standard Immediate Complete Sale */}
               <button
                 style={{ ...styles.completeBtn, opacity: submittingSale ? 0.7 : 1 }}
@@ -5751,6 +5703,14 @@ export default function POS({
           .pos-checkout-modal {
             padding: 14px !important;
             max-width: 100% !important;
+          }
+        }
+
+        /* LAPTOP / WINDOWS APPLICATION WINDOW HEIGHT (< 850px) */
+        @media (max-height: 850px) {
+          .pos-checkout-modal {
+            max-height: 92vh !important;
+            padding: 12px 14px !important;
           }
         }
       `}</style>
@@ -6259,29 +6219,39 @@ const styles = {
     borderRadius: '16px',
     width: '100%',
     maxWidth: '460px',
-    padding: '20px',
+    maxHeight: '92vh',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    padding: '16px 18px',
     border: '1px solid #E2E8F0',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    boxShadow: '0 20px 40px -10px rgba(0, 0, 0, 0.4)',
   },
   modalHeader: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '14px',
+    marginBottom: '10px',
   },
   closeBtn: {
     background: '#E2E8F0',
     border: 'none',
     color: '#475569',
-    width: '30px',
-    height: '30px',
+    width: '28px',
+    height: '28px',
     borderRadius: '50%',
     cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   billBox: {
-    borderRadius: '12px',
-    padding: '14px',
+    borderRadius: '10px',
+    padding: '8px 12px',
     textAlign: 'center',
-    marginBottom: '14px',
+    marginBottom: '10px',
     border: '1px solid #E2E8F0',
     display: 'flex',
     flexDirection: 'column',
@@ -6290,19 +6260,19 @@ const styles = {
     fontSize: '11px',
     fontWeight: '800',
     display: 'block',
-    marginBottom: '6px',
+    marginBottom: '4px',
   },
   payGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
-    gap: '8px',
-    marginBottom: '14px',
+    gap: '6px',
+    marginBottom: '10px',
   },
   payBtn: {
-    padding: '10px',
+    padding: '7px 8px',
     borderRadius: '8px',
     fontWeight: '700',
-    fontSize: '12px',
+    fontSize: '11.5px',
     cursor: 'pointer',
   },
   payActive: {
@@ -6312,19 +6282,19 @@ const styles = {
     fontWeight: '900',
   },
   cashBox: {
-    borderRadius: '10px',
-    padding: '10px',
-    marginBottom: '14px',
+    borderRadius: '8px',
+    padding: '8px 10px',
+    marginBottom: '10px',
     border: '1px solid #E2E8F0',
   },
   cashInput: {
     width: '100%',
     border: '2px solid #0284C7',
-    borderRadius: '8px',
-    fontSize: '22px',
+    borderRadius: '6px',
+    fontSize: '18px',
     fontWeight: '900',
-    padding: '6px 10px',
-    marginBottom: '8px',
+    padding: '5px 8px',
+    marginBottom: '4px',
     outline: 'none',
     boxSizing: 'border-box',
   },
@@ -6340,10 +6310,10 @@ const styles = {
     backgroundColor: '#10B981',
     color: '#FFFFFF',
     border: 'none',
-    padding: '12px',
+    padding: '10px 14px',
     borderRadius: '8px',
     fontWeight: '900',
-    fontSize: '15px',
+    fontSize: '14px',
     cursor: 'pointer',
   },
   mobileSidebarDrawer: {

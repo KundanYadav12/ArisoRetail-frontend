@@ -8,6 +8,7 @@ export default function KeyboardHelpModal({ isOpen, onClose }) {
     { key: 'F1 / Ctrl+O', label: 'Add Open / Custom Item to Sale' },
     { key: 'In Open Item: Enter ↵', label: 'Advance Field / Instant Add from Qty' },
     { key: 'In Open Item: Ctrl+Enter', label: 'Instant Confirm & Add Custom Item to Cart' },
+    { key: 'In Open Item: Alt+M', label: 'Jump to MRP Field' },
     { key: 'In Open Item: Alt+0/5/1/8/2/C', label: 'Quick Select GST Rate (0%, 5%, 12%, 18%, 28%, Custom)' },
     { key: 'In Open Item: Alt+D / Alt+F / Alt+P', label: 'Jump to Discount / Switch Flat ₹ / % Pct' },
     { key: 'In Open Item: Alt+L', label: 'Toggle Link to Inventory Product' },

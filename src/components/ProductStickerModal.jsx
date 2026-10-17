@@ -76,7 +76,7 @@ import {
  * Shared StickerCard component for pixel-perfect 1:1 Live Preview
  * Matches the exact HTML/CSS generated in print document
  */
-function StickerCard({ item, config, shopData = {} }) {
+export function StickerCard({ item, config, shopData = {} }) {
   const html = useMemo(() => {
     return renderSingleStickerHtml(item, config, shopData);
   }, [item, config, shopData]);

@@ -232,13 +232,66 @@ export function loadSavedStickerConfig(printerName = null) {
  */
 export function saveStickerConfig(config, printerName = null) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    const toSave = { ...config };
+    if (printerName && printerName !== '__browser_print__') {
+      toSave.defaultPrinter = printerName;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     if (printerName) {
-      localStorage.setItem(`${STORAGE_KEY}_${printerName}`, JSON.stringify(config));
+      localStorage.setItem(`${STORAGE_KEY}_${printerName}`, JSON.stringify(toSave));
     }
   } catch (e) {
     console.warn('[StickerGenerator] Failed to save config:', e);
   }
+}
+
+/**
+ * Resolves standard configuration for Serial Number Barcode printing
+ * Reuses the saved Label Designer layout (USER 104x106, 2-up sheet, 203 DPI, offsets, driver settings).
+ * If none is saved, uses exact defaults: USER 104x106, 2 col x 2 row, 203 DPI.
+ */
+export function getSerialStickerConfig(printSize = '38x50', printerName = null) {
+  const saved = loadSavedStickerConfig(printerName);
+  const sizeDef = STICKER_SIZES[printSize] || STICKER_SIZES['38x50'];
+  const gap = parseFloat(saved.spacingMm !== undefined ? saved.spacingMm : 3) || 3;
+  const paperW = parseFloat(saved.paperWidthMm) > 0 ? parseFloat(saved.paperWidthMm) : 104;
+  const paperH = parseFloat(saved.paperHeightMm) > 0 ? parseFloat(saved.paperHeightMm) : 106;
+  const paperName = (saved.paperSizeName || 'USER').trim();
+
+  return {
+    ...saved,
+    size: printSize,
+    isSerialLabel: true,
+    showShopName: true,
+    showProductName: true,
+    showBarcode: true,
+    showSellingPrice: true,
+    showMrp: false,
+    showAddress: false,
+    showMfgDate: false,
+    showExpDate: false,
+    showSize: false,
+    showColor: false,
+    showWeight: false,
+    printMode: 'portrait_sheet',
+    rotation: 0,
+    paperSizeName: paperName,
+    paperWidthMm: paperW,
+    paperHeightMm: paperH,
+    sheetColumns: 2, // 2-up sheet (2 columns x 2 rows = 4 labels/sheet)
+    sheetRows: 2,
+    rows: 2,
+    spacingMm: gap,
+    dpi: saved.dpi || 203,
+    printheadWidthMm: parseFloat(saved.printheadWidthMm) > 0 ? parseFloat(saved.printheadWidthMm) : 104,
+    linerWidthMm: parseFloat(saved.linerWidthMm) > 0 ? parseFloat(saved.linerWidthMm) : 83,
+    mediaAlignment: saved.mediaAlignment || 'centre',
+    safePaddingMm: saved.safePaddingMm !== undefined ? parseFloat(saved.safePaddingMm) : 2.5,
+    offsetXmm: saved.offsetXmm !== undefined ? parseFloat(saved.offsetXmm) : 0,
+    offsetYmm: saved.offsetYmm !== undefined ? parseFloat(saved.offsetYmm) : 0,
+    driverLeftMarginMm: saved.driverLeftMarginMm !== undefined ? parseFloat(saved.driverLeftMarginMm) : 0,
+    defaultPrinter: printerName || saved.defaultPrinter || 'TSC TE244'
+  };
 }
 
 /**
@@ -857,17 +910,26 @@ export function generateCode128Svg(code, options = {}) {
   const labelHeightMm = options.labelHeightMm || (options.heightMm ? options.heightMm * 3.5 : 50);
 
   // Barcode bar height:
-  // Reduced by 25% to 30% per production specification:
-  // - 38×50: 8.5 mm (was 11.5 mm, ~26% reduction; in 8 to 9 mm target range)
-  // - 38×38: 7.0 mm (was 10.0 mm, ~30% reduction; never below 6 mm)
-  // - 50×25: 6.0 mm (was 8.5 mm, ~29% reduction; never below 6 mm)
+  // - 38×50: 10.0 mm (in 9 to 11 mm target range for serial, 8.5 mm for product)
+  // - 38×38: 8.5 mm (in 8 to 9 mm range for serial, 7.0 mm for product)
+  // - 50×25: 8.5 mm (in 8 to 9 mm range for serial, 6.0 mm for product)
   let targetBarHeightMm = 8.5;
-  if (labelHeightMm <= 26) {
-    targetBarHeightMm = 6.0;
-  } else if (labelHeightMm <= 40) {
-    targetBarHeightMm = 7.0;
+  if (options.isSerial) {
+    if (labelHeightMm <= 26) {
+      targetBarHeightMm = 8.5; // 8 to 9 mm on 25 mm labels
+    } else if (labelHeightMm <= 40) {
+      targetBarHeightMm = 8.5;
+    } else {
+      targetBarHeightMm = 10.0; // 9 to 11 mm on 50 mm labels
+    }
   } else {
-    targetBarHeightMm = 8.5;
+    if (labelHeightMm <= 26) {
+      targetBarHeightMm = 6.0;
+    } else if (labelHeightMm <= 40) {
+      targetBarHeightMm = 7.0;
+    } else {
+      targetBarHeightMm = 8.5;
+    }
   }
   if (options.heightMm && options.heightMm >= 6 && options.heightMm <= 14) {
     targetBarHeightMm = options.heightMm;
@@ -956,41 +1018,48 @@ export function generateCode128Svg(code, options = {}) {
   const moduleWidthMm = moduleDots * dotMm;
   const actualBarcodeWidthMm = M * moduleWidthMm;
 
-  // Exact 0.5 mm gap between bars and human-readable text + 6 pt bold text (~2.1 mm)
+  // Exact 0.5 mm gap between bars and human-readable text + 6 to 7 pt bold text (~2.3 mm)
   const showText = options.displayValue !== false;
   const barsToTextGapMm = 0.5;
-  const textHeightMm = showText ? 2.1 : 0;
+  const textHeightMm = showText ? 2.3 : 0;
   const textBottomPadMm = showText ? 0.35 : 0;
   const totalSvgHeightMm = targetBarHeightMm + (showText ? (barsToTextGapMm + textHeightMm + textBottomPadMm) : 0);
 
-  // Build exact SVG rect tags at exact mm coordinates
+  const totalDotsW = M * moduleDots;
+  const barHeightDots = Math.round(targetBarHeightMm / dotMm);
+  const barsToTextGapDots = showText ? Math.round(barsToTextGapMm / dotMm) : 0;
+  const textHeightDots = showText ? Math.round(textHeightMm / dotMm) : 0;
+  const textBottomPadDots = showText ? Math.round(textBottomPadMm / dotMm) : 0;
+  const totalDotsH = barHeightDots + barsToTextGapDots + textHeightDots + textBottomPadDots;
+
+  // Build exact SVG rect tags at exact integer dot coordinates to guarantee 100% scanner decodability
   const rectTags = [];
   let barWidth = 0;
   for (let b = 0; b < M; b++) {
     if (binary[b] === '1') {
       barWidth++;
     } else if (barWidth > 0) {
-      const xMm = (b - barWidth) * moduleWidthMm;
-      const wMm = barWidth * moduleWidthMm;
-      rectTags.push(`<rect x="${xMm.toFixed(4)}" y="0" width="${wMm.toFixed(4)}" height="${targetBarHeightMm.toFixed(4)}" />`);
+      const xDots = (b - barWidth) * moduleDots;
+      const wDots = barWidth * moduleDots;
+      rectTags.push(`<rect x="${xDots}" y="0" width="${wDots}" height="${barHeightDots}" />`);
       barWidth = 0;
     }
   }
   if (barWidth > 0) {
-    const xMm = (M - barWidth) * moduleWidthMm;
-    const wMm = barWidth * moduleWidthMm;
-    rectTags.push(`<rect x="${xMm.toFixed(4)}" y="0" width="${wMm.toFixed(4)}" height="${targetBarHeightMm.toFixed(4)}" />`);
+    const xDots = (M - barWidth) * moduleDots;
+    const wDots = barWidth * moduleDots;
+    rectTags.push(`<rect x="${xDots}" y="0" width="${wDots}" height="${barHeightDots}" />`);
   }
 
-  const textYMm = (targetBarHeightMm + barsToTextGapMm + textHeightMm * 0.78).toFixed(4);
-  const textFontSizeMm = (textHeightMm * 0.85).toFixed(4);
+  const textYDots = barHeightDots + barsToTextGapDots + Math.round(textHeightDots * 0.82);
+  const textFontSizeDots = Math.round(textHeightDots * 0.85);
 
   const textElement = showText ? `
-    <text x="${(actualBarcodeWidthMm / 2).toFixed(4)}" y="${textYMm}" font-family="Arial, 'Segoe UI', monospace" font-size="${textFontSizeMm}" font-weight="bold" text-anchor="middle" fill="#000000">${cleanCode}</text>
+    <text x="${totalDotsW / 2}" y="${textYDots}" font-family="Arial, 'Segoe UI', Roboto, sans-serif" font-size="${textFontSizeDots}" font-weight="bold" text-anchor="middle" fill="#000000">${cleanCode}</text>
   ` : '';
 
   return `
-    <svg viewBox="0 0 ${actualBarcodeWidthMm.toFixed(4)} ${totalSvgHeightMm.toFixed(4)}" width="${actualBarcodeWidthMm.toFixed(2)}mm" height="${totalSvgHeightMm.toFixed(2)}mm" xmlns="http://www.w3.org/2000/svg" style="display: block; margin: 0 auto; width: ${actualBarcodeWidthMm.toFixed(2)}mm; height: ${totalSvgHeightMm.toFixed(2)}mm; max-width: 100%; shape-rendering: crispEdges;">
+    <svg viewBox="0 0 ${totalDotsW} ${totalDotsH}" width="${actualBarcodeWidthMm.toFixed(4)}mm" height="${totalSvgHeightMm.toFixed(4)}mm" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" style="display: block; margin: 0 auto; width: ${actualBarcodeWidthMm.toFixed(4)}mm; height: ${totalSvgHeightMm.toFixed(4)}mm; max-width: 100%;">
       <g fill="#000000">
         ${rectTags.join('\n        ')}
       </g>
@@ -1073,6 +1142,8 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
   const baseDatePt = isCompact25 ? 5.5 : 6.5;
   const addrFontSize = isCompact25 ? '5.5pt' : '6pt';
 
+  const isSerial = !!(item?.isSerialLabel || config?.isSerialLabel);
+
   // 1. SHOP NAME: bold, 1 line, white-space: nowrap. Start at 8 pt down to 6.5 pt
   const shopName = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
   const shopFit = (config.showShopName && shopName)
@@ -1080,10 +1151,10 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
     : null;
 
   // 2. ADDRESS: 6 pt (5.5pt for 25mm), medium or semi-bold weight (600), centered, MAX 3 LINES (1 line for <=26mm labels).
-  // If > 3 lines, ends with "..."
+  // If > 3 lines, ends with "..." (Omitted for serial labels)
   const rawAddress = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
   const maxAddrLines = isCompact25 ? 1 : 3;
-  const addressLines = (config.showAddress && rawAddress)
+  const addressLines = (config.showAddress && !isSerial && rawAddress)
     ? formatStickerAddress(rawAddress, maxAddrLines, usableWidthMm)
     : [];
 
@@ -1094,8 +1165,8 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
     : null;
 
   // 4 & 5. MRP and OUR PRICE:
-  // MRP: its OWN full-width line, white-space: nowrap: "MRP: ₹112.50" with a line-through (0.25mm, pure black), size 7 pt.
-  // Our Price: its OWN full-width line, white-space: nowrap, bold, 9 pt: "Our Price: ₹90.00" (or "Price: ₹90.00" / "MRP: ₹..."). Auto-shrink down to 7 pt.
+  // Serial labels show: "Rs. 50.00" bold without MRP strike-through
+  // Standard labels show: MRP with line-through and Our Price
   const prices = resolveStickerPrices(item, config);
   const priceVal = prices.salePrice;
   const mrpVal = prices.mrp;
@@ -1105,7 +1176,15 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
   let showPriceLine = false;
   let priceText = '';
 
-  if (config.showMrp && config.showSellingPrice && (priceVal > 0 || mrpVal > 0)) {
+  if (isSerial) {
+    const rawSerialPrice = (item?.selling_price !== undefined && item?.selling_price !== null && item?.selling_price !== '')
+      ? parseFloat(item.selling_price)
+      : ((item?.price !== undefined && item?.price !== null && item?.price !== '') ? parseFloat(item.price) : priceVal);
+    if (config.showSellingPrice !== false && !isNaN(rawSerialPrice) && rawSerialPrice > 0) {
+      showPriceLine = true;
+      priceText = `Rs. ${rawSerialPrice.toFixed(2)}`;
+    }
+  } else if (config.showMrp && config.showSellingPrice && (priceVal > 0 || mrpVal > 0)) {
     if (mrpVal > priceVal) {
       showMrpLine = true;
       mrpText = `MRP: ₹${mrpVal.toFixed(2)}`;
@@ -1128,30 +1207,32 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
   const priceFit = showPriceLine ? fitTextToWidth(priceText, basePricePt, 7.0, usableWidthMm, true, fontFamilyCss, 1) : null;
   const mrpFit = showMrpLine ? fitTextToWidth(mrpText, baseMrpPt, 6.0, usableWidthMm, true, fontFamilyCss, 1) : null;
 
-  // 6. MFG DATE (and Exp Date): 6.5 pt (5.5pt for 25mm), 1 line
+  // 6. MFG DATE (and Exp Date): 6.5 pt (5.5pt for 25mm), 1 line (Omitted for serial labels)
   const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const rawMfg = config.defaultMfgDate;
   const mfgDate = rawMfg ? formatIsoToDisplayDate(rawMfg) : todayStr;
   const expDate = config.defaultExpDate ? formatIsoToDisplayDate(config.defaultExpDate) : '';
 
   const dateParts = [];
-  if (config.showMfgDate && mfgDate) dateParts.push(`Mfg: ${mfgDate}`);
-  if (config.showExpDate && expDate) dateParts.push(`Exp: ${expDate}`);
+  if (!isSerial) {
+    if (config.showMfgDate && mfgDate) dateParts.push(`Mfg: ${mfgDate}`);
+    if (config.showExpDate && expDate) dateParts.push(`Exp: ${expDate}`);
+  }
   const dateStr = dateParts.join('   ');
   const dateFit = dateParts.length > 0
     ? fitTextToWidth(dateStr, baseDatePt, 5.0, usableWidthMm, false, fontFamilyCss, 1)
     : null;
 
-  // Optional fields (Weight, Size, Color): compact line before barcode
-  const hasWeight = config.printWeight && config.weightValue;
+  // Optional fields (Weight, Size, Color): compact line before barcode (Omitted for serial labels)
+  const hasWeight = !isSerial && config.printWeight && config.weightValue;
   const weightLine = hasWeight ? `Wt: ${config.weightValue} ${config.weightUnit || 'g'}` : '';
 
-  const itemSize = resolveItemSize(item, config);
-  const itemColor = resolveItemColor(item, config);
-  const itemWeight = resolveItemWeight(item, config);
-  const showSize = !!config.showSize && !!itemSize;
-  const showColor = !!config.showColor && !!itemColor;
-  const showWeight = !!config.showWeight && !!itemWeight && !hasWeight;
+  const itemSize = !isSerial ? resolveItemSize(item, config) : '';
+  const itemColor = !isSerial ? resolveItemColor(item, config) : '';
+  const itemWeight = !isSerial ? resolveItemWeight(item, config) : '';
+  const showSize = !isSerial && !!config.showSize && !!itemSize;
+  const showColor = !isSerial && !!config.showColor && !!itemColor;
+  const showWeight = !isSerial && !!config.showWeight && !!itemWeight && !hasWeight;
   const displaySize = showSize ? (/^size:\s*/i.test(itemSize) ? itemSize : `Size: ${itemSize}`) : '';
   const displayColor = showColor ? (/^color:\s*/i.test(itemColor) ? itemColor : `Color: ${itemColor}`) : '';
   const displayWeight = showWeight ? (/^(wt|weight|qty|net\s*wt):\s*/i.test(itemWeight) ? itemWeight : `Net Wt: ${itemWeight}`) : '';
@@ -1170,9 +1251,18 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
     : null;
 
   // 7. BARCODE BLOCK AT BOTTOM: SVG bars, then human-readable text under them (6 pt bold)
-  // Shorter barcode (reduced by 25-30%): 8.5 mm for 50mm, 7.0 mm for 38mm, 6.0 mm for 25mm
+  // For serial labels: 9 to 11 mm on 50 mm labels (10.0 mm), 8 to 9 mm on 25 mm labels (8.5 mm)
+  // For product labels: 8.5 mm for 50mm, 7.0 mm for 38mm, 6.0 mm for 25mm
   let effectiveBarcodeHeight = 8.5;
-  if (isCompact25) {
+  if (isSerial) {
+    if (isCompact25) {
+      effectiveBarcodeHeight = 8.5; // 8 to 9 mm for 25 mm labels
+    } else if (sizeDef.height <= 40) {
+      effectiveBarcodeHeight = 8.5; // 8.5 mm for 38 mm labels
+    } else {
+      effectiveBarcodeHeight = 10.0; // 9 to 11 mm for 50 mm labels
+    }
+  } else if (isCompact25) {
     effectiveBarcodeHeight = 6.0;
   } else if (sizeDef.height <= 40) {
     effectiveBarcodeHeight = 7.0;
@@ -1180,7 +1270,7 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
     effectiveBarcodeHeight = 8.5;
   }
 
-  const barcodeValue = (item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
+  const barcodeValue = (item?.serial_number || item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
   const barcodeSvg = config.showBarcode ? generateCode128Svg(barcodeValue, {
     widthMm: sizeDef.width,
     usableWidthMm,
@@ -1188,7 +1278,8 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
     labelHeightMm: sizeDef.height,
     dpi: config.dpi || 203,
     safePaddingMm: safeMarginSidesMm,
-    displayValue: true
+    displayValue: true,
+    isSerial: isSerial
   }) : '';
 
   const shopHtml = (shopFit && shopFit.lines.length > 0) ? `
@@ -1240,7 +1331,7 @@ export function renderSingleStickerHtml(item, config, shopData = {}) {
   ` : '';
 
   return `
-    <div class="sticker-card sticker-${config.size}" style="width: ${sizeDef.width}mm !important; height: ${sizeDef.height}mm !important; position: relative !important; box-sizing: border-box !important; overflow: hidden !important; background: #ffffff !important; color: #000000 !important; font-family: ${fontFamilyCss} !important; -webkit-text-size-adjust: none !important; text-rendering: geometricPrecision !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; margin: 0 !important; padding: 0 !important;">
+    <div class="sticker-card sticker-${config.size} ${isSerial ? 'sticker-serial' : ''}" style="width: ${sizeDef.width}mm !important; height: ${sizeDef.height}mm !important; position: relative !important; box-sizing: border-box !important; overflow: hidden !important; background: #ffffff !important; color: #000000 !important; font-family: ${fontFamilyCss} !important; -webkit-text-size-adjust: none !important; text-rendering: geometricPrecision !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; margin: 0 !important; padding: 0 !important;">
       <div class="sticker-inner" style="position: absolute !important; top: ${safeMarginTopMm}mm !important; left: ${safeMarginSidesMm}mm !important; width: ${usableWidthMm}mm !important; height: ${usableHeightMm}mm !important; box-sizing: border-box !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; align-items: center !important; text-align: center !important; gap: 0.2mm !important; margin: 0 !important; padding: 0 !important; color: #000000 !important; font-family: ${fontFamilyCss} !important;">
         ${shopHtml}
         ${addressHtml}
@@ -1463,11 +1554,12 @@ export function getBlobPrintScript() {
                 }
               }
 
-              // Priority 6: Barcode height (never below 7.5 mm for tall labels, 5.5 mm for compact)
+              // Priority 6: Barcode height (never below 7.5 mm for tall labels, 5.5 mm for compact; 9.0 mm / 8.0 mm for serial labels)
               var svgEl = inner.querySelector('.field-barcode svg');
               if (svgEl) {
                 var curH = parseFloat(svgEl.getAttribute('height')) || parseFloat(svgEl.style.height) || 10;
-                var minBarcodeH = inner.clientHeight > 140 ? 7.5 : 5.5;
+                var isSerialInner = inner.closest('.sticker-serial') || (inner.parentElement && inner.parentElement.classList.contains('sticker-serial'));
+                var minBarcodeH = isSerialInner ? (inner.clientHeight > 140 ? 9.0 : 8.0) : (inner.clientHeight > 140 ? 7.5 : 5.5);
                 if (curH > minBarcodeH) {
                   var newH = Math.max(minBarcodeH, curH - 0.5);
                   svgEl.setAttribute('height', newH.toFixed(2) + 'mm');
@@ -2016,22 +2108,13 @@ export function buildPortraitSheetPrintDocument(items, config, shopData = {}) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title> </title>
+  <title></title>
   <link rel="stylesheet" href="/fonts/stickerFonts.css">
   ${getBlobPrintScript()}
   <style>
     @page {
       size: ${layout.paperW}mm ${layout.paperH}mm;
-      margin: 0mm !important;
-    }
-    @page :left {
-      margin: 0mm !important;
-    }
-    @page :right {
-      margin: 0mm !important;
-    }
-    @page :first {
-      margin: 0mm !important;
+      margin: 0 !important;
     }
     *, *:before, *:after {
       box-sizing: border-box !important;
@@ -2076,8 +2159,6 @@ export function buildPortraitSheetPrintDocument(items, config, shopData = {}) {
         margin: 0 !important;
         padding: 0 !important;
         width: ${layout.paperW}mm !important;
-        height: ${layout.paperH}mm !important;
-        overflow: hidden !important;
         background: #ffffff !important;
         color: #000000 !important;
         font-family: ${fontFamilyCss} !important;
@@ -3213,16 +3294,35 @@ export async function printStickers(items, config, shopData = {}, printerTarget 
         blobUrl = URL.createObjectURL(blob);
       }
 
-      // If opener already pre-opened the popup window in the click tick, use it!
+      // If opener already pre-opened the popup window in the click tick, write directly into it
       let win = options.popupWindow;
+      let usedDirectDoc = false;
       if (!win || win.closed) {
-        win = window.open(blobUrl, 'ariso_label_print', 'popup,width=900,height=700');
-      } else {
+        win = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+      }
+      if (win && !win.closed) {
         try {
-          if (win.location.href !== blobUrl) {
-            win.location.href = blobUrl;
-          }
+          win.document.open();
+          win.document.write(htmlContent);
+          win.document.close();
+          usedDirectDoc = true;
         } catch (_) {}
+      }
+      if (!usedDirectDoc && (!win || win.closed || win.location.href === 'about:blank')) {
+        let blobUrl = options.blobUrl;
+        if (!blobUrl) {
+          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+          blobUrl = URL.createObjectURL(blob);
+        }
+        if (!win || win.closed) {
+          win = window.open(blobUrl, 'ariso_label_print', 'popup,width=900,height=700');
+        } else {
+          try {
+            if (win.location.href !== blobUrl) {
+              win.location.href = blobUrl;
+            }
+          } catch (_) {}
+        }
       }
 
       if (!win || win.closed) {
