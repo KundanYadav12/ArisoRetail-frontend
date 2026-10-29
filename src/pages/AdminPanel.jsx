@@ -20,6 +20,7 @@ import SalesOrderVoucherModal from '../components/SalesOrderVoucherModal';
 import PartyTab from '../components/PartyTab';
 import InventorySuite from '../components/inventory/InventorySuite';
 import SerialNumberSuite from '../components/inventory/SerialNumberSuite';
+import OnlineStoreManager from '../components/online_store/OnlineStoreManager';
 import AdminSidebar from '../components/AdminSidebar';
 import { openWhatsAppShare } from '../utils/whatsappHelper';
 import { generateLocalHtmlReceipt, generateLocalHtmlKot, generateLocalEscPosReceipt, generateLocalEscPosKot, safeUtf8ToBase64, is2InchPaper, formatReceiptDateTime, printHtmlSilentlyViaIframe } from '../utils/localReceiptGenerator';
@@ -78,6 +79,7 @@ const ALL_ADMIN_MODULES = [
   { key: 'menu_items', label: 'Menu Items / Products Catalog', category: 'Catalog & Store Administration', desc: 'Products, selling prices, tax slabs, barcode labels, and food items' },
   { key: 'categories', label: 'Categories Management', category: 'Catalog & Store Administration', desc: 'Product categories, hierarchies, and display groupings' },
   { key: 'printers', label: 'Printers & Kitchen Routing', category: 'Catalog & Store Administration', desc: 'Network printers, thermal ESC/POS, and kitchen routing' },
+  { key: 'online_store', label: 'Online Store & Ecommerce', category: 'Catalog & Store Administration', desc: 'Online store catalog, customer orders, delivery settings, Razorpay and QR standee' },
   { key: 'gst', label: 'GST & Compliance Suite', category: 'Catalog & Store Administration', desc: 'GSTR-1, GSTR-3B tax summaries, HSN/SAC breakdowns, and tax rates' },
   { key: 'settings', label: 'Receipt & GST Settings', category: 'Catalog & Store Administration', desc: 'Store invoice headers, footer notes, terms, round-off, and numbering sequences' },
   { key: 'profile', label: 'Retail Store Profile', category: 'Catalog & Store Administration', desc: 'Store business address, GSTIN, phone, currency, and company details' },
@@ -126,7 +128,7 @@ const ROLE_DEFAULT_PERMISSIONS = {
     'warehouses', 'rack_management', 'stock_transfer', 'stock_receiving', 'stock_count',
     'stock_adjustment', 'stock_requests', 'stock_ledger', 'warehouse_reports',
     'reports', 'item_sales_report', 'bank_accounts', 'expenses', 'day_end',
-    'payment_reconciliation', 'suppliers', 'printers', 'gst', 'settings'
+    'payment_reconciliation', 'suppliers', 'printers', 'gst', 'settings', 'online_store'
   ],
   cashier: [
     'pos_billing', 'edit_rate_at_billing', 'order_history', 'day_end', 'customers'
@@ -173,7 +175,8 @@ const TAB_PERMISSION_MAP = {
   15: 'day_end',
   16: 'payment_reconciliation',
   17: 'suppliers',
-  18: 'serial_numbers'
+  18: 'serial_numbers',
+  19: 'online_store'
 };
 
 export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView = false, isWarehouseManagerView = false }) {
@@ -215,7 +218,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
   const validTabValues = React.useMemo(() => {
     const baseTabs = (isSuperAdmin || (isAdminOrOwner && (!user?.permissions || user.permissions.length === 0)))
-      ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17]
+      ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 19]
       : [];
 
     if (baseTabs.length > 0) {
@@ -230,7 +233,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     }
 
     const permitted = [];
-    for (let tabIndex = 0; tabIndex <= 18; tabIndex++) {
+    for (let tabIndex = 0; tabIndex <= 19; tabIndex++) {
       const permKey = TAB_PERMISSION_MAP[tabIndex];
       if (hasUserPermission(permKey)) {
         permitted.push(tabIndex);
@@ -7243,6 +7246,13 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
         {activeTab === 18 && (
           <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
             <SerialNumberSuite user={user} token={token} />
+          </Box>
+        )}
+
+        {/* --- TAB 19: ONLINE STORE & ECOMMERCE SUITE --- */}
+        {activeTab === 19 && (
+          <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+            <OnlineStoreManager user={user} token={token} />
           </Box>
         )}
 
