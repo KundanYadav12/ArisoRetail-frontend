@@ -7,14 +7,12 @@ import { SyncService } from './syncService.js';
 
 export function getBaseUrl() {
   if (typeof window !== 'undefined') {
-    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const isDesktopApp = !!window.electron || !!window.electronAPI || window.location.protocol === 'file:';
+    const isLocal = isDesktopApp || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     if (isLocal) {
       const custom = localStorage.getItem('ARISO_API_SERVER_URL');
-      if (custom && (custom.includes('localhost') || custom.includes('127.0.0.1'))) {
+      if (custom && custom.trim()) {
         return custom.trim().replace(/\/+$/, '');
-      }
-      if (custom && !custom.includes('localhost') && !custom.includes('127.0.0.1')) {
-        localStorage.removeItem('ARISO_API_SERVER_URL');
       }
       return 'http://localhost:5005/api';
     }

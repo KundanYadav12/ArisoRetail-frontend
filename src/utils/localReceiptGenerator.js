@@ -146,42 +146,105 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
   const isGstEnabled = s.gst_enabled === 1 || s.gst_enabled === true || s.gst_enabled === 'true';
   const is2Inch = is2InchPaper(s);
 
-  // Safe thermal printable widths: 80mm paper = 68mm max printable, 58mm paper = 44mm max printable
+  // Safe thermal printable widths: 80mm paper = 65mm safe printable (avoids 72mm hardware right-edge clipping), 58mm paper = 42mm max printable
   // Centered with equal left and right margins across the thermal paper roll
-  const containerMaxWidth = is2Inch ? '44mm' : '68mm';
+  const containerMaxWidth = is2Inch ? '42mm' : '65mm';
   const bodyFontSize = is2Inch ? '10px' : '11.5px';
   const titleFontSize = is2Inch ? '13px' : '15px';
   const totalFontSize = is2Inch ? '12px' : '14px';
   const subFontSize = is2Inch ? '8.5px' : '9.5px';
 
+  const showMrpSavings = s.show_mrp_savings !== 0 && s.show_mrp_savings !== false && s.show_mrp_savings !== '0' && s.show_mrp_savings !== 'false';
+
+  let itemsSavingSum = 0;
+  items.forEach((item) => {
+    const price = parseFloat(item.price || item.unit_price || 0);
+    const qty = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity ?? item.qty ?? 1) || 1);
+    const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+    const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+    itemsSavingSum += Math.max(0, effectiveMrp - price) * qty;
+  });
+  const totalYouSaved = itemsSavingSum + (parseFloat(order.discount_amount || 0) || 0);
+
   let itemsHtml = '';
   if (is2Inch) {
     // High-readability 2-tier layout for 58mm (2-inch) thermal rolls
     itemsHtml = items.map((item, idx) => {
-      const rate = parseFloat(item.price || item.unit_price || 0).toFixed(2);
+      const price = parseFloat(item.price || item.unit_price || 0);
+      const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+      const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+      const rate = price.toFixed(2);
       const qty = item.is_weight_based ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `x${item.quantity || 1}`;
-      const total = parseFloat(item.total_price || 0).toFixed(2);
+      const total = parseFloat(item.total_price || (price * (item.quantity || 1))).toFixed(2);
       return `
         <div style="margin-bottom: 3.5px; ${idx < items.length - 1 ? 'border-bottom: 1px dashed #000; padding-bottom: 3px;' : ''}">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <span style="flex: 1; min-width: 0; word-break: normal; overflow-wrap: break-word; font-weight: 700; color: #000000; padding-right: 4px; line-height: 1.25;">
-              ${item.name}
+              ${idx + 1}. ${item.name}
             </span>
             <span style="width: 34%; text-align: right; white-space: nowrap; font-weight: 800; color: #000000; flex-shrink: 0; padding-right: 2px;">
               ₹${total}
             </span>
           </div>
           <div style="font-size: ${subFontSize}; font-weight: 700; color: #000000; display: flex; justify-content: space-between; align-items: center; margin-top: 1px;">
-            <span>${qty} @ ₹${rate}</span>
+            <span>${qty} @ ₹${rate}${showMrpSavings && effectiveMrp > price ? ` [MRP ₹${effectiveMrp.toFixed(2)}]` : ''}</span>
             ${item.sku ? `<span>SKU: ${item.sku}</span>` : ''}
           </div>
           ${item.serial_number ? `<div style="font-size: ${subFontSize}; font-weight: 800; font-family: monospace; color: #000000; margin-top: 1px;">SN: ${item.serial_number}</div>` : ''}
         </div>
       `;
     }).join('');
+  } else if (showMrpSavings) {
+    // Clean 2-tier layout with full-width Item Name and non-overlapping QTY | MRP | PRICE | AMOUNT for 80mm thermal rolls
+    const rowsHtml = items.map((item, idx) => {
+      const price = parseFloat(item.price || item.unit_price || 0);
+      const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+      const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+      const qty = item.is_weight_based ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `${item.quantity || 1}`;
+      const total = parseFloat(item.total_price || (price * (item.quantity || 1))).toFixed(2);
+      return `
+        <tr style="border-bottom: 1px dotted #000;">
+          <td style="padding: 2.5px 0 2px 0; text-align: left; vertical-align: top;">
+            <div style="font-weight: 700; color: #000000; word-break: normal; overflow-wrap: break-word; line-height: 1.25;">
+              ${idx + 1}. ${item.name}
+            </div>
+            ${item.sku ? `<div style="font-size: 8px; font-weight: 700; color: #000000; margin-top: 1px; padding-left: 10px;">SKU: ${item.sku}</div>` : ''}
+            ${item.serial_number ? `<div style="font-size: 8.5px; font-weight: 800; font-family: monospace; color: #000000; margin-top: 1px; padding-left: 10px;">SN: ${item.serial_number}</div>` : ''}
+            <div style="display: flex; justify-content: space-between; align-items: baseline; font-size: 10px; font-weight: 700; margin-top: 2px; padding-left: 10px;">
+              <span style="width: 22%; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${qty}</span>
+              <span style="width: 26%; text-align: right; white-space: nowrap;">₹${effectiveMrp.toFixed(2)}</span>
+              <span style="width: 26%; text-align: right; white-space: nowrap;">₹${price.toFixed(2)}</span>
+              <span style="width: 26%; text-align: right; white-space: nowrap; font-weight: 800; padding-right: 2px;">₹${total}</span>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    itemsHtml = `
+      <table style="width: 100%; border-collapse: collapse; margin: 2px 0;">
+        <thead>
+          <tr style="border-bottom: 1.5px dashed #000; font-weight: 800; font-size: 10px;">
+            <th style="padding: 2.5px 0; text-align: left;">
+              <div style="display: flex; justify-content: space-between;">
+                <span>SN ITEM</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 9.5px; margin-top: 1.5px; padding-left: 10px;">
+                <span style="width: 22%; text-align: left;">QTY</span>
+                <span style="width: 26%; text-align: right;">MRP</span>
+                <span style="width: 26%; text-align: right;">PRICE</span>
+                <span style="width: 26%; text-align: right; padding-right: 2px;">AMOUNT</span>
+              </div>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+    `;
   } else {
-    // Robust fixed-table 4-column layout for 80mm (3-inch) thermal rolls
-    // Columns: Item (45%), Qty (12%), Rate (19%), Total (24% with right padding buffer)
+    // Standard 4-column layout for 80mm thermal rolls
     const rowsHtml = items.map(item => {
       const rate = parseFloat(item.price || item.unit_price || 0).toFixed(2);
       const qty = item.is_weight_based ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `${item.quantity || 1}`;
@@ -300,7 +363,7 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
             width: 100% !important;
             max-width: ${containerMaxWidth} !important;
             margin: 0 auto !important;
-            padding: 1mm 1.5mm 1mm 1.5mm !important;
+            padding: 1mm 2.5mm 1mm 2mm !important;
             box-sizing: border-box;
           }
           .divider { border-top: 1.5px dashed #000000; margin: 4px 0; }
@@ -324,7 +387,7 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
               width: 100% !important;
               max-width: ${containerMaxWidth} !important;
               margin: 0 auto !important;
-              padding: 1mm 1.5mm 1mm 1.5mm !important;
+              padding: 1mm 2.5mm 1mm 2mm !important;
             }
           }
         </style>
@@ -351,6 +414,11 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
           <div class="double-divider"></div>
           
           <!-- Order Meta -->
+          ${(order.reprint_count > 0 || order.is_duplicate) ? `
+            <div class="text-center bold" style="border: 1.5px solid #000; padding: 2px 0; margin-bottom: 4px; font-size: ${subFontSize}; letter-spacing: 0.5px;">
+              *** DUPLICATE RECEIPT (REPRINT #${order.reprint_count || 1}) ***
+            </div>
+          ` : ''}
           <div style="font-weight: 700; font-size: ${subFontSize};"><span class="bold">Bill No :</span> #${invoiceNo}</div>
           <div style="font-weight: 700; font-size: ${subFontSize};"><span class="bold">Date    :</span> ${formatReceiptDateTime(order.created_at)}</div>
           ${order.customer_name && order.customer_name !== 'Walk-in Customer' ? `<div style="font-weight: 700; font-size: ${subFontSize};"><span class="bold">Customer:</span> ${order.customer_name}</div>` : ''}
@@ -403,11 +471,19 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
               <span style="white-space: nowrap; font-weight: 900; padding-right: 2px;">₹${parseFloat(order.total_amount || 0).toFixed(2)}</span>
             </div>
             
+            ${(showMrpSavings && totalYouSaved > 0) ? `
+              <div style="border-top: 1.5px dashed #000; margin: 4px 0 2px 0;"></div>
+              <div style="display: flex; justify-content: space-between; align-items: baseline; font-weight: 900; font-size: ${bodyFontSize}; padding: 2px 0;">
+                <span>You Saved (Rs.):</span>
+                <span style="white-space: nowrap; font-weight: 900; padding-right: 2px;">${totalYouSaved.toFixed(2)}</span>
+              </div>
+            ` : ''}
+
             <div class="double-divider"></div>
 
             <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700; margin-top: 2px;">
               <span>Payment Mode:</span>
-              <span class="bold">${(['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase())) ? 'CREDIT / UDHAR' : (order.payment_mode || 'CASH').toUpperCase()}</span>
+              <span class="bold" style="padding-right: 2px;">${(['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase())) ? 'CREDIT / UDHAR' : (order.payment_mode || 'CASH').toUpperCase()}</span>
             </div>
             ${(['credit', 'due', 'udhar'].includes((order.payment_mode || '').toLowerCase()) || (order.paid_amount !== undefined && parseFloat(order.paid_amount) < parseFloat(order.total_amount || 0))) ? `
               <div style="display: flex; justify-content: space-between; font-size: ${subFontSize}; font-weight: 700;">
@@ -445,7 +521,7 @@ export function generateLocalHtmlReceipt(order, items, restaurant, receiptSettin
             </div>
           ` : ''}
           <!-- Anti-clipping margin buffer for hardware thermal auto-cutters -->
-          <div style="height: 6mm; width: 100%;"></div>
+          <div style="height: 2mm; width: 100%;"></div>
         </div>
       </body>
     </html>
@@ -473,7 +549,7 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
   const CMD_BOLD_OFF = ESC + 'E\x00';
   const CMD_FONT_NORMAL = GS + '!\x00';
   const CMD_FONT_DOUBLE = GS + '!\x11';
-  const CMD_CUT = '\n\n\n\n\n' + GS + 'V\x42\x00' + GS + 'V\x00';
+  const CMD_CUT = '\n\n\n' + GS + 'V\x42\x00';
 
   let cmds = CMD_INIT;
 
@@ -503,6 +579,9 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
 
   // Order Details Left Aligned
   cmds += CMD_ALIGN_LEFT;
+  if ((order.reprint_count && order.reprint_count > 0) || order.is_duplicate) {
+    cmds += CMD_ALIGN_CENTER + CMD_BOLD_ON + `*** DUPLICATE (REPRINT #${order.reprint_count || 1}) ***\n` + CMD_BOLD_OFF + CMD_ALIGN_LEFT;
+  }
   cmds += `Bill No : #${order.unique_order_number || order.offline_id || 'LOCAL-POS'}\n`;
   cmds += `Date    : ${formatReceiptDateTime(order.created_at)}\n`;
   if (order.customer_name && order.customer_name !== 'Walk-in Customer') cmds += `Customer: ${order.customer_name}\n`;
@@ -510,8 +589,22 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
   if (order.tax_type) cmds += `Place of Supply: ${order.tax_type === 'inter' ? 'Inter-State' : 'Intra-State'}\n`;
   cmds += divider;
 
+  const showMrpSavings = s.show_mrp_savings !== 0 && s.show_mrp_savings !== false && s.show_mrp_savings !== '0' && s.show_mrp_savings !== 'false';
+
+  let itemsSavingSum = 0;
+  items.forEach((item) => {
+    const price = parseFloat(item.price || item.unit_price || 0);
+    const qty = item.is_weight_based ? (parseFloat(item.item_weight) || 1) : (parseFloat(item.quantity ?? item.qty ?? 1) || 1);
+    const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : price;
+    const effectiveMrp = (!isNaN(rawMrp) && rawMrp > price) ? rawMrp : price;
+    itemsSavingSum += Math.max(0, effectiveMrp - price) * qty;
+  });
+  const totalYouSaved = itemsSavingSum + (parseFloat(order.discount_amount || 0) || 0);
+
   // Column Headers
-  if (is2Inch) {
+  if (showMrpSavings && !is2Inch) {
+    cmds += 'SN ITEM         QTY    MRP  PRICE AMOUNT\n';
+  } else if (is2Inch) {
     cmds += 'Item Description          Amount\n';
   } else {
     cmds += 'Item Description  Qty    Rate    Amount\n';
@@ -519,19 +612,43 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
   cmds += divider;
 
   // Print Items
-  items.forEach(item => {
-    const qtyStr = item.is_weight_based ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `${item.quantity || 1}`;
-    const rateStr = 'Rs.' + parseFloat(item.price || item.unit_price || 0).toFixed(2);
-    const totalStr = 'Rs.' + parseFloat(item.total_price || 0).toFixed(2);
+  items.forEach((item, idx) => {
+    const isWeight = !!item.is_weight_based;
+    const qtyStr = isWeight ? `${item.item_weight} ${item.weight_unit || 'kg'}` : `${item.quantity || 1}`;
+    const priceVal = parseFloat(item.price || item.unit_price || 0);
+    const rawMrp = item.mrp !== undefined && item.mrp !== null ? parseFloat(item.mrp) : priceVal;
+    const mrpVal = (!isNaN(rawMrp) && rawMrp > priceVal) ? rawMrp : priceVal;
+    const totalVal = parseFloat(item.total_price || (priceVal * (item.quantity || 1)));
 
-    if (is2Inch) {
-      const nameStr = item.name.length > 18 ? item.name.substring(0, 18) : item.name;
-      const spaces = ' '.repeat(Math.max(1, cols - nameStr.length - totalStr.length));
-      cmds += `${nameStr}${spaces}${totalStr}\n`;
-      cmds += `  Qty: ${qtyStr} @ ${rateStr}` + (item.sku ? ` [${item.sku}]` : '') + '\n';
-      if (item.serial_number) {
-        cmds += `  SN: ${item.serial_number}\n`;
+    const rateStr = priceVal.toFixed(2);
+    const mrpStr = mrpVal.toFixed(2);
+    const totalStr = totalVal.toFixed(2);
+
+    if (showMrpSavings && !is2Inch) {
+      const snStr = String(idx + 1).padEnd(3, ' ');
+      if (item.name.length > 12) {
+        cmds += `${snStr}${item.name}\n`;
+        cmds += `   `.padEnd(16, ' ') +
+                `${qtyStr.padStart(4, ' ')} ` +
+                `${mrpStr.padStart(6, ' ')} ` +
+                `${rateStr.padStart(6, ' ')} ` +
+                `${totalStr.padStart(7, ' ')}\n`;
+      } else {
+        const namePart = item.name.padEnd(13, ' ');
+        cmds += `${snStr}${namePart}${qtyStr.padStart(4, ' ')} ${mrpStr.padStart(6, ' ')} ${rateStr.padStart(6, ' ')} ${totalStr.padStart(7, ' ')}\n`;
       }
+      if (item.sku) cmds += `  SKU: ${item.sku}\n`;
+      if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
+    } else if (is2Inch) {
+      const nameStr = item.name.length > 18 ? item.name.substring(0, 18) : item.name;
+      const spaces = ' '.repeat(Math.max(1, cols - nameStr.length - (`Rs.${totalStr}`).length));
+      cmds += `${nameStr}${spaces}Rs.${totalStr}\n`;
+      if (showMrpSavings && mrpVal > priceVal) {
+        cmds += `  Qty: ${qtyStr} @ Rs.${rateStr} [MRP Rs.${mrpStr}]` + (item.sku ? ` [${item.sku}]` : '') + '\n';
+      } else {
+        cmds += `  Qty: ${qtyStr} @ Rs.${rateStr}` + (item.sku ? ` [${item.sku}]` : '') + '\n';
+      }
+      if (item.serial_number) cmds += `  SN: ${item.serial_number}\n`;
     } else {
       let nameStr = item.name;
       if (nameStr.length > 17) {
@@ -539,8 +656,8 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
       }
       const namePart = nameStr.padEnd(18, ' ');
       const qtyPart = qtyStr.padEnd(5, ' ');
-      const ratePart = rateStr.padStart(9, ' ');
-      const amtPart = totalStr.padStart(10, ' ');
+      const ratePart = ('Rs.' + rateStr).padStart(9, ' ');
+      const amtPart = ('Rs.' + totalStr).padStart(10, ' ');
       let line = `${namePart}${qtyPart}${ratePart}${amtPart}`;
       if (line.length > cols) line = line.substring(0, cols);
       cmds += `${line}\n`;
@@ -602,6 +719,13 @@ export function generateLocalEscPosReceipt(order, items, restaurant, receiptSett
     cmds += `TOTAL:`.padEnd(cols - 12, ' ') + `Rs.${grandTotalVal}`.padStart(12, ' ') + '\n';
   }
   cmds += CMD_BOLD_OFF;
+
+  if (showMrpSavings && totalYouSaved > 0) {
+    cmds += doubleDivider;
+    cmds += CMD_BOLD_ON;
+    cmds += `You Saved (Rs.): ${totalYouSaved.toFixed(2)}\n`;
+    cmds += CMD_BOLD_OFF;
+  }
   cmds += doubleDivider;
 
   // Payment Mode & Credit / Udhar breakdown

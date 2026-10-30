@@ -32,6 +32,7 @@ import AdminPanel from './pages/AdminPanel';
 import SuperAdminPanel from './pages/SuperAdminPanel';
 import SuperBillItems from './pages/SuperBillItems';
 import SuperBillBilling from './pages/SuperBillBilling';
+import StorefrontApp from './storefront/StorefrontApp';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import LanguageSelectorModal from './components/LanguageSelectorModal';
 import KeyboardHelpModal from './components/KeyboardHelpModal';
@@ -57,6 +58,54 @@ const VALID_VIEWS = [
   'serial_numbers',
   'superadmin'
 ];
+
+const detectStoreSubdomain = () => {
+  if (typeof window === 'undefined') return null;
+
+  // 1. Explicit query parameter (for local testing e.g. http://localhost:5173/?store=rampal)
+  const sp = new URLSearchParams(window.location.search);
+  const qpStore = sp.get('store') || sp.get('subdomain');
+  if (qpStore && qpStore.trim()) {
+    return qpStore.trim().toLowerCase();
+  }
+
+  // 2. Hash routing (e.g. #/store/rampal)
+  if (window.location.hash) {
+    const hashMatch = window.location.hash.match(/^#\/?store\/([a-zA-Z0-9_-]+)/i);
+    if (hashMatch && hashMatch[1]) {
+      return hashMatch[1].trim().toLowerCase();
+    }
+  }
+
+  // 3. Subdomain extraction from hostname (e.g. rampal.arisopos.in or rampal.localhost)
+  const hostname = window.location.hostname.toLowerCase();
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname === 'localhost') {
+    return null;
+  }
+
+  const parts = hostname.split('.');
+  if (hostname.endsWith('.arisopos.in')) {
+    if (parts.length >= 3) {
+      const sub = parts[0];
+      const reserved = ['www', 'api', 'admin', 'superadmin', 'app', 'pos', 'mail', 'smtp'];
+      if (!reserved.includes(sub)) {
+        return sub;
+      }
+    }
+  } else if (hostname.endsWith('.localhost')) {
+    if (parts.length >= 2 && parts[0] !== 'localhost' && parts[0] !== 'www') {
+      return parts[0];
+    }
+  } else {
+    // 4. Custom merchant domain support (e.g. parkashstore.com, www.parkashstore.com, nimal.in, sham.store)
+    const platformRoots = ['arisopos.in', 'arisotechnologies.com'];
+    if (!platformRoots.includes(hostname) && hostname.includes('.')) {
+      return hostname;
+    }
+  }
+
+  return null;
+};
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -100,6 +149,28 @@ export default function App() {
     } catch (e) {}
     return 'pos';
   });
+  const [storeSubdomain, setStoreSubdomain] = useState(() => detectStoreSubdomain());
+  const [isStaffLoginMode, setIsStaffLoginMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get('staff') === '1' || sp.get('staff') === 'true') return true;
+      if (window.location.hash.startsWith('#/login')) return true;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleUrlChange = () => {
+      setStoreSubdomain(detectStoreSubdomain());
+    };
+    window.addEventListener('popstate', handleUrlChange);
+    window.addEventListener('hashchange', handleUrlChange);
+    return () => {
+      window.removeEventListener('popstate', handleUrlChange);
+      window.removeEventListener('hashchange', handleUrlChange);
+    };
+  }, []);
+
   const [themeMode, setThemeMode] = useState('light');
   const [posFocusMode, setPosFocusMode] = useState(() => localStorage.getItem('pos_focus_mode') === 'true');
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
@@ -802,11 +873,41 @@ export default function App() {
     </Dialog>
   );
 
+  // 0. Public Customer Storefront (Subdomain or ?store= query param)
+  if (storeSubdomain && !isStaffLoginMode) {
+    return (
+      <NotificationProvider>
+        <ThemeProvider theme={muiTheme}>
+          <CssBaseline />
+          <StorefrontApp
+            subdomain={storeSubdomain}
+            onOpenStaffLogin={() => setIsStaffLoginMode(true)}
+          />
+        </ThemeProvider>
+      </NotificationProvider>
+    );
+  }
+
   if (!token || !user) {
     return (
       <NotificationProvider>
         <ThemeProvider theme={muiTheme}>
           <CssBaseline />
+          {storeSubdomain && (
+            <Box sx={{ bgcolor: '#0f172a', py: 1, px: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 600 }}>
+                Staff Terminal &middot; {storeSubdomain}.arisopos.in
+              </Typography>
+              <Button
+                size="small"
+                variant="text"
+                onClick={() => setIsStaffLoginMode(false)}
+                sx={{ color: '#38bdf8', textTransform: 'none', fontWeight: 700, fontSize: '0.78rem' }}
+              >
+                &larr; Back to Online Store
+              </Button>
+            </Box>
+          )}
           <Login onLoginSuccess={(u, t) => {
             isHandlingSessionExpiryRef.current = false;
             resetForceLogoutFlag();

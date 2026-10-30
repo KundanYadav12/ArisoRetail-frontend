@@ -5,7 +5,7 @@ import {
   TableRow, Paper, IconButton, CircularProgress, Alert, Tooltip,
   Dialog, DialogTitle, DialogContent, DialogActions, FormControl,
   InputLabel, Select, MenuItem, Divider, TablePagination, InputAdornment,
-  Autocomplete, ToggleButton, ToggleButtonGroup, Popover
+  Autocomplete, ToggleButton, ToggleButtonGroup, Popover, FormHelperText
 } from '@mui/material';
 import {
   Tag, Search, QrCode, Printer, CheckCircle2, XCircle, Package,
@@ -17,7 +17,16 @@ import {
 import { apiFetch } from '../../utils/api';
 import { db } from '../../utils/offlineDb';
 import { useNotify } from '../../context/NotificationContext';
-import { generateCode128Svg, STICKER_SIZES, printStickers } from '../../utils/stickerGenerator';
+import {
+  generateCode128Svg,
+  STICKER_SIZES,
+  printStickers,
+  loadSavedStickerConfig,
+  getSerialStickerConfig,
+  ensureStickerFontLoaded
+} from '../../utils/stickerGenerator';
+import { StickerCard } from '../ProductStickerModal';
+import { checkAgentHealth, getAgentPrinters } from '../../utils/printAgentService';
 
 // Synthesized audio feedback for barcode scanning
 const playBeep = (isSuccess = true) => {
@@ -159,9 +168,19 @@ export default function SerialNumberSuite({ user, token }) {
   // Print Dialog State
   const [printDialogVisible, setPrintDialogVisible] = useState(false);
   const [selectedSerialForPrint, setSelectedSerialForPrint] = useState(null);
-  const [printSize, setPrintSize] = useState('50x25');
+  const [printSize, setPrintSize] = useState('38x50');
   const [printCopies, setPrintCopies] = useState(1);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [thermalPrinters, setThermalPrinters] = useState([
+    { name: 'TSC TE244', displayName: 'TSC TE244 (Thermal Barcode Printer)' }
+  ]);
+  const [selectedThermalPrinter, setSelectedThermalPrinter] = useState(() => {
+    return localStorage.getItem('ariso_serial_printer') || loadSavedStickerConfig()?.defaultPrinter || 'TSC TE244';
+  });
+
+  // ESC/POS Printers list
+  const [printers, setPrinters] = useState([]);
+  const [selectedPrinterId, setSelectedPrinterId] = useState('');
 
   // Manual Generate / Register Dialog State
   const [generateDialogVisible, setGenerateDialogVisible] = useState(false);
@@ -180,11 +199,102 @@ export default function SerialNumberSuite({ user, token }) {
   const [generateSupplierName, setGenerateSupplierName] = useState('');
   const [generating, setGenerating] = useState(false);
 
-  // ESC/POS Printers list
-  const [printers, setPrinters] = useState([]);
-  const [selectedPrinterId, setSelectedPrinterId] = useState('');
+  // Discover and list all available thermal label printers
+  const refreshThermalPrinters = useCallback(async () => {
+    const list = [];
+    const seen = new Set();
+    const addPrinter = (name, displayName = null) => {
+      if (!name) return;
+      const cleanName = String(name).trim();
+      if (!cleanName || cleanName === '__browser_print__' || seen.has(cleanName)) return;
+      seen.add(cleanName);
+      list.push({ name: cleanName, displayName: displayName || cleanName });
+    };
 
-  // Auto-focus search input on mount
+    // 1. Saved printer in Label Designer
+    const saved = loadSavedStickerConfig();
+    if (saved?.defaultPrinter) {
+      addPrinter(saved.defaultPrinter, `${saved.defaultPrinter} (Designer Default)`);
+    }
+
+    // 2. Saved printer in Serial Dialog
+    const savedSerial = localStorage.getItem('ariso_serial_printer');
+    if (savedSerial) {
+      addPrinter(savedSerial, `${savedSerial} (Saved Default)`);
+    }
+
+    // 3. Default standard TSC TE244
+    addPrinter('TSC TE244', 'TSC TE244 (Thermal Barcode Printer)');
+
+    // 4. Existing printers from printers state or backend settings
+    if (Array.isArray(printers) && printers.length > 0) {
+      printers.forEach(p => {
+        const pName = p.name || p.printer_name;
+        if (pName) addPrinter(pName, `${pName} (${p.printer_type || (p.is_label ? 'Label' : 'Thermal')})`);
+      });
+    }
+
+    // 5. Backend discovered printers / settings (/api/printers and /api/printers/discover)
+    try {
+      const res = await apiFetch('/api/printers');
+      if (res.ok) {
+        const data = await res.json();
+        const pList = Array.isArray(data) ? data : (data.printers || []);
+        pList.forEach(p => {
+          const pName = p.name || p.printer_name;
+          if (pName) addPrinter(pName, `${pName} (${p.printer_type || 'Thermal'})`);
+        });
+      }
+    } catch (_) {}
+
+    try {
+      const res = await apiFetch('/api/printers/discover');
+      if (res.ok) {
+        const data = await res.json();
+        const discList = (data.discovered || data.printers || []).filter(p => !p.is_virtual);
+        discList.forEach(p => addPrinter(p.name, `${p.name} (${p.printer_type || 'Thermal'})`));
+      }
+    } catch (_) {}
+
+    // 6. Electron printers if running in desktop environment
+    if (window.electron && typeof window.electron.getPrinters === 'function') {
+      try {
+        const ePrinters = await window.electron.getPrinters();
+        if (Array.isArray(ePrinters)) {
+          ePrinters.forEach(p => addPrinter(p.name, `${p.name} (Windows Spooler)`));
+        }
+      } catch (_) {}
+    }
+
+    // 7. Local Print Agent if running
+    try {
+      const health = await checkAgentHealth(1200);
+      if (health?.connected) {
+        if (health.defaultPrinter) {
+          addPrinter(health.defaultPrinter, `${health.defaultPrinter} (Print Agent Default)`);
+        }
+        const agentPrn = await getAgentPrinters(2500);
+        if (agentPrn?.ok && Array.isArray(agentPrn.printers)) {
+          agentPrn.printers.forEach(p => addPrinter(p.name || p, `${p.name || p} (Print Agent)`));
+        }
+      }
+    } catch (_) {}
+
+    if (list.length === 0) {
+      list.push({ name: 'TSC TE244', displayName: 'TSC TE244 (Thermal Barcode Printer)' });
+    }
+
+    setThermalPrinters(list);
+
+    let active = savedSerial || (saved?.defaultPrinter && saved.defaultPrinter !== '__browser_print__' ? saved.defaultPrinter : null) || selectedThermalPrinter;
+    if (!active || !list.some(p => p.name === active)) {
+      active = list[0].name;
+    }
+    setSelectedThermalPrinter(active);
+    localStorage.setItem('ariso_serial_printer', active);
+  }, [selectedThermalPrinter, printers]);
+
+  // Auto-focus search input on mount and discover printers
   useEffect(() => {
     if (searchInputRef.current) {
       searchInputRef.current.focus();
@@ -193,6 +303,7 @@ export default function SerialNumberSuite({ user, token }) {
     fetchSerials();
     fetchPrinters();
     fetchMenuItems();
+    refreshThermalPrinters();
   }, []);
 
   useEffect(() => {
@@ -406,81 +517,86 @@ export default function SerialNumberSuite({ user, token }) {
   const handleOpenPrint = (serialRecord) => {
     setSelectedSerialForPrint(serialRecord);
     setPrintCopies(1);
+    refreshThermalPrinters();
     setPrintDialogVisible(true);
   };
 
-  // Execute Thermal Label Sticker Print
+  // Execute Thermal Label Sticker Print using the shared Label Designer pipeline
   const handlePrintLabel = async () => {
     if (!selectedSerialForPrint) return;
     setIsPrinting(true);
+
+    // Pre-open isolated popup window synchronously in user click tick to avoid popup blockers
+    let preOpenedWin = null;
     try {
-      const product = selectedSerialForPrint.product || {
-        name: selectedSerialForPrint.product_name,
-        sku: selectedSerialForPrint.product_sku,
-        selling_price: selectedSerialForPrint.selling_price
+      preOpenedWin = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+      if (preOpenedWin) {
+        preOpenedWin.document.open();
+        preOpenedWin.document.write('<!DOCTYPE html><html><head><title></title><style>body{background:#525659;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:-apple-system,BlinkMacSystemFont,sans-serif;color:#fff;font-size:14px;}</style></head><body>Preparing serial barcode sticker for print...</body></html>');
+        preOpenedWin.document.close();
+      }
+    } catch (e) {
+      console.warn('Pre-open print window notice:', e);
+    }
+
+    try {
+      const activePrinter = selectedThermalPrinter || 'TSC TE244';
+      const serialConfig = getSerialStickerConfig(printSize, activePrinter);
+      await ensureStickerFontLoaded(serialConfig.fontFamily);
+
+      // Support either a single serial record or an array of records
+      const serialRecords = Array.isArray(selectedSerialForPrint)
+        ? selectedSerialForPrint
+        : [selectedSerialForPrint];
+
+      const copies = Math.max(1, parseInt(printCopies, 10) || 1);
+      const stickerItems = [];
+
+      serialRecords.forEach((record) => {
+        const serialNumber = String(record.serial_number || '').trim();
+        const product = record.product || {
+          name: record.product_name,
+          sku: record.product_sku,
+          selling_price: record.product_price || record.selling_price
+        };
+
+        const itemPrice = parseFloat(product.selling_price || product.price || record.selling_price || record.product_price || 0);
+
+        for (let i = 0; i < copies; i++) {
+          stickerItems.push({
+            ...product,
+            name: product.name || 'Serial Unit',
+            price: itemPrice,
+            selling_price: itemPrice,
+            barcode: serialNumber,
+            serial_number: serialNumber,
+            isSerialLabel: true
+          });
+        }
+      });
+
+      const storeName = user?.restaurant_name || serialConfig.customShopName || 'ARISO RETAIL FLAGSHIP';
+      const shopData = {
+        name: storeName,
+        restaurant_name: storeName,
+        address: ''
       };
 
-      const selectedObj = printers.find(p => p.id === selectedPrinterId || p.name === selectedPrinterId);
-      const isTargetLabelHardware = selectedObj?.is_label || selectedObj?.protocol === 'tspl' || selectedObj?.type === 'usb';
+      const res = await printStickers(stickerItems, serialConfig, shopData, '__browser_print__', {
+        popupWindow: preOpenedWin
+      });
 
-      if (selectedPrinterId && isTargetLabelHardware) {
-        const res = await apiFetch('/api/printers/print-label', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            printer_name: typeof selectedPrinterId === 'string' && isNaN(selectedPrinterId) ? selectedPrinterId : null,
-            printer_id: !isNaN(selectedPrinterId) ? selectedPrinterId : null,
-            copies: parseInt(printCopies, 10) || 1,
-            label_data: {
-              storeName: user?.restaurant_name || 'ARISO RETAIL',
-              productName: product.name,
-              barcode: selectedSerialForPrint.serial_number,
-              sku: product.sku || '',
-              price: product.selling_price || product.price || 0,
-              mrp: product.mrp || product.selling_price || 0,
-              serialNumber: selectedSerialForPrint.serial_number
-            }
-          })
-        });
-
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || 'Failed to print barcode label.');
-        }
-
-        notify?.success(data.message || `Printed ${printCopies} barcode sticker(s) for Serial #${selectedSerialForPrint.serial_number}`, 'Sticker Printed');
-        setPrintDialogVisible(false);
+      if (res?.popupBlocked) {
+        notify?.error('Pop-up window was blocked by browser. Please allow pop-ups for this site.', 'Pop-up Blocked');
         return;
       }
 
-      const stickerItems = Array(parseInt(printCopies, 10) || 1).fill({
-        id: product.id,
-        name: product.name,
-        sku: product.sku || '',
-        barcode: selectedSerialForPrint.serial_number, // The 8-digit serial number as barcode
-        selling_price: product.selling_price || product.price || 0,
-        mrp: product.mrp || product.selling_price || 0,
-        serial_number: selectedSerialForPrint.serial_number,
-        customLabel: `SN: ${selectedSerialForPrint.serial_number}`
-      });
-
-      const stickerConfig = {
-        size: printSize,
-        rows: 1,
-        spacingMm: 3,
-        showShopName: true,
-        showProductName: true,
-        showBarcode: true,
-        showSellingPrice: true,
-        showMrp: true,
-        showMfgDate: false
-      };
-
-      const storeName = user?.restaurant_name || 'ARISO RETAIL';
-      await printStickers(stickerItems, stickerConfig, { name: storeName, address: '' });
-      notify?.success(`Printed ${printCopies} barcode sticker(s) for Serial #${selectedSerialForPrint.serial_number}`, 'Sticker Print Sent');
+      notify?.success(`Printed ${stickerItems.length} barcode sticker(s)`, 'Sticker Print Sent');
       setPrintDialogVisible(false);
     } catch (err) {
+      if (preOpenedWin && !preOpenedWin.closed) {
+        try { preOpenedWin.close(); } catch (_) {}
+      }
       console.error('Print sticker error:', err);
       notify?.error('Failed to dispatch sticker print: ' + err.message, 'Print Error');
     } finally {
@@ -2120,99 +2236,120 @@ export default function SerialNumberSuite({ user, token }) {
           Print Serial Number Barcode
         </DialogTitle>
         <DialogContent dividers sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-          {selectedSerialForPrint && (
-            <Box>
-              {/* Barcode Sticker Live Preview */}
-              <Box sx={{
-                p: 2.5,
-                bgcolor: '#f8fafc',
-                borderRadius: 2.5,
-                border: '1px dashed #cbd5e1',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center'
-              }}>
-                <Typography variant="caption" sx={{ fontWeight: 800, textTransform: 'uppercase', color: 'text.secondary' }}>
-                  {user?.restaurant_name || 'ARISO RETAIL'}
-                </Typography>
-                <Typography variant="subtitle2" sx={{ fontWeight: 800, mt: 0.5, maxWidth: 280 }}>
-                  {selectedSerialForPrint.product?.name || selectedSerialForPrint.product_name}
-                </Typography>
+          {selectedSerialForPrint && (() => {
+            const previewSizeDef = STICKER_SIZES[printSize] || STICKER_SIZES['38x50'];
+            const activePrinter = selectedThermalPrinter || 'TSC TE244';
+            const serialConfig = getSerialStickerConfig(printSize, activePrinter);
+            const storeName = user?.restaurant_name || serialConfig.customShopName || 'ARISO RETAIL FLAGSHIP';
+            const record = Array.isArray(selectedSerialForPrint) ? selectedSerialForPrint[0] : selectedSerialForPrint;
+            if (!record) return null;
+            const previewProduct = record.product || {
+              name: record.product_name,
+              sku: record.product_sku,
+              selling_price: record.product_price || record.selling_price
+            };
+            const itemPrice = parseFloat(previewProduct.selling_price || previewProduct.price || record.selling_price || record.product_price || 0);
+            const previewItem = {
+              ...previewProduct,
+              name: previewProduct.name,
+              price: itemPrice,
+              selling_price: itemPrice,
+              barcode: record.serial_number,
+              serial_number: record.serial_number,
+              isSerialLabel: true
+            };
 
-                <Box
-                  sx={{ my: 1, p: 1, bgcolor: '#ffffff', borderRadius: 1.5, border: '1px solid #e2e8f0' }}
-                  dangerouslySetInnerHTML={{
-                    __html: generateCode128Svg(selectedSerialForPrint.serial_number, {
-                      width: 1.5,
-                      height: 38,
-                      fontSize: 10,
-                      text: `SN: ${selectedSerialForPrint.serial_number}`
-                    })
-                  }}
-                />
-
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                  <Typography variant="body2" sx={{ fontWeight: 800, color: 'primary.main' }}>
-                    Rs. {(selectedSerialForPrint.product?.selling_price || selectedSerialForPrint.product_price || 0).toFixed(2)}
+            return (
+              <Box>
+                {/* Barcode Sticker Live Preview */}
+                <Box sx={{
+                  p: 2.5,
+                  bgcolor: '#f8fafc',
+                  borderRadius: 2.5,
+                  border: '1px dashed #cbd5e1',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 220
+                }}>
+                  <Box sx={{
+                    width: `${previewSizeDef.width}mm`,
+                    height: `${previewSizeDef.height}mm`,
+                    maxWidth: '100%',
+                    bgcolor: '#ffffff',
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.12)',
+                    borderRadius: 1,
+                    overflow: 'hidden',
+                    position: 'relative'
+                  }}>
+                    <StickerCard
+                      item={previewItem}
+                      config={serialConfig}
+                      shopData={{ name: storeName, restaurant_name: storeName }}
+                    />
+                  </Box>
+                  <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, mt: 1.5 }}>
+                    Physical Label: {previewSizeDef.name} ({previewSizeDef.width} × {previewSizeDef.height} mm) • 1:1 Live Scaled Preview
                   </Typography>
-                  {selectedSerialForPrint.purchase?.invoice && (
-                    <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                      Inv: {selectedSerialForPrint.purchase.invoice}
-                    </Typography>
-                  )}
                 </Box>
-              </Box>
 
-              {/* Print Config Form */}
-              <Grid container spacing={2} sx={{ mt: 1 }}>
-                <Grid size={{ xs: 6 }}>
-                  <FormControl fullWidth size="small">
-                    <InputLabel>Sticker Size</InputLabel>
-                    <Select
-                      value={printSize}
-                      label="Sticker Size"
-                      onChange={(e) => setPrintSize(e.target.value)}
-                    >
-                      <MenuItem value="50x25">50 × 25 mm (Shelf/Barcode Label)</MenuItem>
-                      <MenuItem value="38x38">38 × 38 mm (Square Retail Label)</MenuItem>
-                      <MenuItem value="38x50">38 × 50 mm (Portrait Product Label)</MenuItem>
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid size={{ xs: 6 }}>
-                  <TextField
-                    fullWidth
-                    size="small"
-                    type="number"
-                    label="Copies"
-                    value={printCopies}
-                    onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    slotProps={{ htmlInput: { min: 1, max: 50 } }}
-                  />
-                </Grid>
-                {printers.length > 0 && (
-                  <Grid size={{ xs: 12 }}>
+                {/* Print Config Form */}
+                <Grid container spacing={2} sx={{ mt: 1 }}>
+                  <Grid size={{ xs: 6 }}>
                     <FormControl fullWidth size="small">
-                      <InputLabel>Connected Thermal Machine</InputLabel>
+                      <InputLabel>Sticker Size</InputLabel>
                       <Select
-                        value={selectedPrinterId}
-                        label="Connected Thermal Machine"
-                        onChange={(e) => setSelectedPrinterId(e.target.value)}
+                        value={printSize}
+                        label="Sticker Size"
+                        onChange={(e) => setPrintSize(e.target.value)}
                       >
-                        {printers.map(p => (
-                          <MenuItem key={p.id} value={p.id}>
-                            {p.name} ({p.printer_type || 'ESC/POS'}) - {p.ip_address || p.interface || 'Local'}
-                          </MenuItem>
-                        ))}
+                        <MenuItem value="50x25">50 × 25 mm (Shelf/Barcode Label)</MenuItem>
+                        <MenuItem value="38x38">38 × 38 mm (Square Retail Label)</MenuItem>
+                        <MenuItem value="38x50">38 × 50 mm (Portrait Product Label)</MenuItem>
                       </Select>
                     </FormControl>
                   </Grid>
-                )}
-              </Grid>
-            </Box>
-          )}
+                  <Grid size={{ xs: 6 }}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      type="number"
+                      label="Copies"
+                      value={printCopies}
+                      onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      slotProps={{ htmlInput: { min: 1, max: 100 } }}
+                    />
+                  </Grid>
+
+                  <Grid size={{ xs: 12 }}>
+                    <FormControl fullWidth size="small">
+                      <InputLabel id="connected-thermal-machine-label">Connected Thermal Machine</InputLabel>
+                      <Select
+                        labelId="connected-thermal-machine-label"
+                        value={selectedThermalPrinter || (thermalPrinters[0]?.name || 'TSC TE244')}
+                        label="Connected Thermal Machine"
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedThermalPrinter(val);
+                          localStorage.setItem('ariso_serial_printer', val);
+                        }}
+                      >
+                        {thermalPrinters.map(p => (
+                          <MenuItem key={p.name} value={p.name}>
+                            {p.displayName || p.name}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      <FormHelperText sx={{ color: 'text.secondary', fontSize: '0.75rem', mt: 0.75, fontWeight: 500 }}>
+                        Select "{selectedThermalPrinter || (thermalPrinters[0]?.name || 'TSC TE244')}" in the Chrome print dialog, Paper size USER (104×106 mm), Margins None, Scale 100%.
+                      </FormHelperText>
+                    </FormControl>
+                  </Grid>
+                </Grid>
+              </Box>
+            );
+          })()}
         </DialogContent>
         <DialogActions sx={{ p: 2.5, gap: 1 }}>
           <Button onClick={() => setPrintDialogVisible(false)} sx={{ fontWeight: 700 }}>

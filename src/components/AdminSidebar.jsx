@@ -43,7 +43,8 @@ import {
   HelpCircle,
   RotateCcw,
   PanelLeftClose,
-  PanelLeftOpen
+  PanelLeftOpen,
+  Globe
 } from 'lucide-react';
 
 export const ADMIN_NAV_GROUPS = [
@@ -61,6 +62,12 @@ export const ADMIN_NAV_GROUPS = [
         label: 'Categories',
         icon: Layers,
         description: 'Menu categories and item groupings'
+      },
+      {
+        tabId: 19,
+        label: 'Online Store',
+        icon: Globe,
+        description: 'Online catalog, orders, delivery, payments & QR standee'
       },
       {
         tabId: 2,

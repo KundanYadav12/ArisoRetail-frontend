@@ -48,16 +48,16 @@ export const STICKER_SIZES = {
     width: 38,
     height: 50,
     aspect: '1:1.3 (Portrait Product Label)',
-    barcodeHeightMm: 8.5, // 8.5 mm standard retail scan height (guarantees zero vertical overflow)
-    defaultBarcodeHeight: 24,
-    defaultBarcodeWidth: 0.9,
+    barcodeHeightMm: 12.0, // 12 mm optimal retail scan height for 50 mm tall label
+    defaultBarcodeHeight: 28,
+    defaultBarcodeWidth: 0.95,
     fontScale: {
-      shop: '8.5pt',
+      shop: '9pt',
       address: '7pt',
-      product: '8.5pt',
-      variant: '7pt',
-      price: '8.5pt',
-      mrp: '7.5pt',
+      product: '9.5pt',
+      variant: '7.5pt',
+      price: '10pt',
+      mrp: '8pt',
       date: '7pt'
     }
   }
@@ -67,7 +67,7 @@ export const STICKER_SIZES = {
  * Supported sticker typography and language fonts (bundled locally offline - OFL license)
  */
 export const STICKER_FONTS = [
-  { id: 'default', name: 'Default Sans', family: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' },
+  { id: 'default', name: 'Default Sans', family: 'Arial, "Segoe UI", Roboto, sans-serif' },
   { id: 'monospace', name: 'Monospace', family: 'ui-monospace, Menlo, Monaco, Consolas, "Courier New", monospace' },
   { id: 'serif', name: 'Serif', family: 'Georgia, Cambria, "Times New Roman", Times, serif' },
   { id: 'devanagari', name: 'Noto Sans Devanagari (Hindi / Marathi)', family: '"Noto Sans Devanagari", sans-serif' },
@@ -160,8 +160,8 @@ export const DEFAULT_STICKER_CONFIG = {
   rotation: 0, // 0, 90, 180, 270 degrees
   driverBaseOffset: 0, // 0, 90, 180, 270 degrees (defaults to 0: None / Raw)
   autoFixOrientation: false, // auto-fix 90 deg rotation for wide/landscape thermal driver rolls
-  offsetXmm: 0, // Left offset fine-tuning (-15 to +15 mm)
-  offsetYmm: 0, // Top offset fine-tuning (-15 to +15 mm)
+  offsetXmm: 0, // Left offset fine-tuning (-50 to +50 mm)
+  offsetYmm: 0, // Top offset fine-tuning (-50 to +50 mm)
   directThermalMode: false, // Send raw TSPL/ZPL commands
   tsplDirection: 0, // 0 = standard top-to-bottom feed, 1 = inverted feed
   showShopName: true,
@@ -190,10 +190,20 @@ export const DEFAULT_STICKER_CONFIG = {
   weightValue: '500', // default weight value
   weightUnit: 'g', // unit dropdown: g, kg, ml, L, pcs
   safePaddingMm: 2.5, // 2.5 mm default inner safe padding (33 mm usable width for 38 mm label)
-  mediaWidthMm: '', // Physical backing/media roll width in mm (default = pageW)
+  mediaAlignment: 'centre', // 'left' | 'centre' | 'right' (media position on printhead)
+  printheadWidthMm: 104, // Thermal printhead width in mm (104 mm for TSC TE244)
+  linerWidthMm: 83, // Backing liner paper width in mm (83 mm for 79 mm twin labels)
+  mediaWidthMm: '', // Optional physical backing/media roll width in mm override
   driverLeftMarginMm: 0, // Windows driver left margin compensation in mm (saved per printer profile)
   speed: 4, // TSPL print speed in inches/sec
-  density: 8 // TSPL print darkness/density (1-15)
+  density: 8, // TSPL print darkness/density (1-15)
+  // Portrait sheet browser print settings
+  printMode: 'portrait_sheet', // 'portrait_sheet' (recommended) | 'legacy_landscape'
+  paperSizeName: 'USER', // Custom form name defined in TSC Windows driver
+  paperWidthMm: '', // Driver form paper width in mm (auto-calculated if empty)
+  paperHeightMm: '', // Driver form paper height in mm (auto-calculated if empty)
+  sheetColumns: 2, // 1 or 2 columns per sheet (defaults to 2 for 2-row rolls, 1 for 1-row rolls)
+  sheetRows: '' // Rows per sheet (default: floor(paperH / (labelH + gap)))
 };
 
 const STORAGE_KEY = 'ariso_sticker_config';
@@ -222,9 +232,13 @@ export function loadSavedStickerConfig(printerName = null) {
  */
 export function saveStickerConfig(config, printerName = null) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    const toSave = { ...config };
+    if (printerName && printerName !== '__browser_print__') {
+      toSave.defaultPrinter = printerName;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     if (printerName) {
-      localStorage.setItem(`${STORAGE_KEY}_${printerName}`, JSON.stringify(config));
+      localStorage.setItem(`${STORAGE_KEY}_${printerName}`, JSON.stringify(toSave));
     }
   } catch (e) {
     console.warn('[StickerGenerator] Failed to save config:', e);
@@ -232,11 +246,63 @@ export function saveStickerConfig(config, printerName = null) {
 }
 
 /**
+ * Resolves standard configuration for Serial Number Barcode printing
+ * Reuses the saved Label Designer layout (USER 104x106, 2-up sheet, 203 DPI, offsets, driver settings).
+ * If none is saved, uses exact defaults: USER 104x106, 2 col x 2 row, 203 DPI.
+ */
+export function getSerialStickerConfig(printSize = '38x50', printerName = null) {
+  const saved = loadSavedStickerConfig(printerName);
+  const sizeDef = STICKER_SIZES[printSize] || STICKER_SIZES['38x50'];
+  const gap = parseFloat(saved.spacingMm !== undefined ? saved.spacingMm : 3) || 3;
+  const paperW = parseFloat(saved.paperWidthMm) > 0 ? parseFloat(saved.paperWidthMm) : 104;
+  const paperH = parseFloat(saved.paperHeightMm) > 0 ? parseFloat(saved.paperHeightMm) : 106;
+  const paperName = (saved.paperSizeName || 'USER').trim();
+
+  return {
+    ...saved,
+    size: printSize,
+    isSerialLabel: true,
+    showShopName: true,
+    showProductName: true,
+    showBarcode: true,
+    showSellingPrice: true,
+    showMrp: false,
+    showAddress: false,
+    showMfgDate: false,
+    showExpDate: false,
+    showSize: false,
+    showColor: false,
+    showWeight: false,
+    printMode: 'portrait_sheet',
+    rotation: 0,
+    paperSizeName: paperName,
+    paperWidthMm: paperW,
+    paperHeightMm: paperH,
+    sheetColumns: 2, // 2-up sheet (2 columns x 2 rows = 4 labels/sheet)
+    sheetRows: 2,
+    rows: 2,
+    spacingMm: gap,
+    dpi: saved.dpi || 203,
+    printheadWidthMm: parseFloat(saved.printheadWidthMm) > 0 ? parseFloat(saved.printheadWidthMm) : 104,
+    linerWidthMm: parseFloat(saved.linerWidthMm) > 0 ? parseFloat(saved.linerWidthMm) : 83,
+    mediaAlignment: saved.mediaAlignment || 'centre',
+    safePaddingMm: saved.safePaddingMm !== undefined ? parseFloat(saved.safePaddingMm) : 2.5,
+    offsetXmm: saved.offsetXmm !== undefined ? parseFloat(saved.offsetXmm) : 0,
+    offsetYmm: saved.offsetYmm !== undefined ? parseFloat(saved.offsetYmm) : 0,
+    driverLeftMarginMm: saved.driverLeftMarginMm !== undefined ? parseFloat(saved.driverLeftMarginMm) : 0,
+    defaultPrinter: printerName || saved.defaultPrinter || 'TSC TE244'
+  };
+}
+
+/**
  * Calculate effective rotation in degrees (0, 90, 180, or 270) for print document
- * Taking into account user rotation, auto-fix compensation, and driver base offset.
- * finalRotation = (userRotation + autoFixOffset + driverBaseOffset) mod 360
+ * In Portrait sheet mode, rotation is strictly 0° (driver handles portrait feed).
+ * In Legacy mode: finalRotation = (userRotation + autoFixOffset + driverBaseOffset) mod 360
  */
 export function getEffectiveRotation(config) {
+  if (config?.printMode !== 'legacy_landscape') {
+    return 0;
+  }
   const userRotation = parseInt(config?.rotation, 10) || 0;
   const autoFixOffset = config?.autoFixOrientation ? 270 : 0;
   const driverBaseOffset = config?.driverBaseOffset !== undefined
@@ -248,11 +314,157 @@ export function getEffectiveRotation(config) {
 
 /**
  * Calculate user-facing physical label preview rotation (0, 90, 180, or 270)
- * Represents the final orientation of the physical label relative to the viewer.
+ * In Portrait sheet mode, preview is strictly 0° upright.
  */
 export function getPreviewRotation(config) {
+  if (config?.printMode !== 'legacy_landscape') {
+    return 0;
+  }
   const userRotation = parseInt(config?.rotation, 10) || 0;
   return ((userRotation % 360) + 360) % 360;
+}
+
+/**
+ * Resolves the sheet layout grid and driver form dimensions for portrait sheet printing
+ * Supports 1 or 2 columns, dynamic or user-specified paper width/height, and exact mm cell coordinates.
+ */
+export function resolveSheetLayout(config = {}) {
+  const sizeDef = STICKER_SIZES[config?.size] || STICKER_SIZES['50x25'];
+  const labelW = sizeDef.width;
+  const labelH = sizeDef.height;
+  const gap = parseFloat(config?.spacingMm !== undefined ? config.spacingMm : 3) || 3;
+  const isLegacy = config?.printMode === 'legacy_landscape';
+
+  // Columns per sheet:
+  let cols = 1;
+  if (config?.sheetColumns !== undefined && config?.sheetColumns !== null && config?.sheetColumns !== '') {
+    cols = parseInt(config.sheetColumns, 10) === 1 ? 1 : 2;
+  } else {
+    cols = parseInt(config?.rows, 10) === 2 ? 2 : 1;
+  }
+
+  // Thermal printhead width (default 104 mm for TSC TE244)
+  const headW = parseFloat(config?.printheadWidthMm) > 0 ? parseFloat(config.printheadWidthMm) : 104;
+
+  // Backing roll liner width (default 83 mm for 79 mm twin labels)
+  const defaultLinerW = cols === 2 ? 83 : (labelW + 4);
+  const linerW = parseFloat(config?.linerWidthMm) > 0
+    ? parseFloat(config.linerWidthMm)
+    : (parseFloat(config?.mediaWidthMm) > 0 ? parseFloat(config.mediaWidthMm) : defaultLinerW);
+
+  // Media alignment on printhead: 'left' | 'centre' | 'right'
+  const alignment = (config?.mediaAlignment || 'centre').toLowerCase();
+
+  // Compute mediaLeft:
+  // mediaLeft = 0 (Left) | (headW − linerW) / 2 (Centre) | headW − linerW (Right)
+  let mediaLeft = 0;
+  if (alignment === 'left') {
+    mediaLeft = 0;
+  } else if (alignment === 'right') {
+    mediaLeft = Math.max(0, headW - linerW);
+  } else {
+    mediaLeft = Math.max(0, (headW - linerW) / 2);
+  }
+
+  // Content width of die-cut labels: (cols * labelW + (cols - 1) * gap)
+  const contentWidthMm = cols * labelW + (cols - 1) * gap;
+
+  // firstLabelX = mediaLeft + (linerW − (cols × labelW + (cols − 1) × gap)) / 2
+  const firstLabelX = mediaLeft + Math.max(0, (linerW - contentWidthMm) / 2);
+
+  // Left offset fine-tuning (supports negative and positive values, applied once to whole sheet)
+  const offX = parseFloat(config?.offsetXmm) || 0;
+  const offY = parseFloat(config?.offsetYmm) || 0;
+  const driverLeftComp = parseFloat(config?.driverLeftMarginMm) || 0;
+  const totalLeftOffset = offX + driverLeftComp;
+  const totalTopOffset = offY;
+
+  // Row step is label height + gap between rows (repeat pitch)
+  const rowStep = labelH + gap;
+
+  // Driver form Paper width (default: headW for portrait sheet)
+  let paperW = parseFloat(config?.paperWidthMm);
+  if (!paperW || isNaN(paperW) || paperW <= 0) {
+    paperW = isLegacy ? contentWidthMm : headW;
+  }
+
+  // Driver form Paper height:
+  // For 2 rows of 38×50 labels with a 3 mm gap that is 106 mm (2 × 53).
+  let paperH = parseFloat(config?.paperHeightMm);
+  if (!paperH || isNaN(paperH) || paperH <= 0) {
+    if (isLegacy) {
+      paperH = labelH;
+    } else {
+      const defaultRows = 2;
+      paperH = defaultRows * rowStep;
+    }
+  }
+
+  // Rows per sheet = floor(paperH / (labelH + gap))
+  const maxFittingRows = Math.max(1, Math.floor(paperH / rowStep));
+  let requestedRows = 1;
+  if (isLegacy) {
+    requestedRows = 1;
+  } else if (config?.sheetRows !== undefined && config?.sheetRows !== null && config?.sheetRows !== '' && parseInt(config.sheetRows, 10) > 0) {
+    requestedRows = parseInt(config.sheetRows, 10);
+  } else {
+    requestedRows = maxFittingRows;
+  }
+
+  // If content is taller than the page, shrink the number of rows
+  let rows = requestedRows;
+  let rowsShrunk = false;
+  if (rows > maxFittingRows) {
+    rows = maxFittingRows;
+    rowsShrunk = true;
+  }
+
+  const paperSizeName = (config?.paperSizeName || 'USER').trim();
+
+  // Cell position calculator:
+  // cell x = firstLabelX + leftOffset + col × (labelW + gap)
+  const getCellPosition = (colIndex, rowIndex) => ({
+    x: firstLabelX + totalLeftOffset + colIndex * (labelW + gap),
+    y: totalTopOffset + rowIndex * (labelH + gap)
+  });
+
+  const col0X = getCellPosition(0, 0).x;
+  const col1X = cols > 1 ? getCellPosition(1, 0).x : col0X;
+  const rightEdgeX = getCellPosition(cols - 1, 0).x + labelW;
+
+  const isLeftOutOfBounds = col0X < 0;
+  const isRightOutOfBounds = rightEdgeX > paperW;
+  const isOutOfBounds = isLeftOutOfBounds || isRightOutOfBounds;
+
+  return {
+    isLegacy,
+    labelW,
+    labelH,
+    gap,
+    cols,
+    rows,
+    requestedRows,
+    rowsShrunk,
+    maxFittingRows,
+    stickersPerSheet: cols * rows,
+    paperW,
+    paperH,
+    paperSizeName,
+    headW,
+    linerW,
+    alignment,
+    mediaLeft,
+    firstLabelX,
+    totalLeftOffset,
+    totalTopOffset,
+    col0X,
+    col1X,
+    rightEdgeX,
+    isLeftOutOfBounds,
+    isRightOutOfBounds,
+    isOutOfBounds,
+    getCellPosition
+  };
 }
 
 /**
@@ -376,10 +588,13 @@ export function resolveStickerPrices(item = {}, config = {}) {
  * Mumbai, Maharashtra
  * ...
  */
-export function formatStickerAddress(rawAddress, maxLines = 3) {
+export function formatStickerAddress(rawAddress, maxLines = 3, usableWidthMm = 34) {
   if (!rawAddress || typeof rawAddress !== 'string') return [];
   const trimmed = rawAddress.trim();
   if (!trimmed) return [];
+
+  // Approximate max chars per line at 6pt semi-bold font
+  const maxChars = Math.max(16, Math.floor(usableWidthMm / 1.6));
 
   let lines = [];
   if (trimmed.includes('\n')) {
@@ -390,7 +605,7 @@ export function formatStickerAddress(rawAddress, maxLines = 3) {
     for (const part of parts) {
       if (!currentLine) {
         currentLine = part;
-      } else if ((currentLine + ', ' + part).length <= 28) {
+      } else if ((currentLine + ', ' + part).length <= maxChars) {
         currentLine += ', ' + part;
       } else {
         lines.push(currentLine);
@@ -400,13 +615,13 @@ export function formatStickerAddress(rawAddress, maxLines = 3) {
     if (currentLine) {
       lines.push(currentLine);
     }
-  } else if (trimmed.length > 28) {
+  } else if (trimmed.length > maxChars) {
     const words = trimmed.split(/\s+/);
     let currentLine = '';
     for (const word of words) {
       if (!currentLine) {
         currentLine = word;
-      } else if ((currentLine + ' ' + word).length <= 28) {
+      } else if ((currentLine + ' ' + word).length <= maxChars) {
         currentLine += ' ' + word;
       } else {
         lines.push(currentLine);
@@ -424,9 +639,14 @@ export function formatStickerAddress(rawAddress, maxLines = 3) {
     return lines;
   }
 
-  // Address exceeds maxLines (exceeds 3 lines):
-  // Truncate after lines and append '...' as the 3rd line, guaranteeing at most 3 lines
-  return [lines[0], lines[1], '...'];
+  // Address exceeds maxLines: truncate to maxLines and append '...' to the last line
+  const result = lines.slice(0, maxLines);
+  let last = result[maxLines - 1];
+  if (last.length > maxChars - 3) {
+    last = last.slice(0, maxChars - 3);
+  }
+  result[maxLines - 1] = last.trim() + '...';
+  return result;
 }
 
 /**
@@ -521,19 +741,26 @@ export function resolveItemWeight(item, config = {}) {
 
 /**
  * Validate that a barcode string is non-empty and contains only valid Code 128 characters (ASCII 32 to 126).
+ * Also flags isDense if module width at 2 dots exceeds label width quiet zone budget.
  */
-export function validateBarcodeCode128(code) {
+export function validateBarcodeCode128(code, options = {}) {
   if (!code || typeof code !== 'string' || code.trim() === '') {
-    return { valid: false, error: 'Barcode value is empty', code: '' };
+    return { valid: false, error: 'Barcode value is empty', code: '', isDense: false };
   }
   const cleanCode = code.trim();
   for (let i = 0; i < cleanCode.length; i++) {
     const ch = cleanCode.charCodeAt(i);
     if (ch < 32 || ch > 126) {
-      return { valid: false, error: `Invalid character '${cleanCode[i]}' for Code128 (ASCII 32-126 only)`, code: cleanCode };
+      return { valid: false, error: `Invalid character '${cleanCode[i]}' for Code128 (ASCII 32-126 only)`, code: cleanCode, isDense: false };
     }
   }
-  return { valid: true, error: null, code: cleanCode };
+
+  const labelWidthMm = options.widthMm || 38;
+  const maxAllowedWidthMm = Math.max(14, labelWidthMm - 3.0);
+  const estModules = 35 + 11 * cleanCode.length;
+  const isDense = (estModules * 0.25025) > maxAllowedWidthMm;
+
+  return { valid: true, error: null, code: cleanCode, isDense };
 }
 
 /**
@@ -572,24 +799,37 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
   const cleanStr = String(text).trim();
   if (!cleanStr) return { lines: [], fontSizePt: basePt };
 
-  // 1. Check if single line fits by stepping down in 0.25 pt increments
-  for (let pt = basePt; pt >= minPt; pt -= 0.25) {
-    const w = measureTextWidthMm(cleanStr, pt, isBold, fontFamily);
-    if (w <= usableWidthMm) {
-      return { lines: [cleanStr], fontSizePt: pt };
-    }
-  }
+  // Safety buffer: require text measurement to fit within 92% of usable width
+  // to account for browser subpixel anti-aliasing, letter spacing, and thermal DPI differences
+  const safeUsableWidth = usableWidthMm * 0.92;
 
+  // 1. Single line mode: check if cleanStr fits at basePt down to minPt
   if (maxLines <= 1) {
-    // Single line mode: truncate with '…' at minPt
+    for (let pt = basePt; pt >= minPt; pt -= 0.25) {
+      const w = measureTextWidthMm(cleanStr, pt, isBold, fontFamily);
+      if (w <= safeUsableWidth) {
+        return { lines: [cleanStr], fontSizePt: pt };
+      }
+    }
+    // Truncate with ellipsis at minPt
     let truncated = cleanStr;
-    while (truncated.length > 2 && measureTextWidthMm(truncated + '…', minPt, isBold, fontFamily) > usableWidthMm) {
+    while (truncated.length > 2 && measureTextWidthMm(truncated + '…', minPt, isBold, fontFamily) > safeUsableWidth) {
       truncated = truncated.slice(0, -1);
     }
     return { lines: [truncated.trim() + '…'], fontSizePt: minPt };
   }
 
-  // 2. Multi-line (up to 2 lines): step down in 0.25 pt increments and wrap words
+  // 2. Multi-line (maxLines >= 2):
+  // Check if it fits on a single line with a large, readable font (>= 8.0 pt)
+  const singleLineMinPt = Math.max(minPt, 8.0);
+  for (let pt = basePt; pt >= singleLineMinPt; pt -= 0.25) {
+    const w = measureTextWidthMm(cleanStr, pt, isBold, fontFamily);
+    if (w <= safeUsableWidth) {
+      return { lines: [cleanStr], fontSizePt: pt };
+    }
+  }
+
+  // If it does not fit comfortably on 1 line at >= 8pt, wrap across 2 lines!
   const words = cleanStr.split(/\s+/);
   for (let pt = basePt; pt >= minPt; pt -= 0.25) {
     let line1 = '';
@@ -599,7 +839,7 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
 
     for (; wordIdx < words.length; wordIdx++) {
       const test = line1 ? `${line1} ${words[wordIdx]}` : words[wordIdx];
-      if (measureTextWidthMm(test, pt, isBold, fontFamily) <= usableWidthMm) {
+      if (measureTextWidthMm(test, pt, isBold, fontFamily) <= safeUsableWidth) {
         line1 = test;
       } else {
         break;
@@ -608,7 +848,7 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
 
     for (; wordIdx < words.length; wordIdx++) {
       const test = line2 ? `${line2} ${words[wordIdx]}` : words[wordIdx];
-      if (measureTextWidthMm(test, pt, isBold, fontFamily) <= usableWidthMm) {
+      if (measureTextWidthMm(test, pt, isBold, fontFamily) <= safeUsableWidth) {
         line2 = test;
       } else {
         canFit = false;
@@ -616,17 +856,17 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
       }
     }
 
-    if (canFit && wordIdx === words.length) {
+    if (canFit && wordIdx === words.length && line1) {
       return { lines: line2 ? [line1, line2] : [line1], fontSizePt: pt };
     }
   }
 
-  // 3. If it still doesn't fit into 2 lines at minPt, fill line 1 and truncate line 2 with '…'
+  // 3. If it still doesn't fit on 2 lines at minPt, fill line 1 and truncate line 2 with '…'
   let line1 = '';
   let wordIdx = 0;
   for (; wordIdx < words.length; wordIdx++) {
     const test = line1 ? `${line1} ${words[wordIdx]}` : words[wordIdx];
-    if (measureTextWidthMm(test, minPt, isBold, fontFamily) <= usableWidthMm) {
+    if (measureTextWidthMm(test, minPt, isBold, fontFamily) <= safeUsableWidth) {
       line1 = test;
     } else {
       break;
@@ -635,14 +875,14 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
 
   if (!line1 && words.length > 0) {
     let word = words[0];
-    while (word.length > 2 && measureTextWidthMm(word + '…', minPt, isBold, fontFamily) > usableWidthMm) {
+    while (word.length > 2 && measureTextWidthMm(word + '…', minPt, isBold, fontFamily) > safeUsableWidth) {
       word = word.slice(0, -1);
     }
     return { lines: [word + '…'], fontSizePt: minPt };
   }
 
   let line2 = words.slice(wordIdx).join(' ');
-  while (line2.length > 2 && measureTextWidthMm(line2 + '…', minPt, isBold, fontFamily) > usableWidthMm) {
+  while (line2.length > 2 && measureTextWidthMm(line2 + '…', minPt, isBold, fontFamily) > safeUsableWidth) {
     line2 = line2.slice(0, -1);
   }
   line2 = line2.trim() + '…';
@@ -653,87 +893,179 @@ export function fitTextToWidth(text, basePt, minPt, usableWidthMm, isBold = fals
 /**
  * Generate a pure vector SVG Code128 barcode string
  * - Integer printer dot module widths based on printer DPI (203 or 300)
- * - 10-module quiet zone on each side: barcode + quiet zones <= usable width
- * - Full human-readable value printed in full under the barcode
+ * - 2 dots = 0.25 mm preferred at 203 DPI; drops to 1 dot if barcode modules exceed label width budget
+ * - Quiet zone >= 1.5 mm on each side
  * - Pure black on white (#000000 on #ffffff) with crispEdges
+ * - Full human-readable text printed under the barcode in 6 pt bold
  */
 export function generateCode128Svg(code, options = {}) {
-  const validation = validateBarcodeCode128(code);
+  const validation = validateBarcodeCode128(code, options);
   if (!validation.valid) {
-    return `<div class="barcode-validation-error" style="font-family: monospace; font-size: 7pt; color: #dc2626; border: 1px dashed #dc2626; padding: 2px 4px; text-align: center; background: #fef2f2; border-radius: 2px;">⚠️ ${validation.error}</div>`;
+    return `<div class="barcode-validation-error" style="font-family: monospace; font-size: 6pt; color: #000000; border: 1px dashed #000000; padding: 2px 4px; text-align: center; background: #ffffff;">⚠️ ${validation.error}</div>`;
   }
   const cleanCode = validation.code;
 
   const dpi = parseInt(options.dpi, 10) === 300 ? 300 : 203;
-  const safePaddingMm = parseFloat(options.safePaddingMm !== undefined ? options.safePaddingMm : 2.5) || 2.5;
   const labelWidthMm = options.widthMm || 38;
-  const usableWidthMm = options.usableWidthMm || Math.max(16, labelWidthMm - (safePaddingMm * 2));
+  const labelHeightMm = options.labelHeightMm || (options.heightMm ? options.heightMm * 3.5 : 50);
 
-  // Code128: 35 overhead modules + 11 modules per data character
-  const barcodeModules = 35 + 11 * cleanCode.length;
-
-  // Scanner quiet zone requirement: Code 128 requires at least 10 modules on each side.
-  // We guarantee at least 2.5 mm to 3.0 mm quiet zone within the usable cell width.
-  const maxAllowedBarcodeWidthMm = Math.max(14, usableWidthMm - 4.0);
-
-  // Calculate module width in mm for high readability on 203 & 300 DPI barcode guns:
-  // Target module width is between 0.18 mm (7 mil) and 0.25 mm (10 mil).
-  let moduleWidthMm = maxAllowedBarcodeWidthMm / barcodeModules;
-  if (moduleWidthMm > 0.25) moduleWidthMm = 0.25;
-  if (moduleWidthMm < 0.17) moduleWidthMm = 0.17;
-
-  // Ensure total width fits within usableWidthMm with at least 3.0 mm quiet zone
-  if (barcodeModules * moduleWidthMm > usableWidthMm - 3.0) {
-    moduleWidthMm = Math.max(0.15, (usableWidthMm - 3.0) / barcodeModules);
-  }
-
-  const actualBarcodeWidthMm = barcodeModules * moduleWidthMm;
-  // Module width in CSS px for JsBarcode:
-  const jsBarcodeModuleWidth = moduleWidthMm * 3.779528;
-
-  // Standard retail bar height: 8.0 - 8.5 mm (provides large laser/CCD target area)
-  const targetBarHeightMm = options.heightMm || (usableWidthMm >= 45 ? 8.0 : (options.labelHeightMm >= 45 ? 8.5 : 8.0));
-  const barHeightPx = Math.round(targetBarHeightMm * 3.779528);
-
-  const fontSizePt = options.fontSizePt || (usableWidthMm <= 33 ? 6.5 : 7.0);
-  const fontSizePx = Math.round(fontSizePt * 1.333333);
-
-  // Exact total SVG height in mm: bar height + text height + text margin
-  const showText = options.displayValue !== false;
-  const textHeightMm = showText ? ((fontSizePt * 0.352778) + 1.2) : 0;
-  const totalSvgHeightMm = targetBarHeightMm + textHeightMm;
-
-  try {
-    const svgNode = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    JsBarcode(svgNode, cleanCode, {
-      format: 'CODE128',
-      width: jsBarcodeModuleWidth,
-      height: barHeightPx,
-      displayValue: showText,
-      text: options.text || cleanCode,
-      font: 'monospace',
-      fontOptions: 'bold',
-      fontSize: fontSizePx,
-      textMargin: 1.0,
-      margin: 0,
-      background: '#ffffff',
-      lineColor: '#000000'
-    });
-
-    svgNode.setAttribute('shape-rendering', 'crispEdges');
-    const rawW = svgNode.getAttribute('width');
-    const rawH = svgNode.getAttribute('height');
-    if (rawW && rawH) {
-      svgNode.setAttribute('viewBox', `0 0 ${rawW} ${rawH}`);
+  // Barcode bar height:
+  // - 38×50: 10.0 mm (in 9 to 11 mm target range for serial, 8.5 mm for product)
+  // - 38×38: 8.5 mm (in 8 to 9 mm range for serial, 7.0 mm for product)
+  // - 50×25: 8.5 mm (in 8 to 9 mm range for serial, 6.0 mm for product)
+  let targetBarHeightMm = 8.5;
+  if (options.isSerial) {
+    if (labelHeightMm <= 26) {
+      targetBarHeightMm = 8.5; // 8 to 9 mm on 25 mm labels
+    } else if (labelHeightMm <= 40) {
+      targetBarHeightMm = 8.5;
+    } else {
+      targetBarHeightMm = 10.0; // 9 to 11 mm on 50 mm labels
     }
-    svgNode.setAttribute('width', `${actualBarcodeWidthMm.toFixed(2)}mm`);
-    svgNode.setAttribute('height', `${totalSvgHeightMm.toFixed(2)}mm`);
-    svgNode.setAttribute('style', `display: block; margin: 0 auto; width: ${actualBarcodeWidthMm.toFixed(2)}mm; height: ${totalSvgHeightMm.toFixed(2)}mm; max-width: 100%; shape-rendering: crispEdges;`);
-    return new XMLSerializer().serializeToString(svgNode);
-  } catch (err) {
-    console.warn('[StickerGenerator] Barcode generation warning for code:', cleanCode, err);
-    return `<div style="font-family: monospace; font-size: 7.5pt; font-weight: bold; border: 1px dashed #000; padding: 2px 4px; text-align: center;">${cleanCode}</div>`;
+  } else {
+    if (labelHeightMm <= 26) {
+      targetBarHeightMm = 6.0;
+    } else if (labelHeightMm <= 40) {
+      targetBarHeightMm = 7.0;
+    } else {
+      targetBarHeightMm = 8.5;
+    }
   }
+  if (options.heightMm && options.heightMm >= 6 && options.heightMm <= 14) {
+    targetBarHeightMm = options.heightMm;
+  }
+
+  // 1 printer dot in mm:
+  // 203 DPI: 25.4 / 203 = 0.125123 mm
+  // 300 DPI: 25.4 / 300 = 0.084667 mm
+  const dotMm = dpi === 300 ? 0.084667 : 0.125123;
+
+  // Maximum allowed barcode width allowing at least 1.5 mm quiet zone on each side:
+  const maxAllowedBarcodeWidthMm = options.usableWidthMm || Math.max(14, labelWidthMm - 3.0);
+
+  // Encode Code 128 to exact binary module pattern
+  let binary = '';
+  try {
+    const CODE128 = JsBarcode && JsBarcode.getModule ? JsBarcode.getModule('CODE128') : null;
+    if (CODE128) {
+      const encoder = new CODE128(cleanCode, {});
+      if (encoder && encoder.valid()) {
+        const encoded = encoder.encode();
+        if (encoded && encoded.data) {
+          binary = encoded.data;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Barcode] JsBarcode direct encoder notice:', e);
+  }
+
+  // Fallback if direct encoder was unavailable
+  if (!binary && typeof document !== 'undefined') {
+    try {
+      const dummySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      JsBarcode(dummySvg, cleanCode, {
+        format: 'CODE128',
+        width: 1,
+        height: 100,
+        displayValue: false,
+        margin: 0,
+        background: '',
+        lineColor: '#000000'
+      });
+      const rects = dummySvg.querySelectorAll('g rect');
+      if (rects && rects.length > 0) {
+        const parsedW = Math.round(parseFloat(dummySvg.getAttribute('width')) || 0);
+        if (parsedW > 0) {
+          const arr = new Array(parsedW).fill('0');
+          rects.forEach(r => {
+            const rx = Math.round(parseFloat(r.getAttribute('x')) || 0);
+            const rw = Math.round(parseFloat(r.getAttribute('width')) || 1);
+            for (let k = rx; k < rx + rw && k < parsedW; k++) {
+              arr[k] = '1';
+            }
+          });
+          binary = arr.join('');
+        }
+      }
+    } catch (e2) {
+      console.warn('[Barcode] JsBarcode fallback notice:', e2);
+    }
+  }
+
+  let M = binary ? binary.length : 0;
+  if (!M || M < 20) {
+    M = 35 + 11 * cleanCode.length;
+    binary = '1'.repeat(M);
+  }
+
+  // Select integer printer dot module width:
+  // 2 dots (0.25 mm at 203 DPI) preferred if it fits with >= 1.5 mm quiet zone; otherwise 1 dot.
+  let moduleDots = 2;
+  if (M * (2 * dotMm) > maxAllowedBarcodeWidthMm) {
+    moduleDots = 1;
+  }
+  if (dpi === 300) {
+    if (M * (3 * dotMm) <= maxAllowedBarcodeWidthMm) {
+      moduleDots = 3;
+    } else if (M * (2 * dotMm) <= maxAllowedBarcodeWidthMm) {
+      moduleDots = 2;
+    } else {
+      moduleDots = 1;
+    }
+  }
+
+  const moduleWidthMm = moduleDots * dotMm;
+  const actualBarcodeWidthMm = M * moduleWidthMm;
+
+  // Exact 0.5 mm gap between bars and human-readable text + 6 to 7 pt bold text (~2.3 mm)
+  const showText = options.displayValue !== false;
+  const barsToTextGapMm = 0.5;
+  const textHeightMm = showText ? 2.3 : 0;
+  const textBottomPadMm = showText ? 0.35 : 0;
+  const totalSvgHeightMm = targetBarHeightMm + (showText ? (barsToTextGapMm + textHeightMm + textBottomPadMm) : 0);
+
+  const totalDotsW = M * moduleDots;
+  const barHeightDots = Math.round(targetBarHeightMm / dotMm);
+  const barsToTextGapDots = showText ? Math.round(barsToTextGapMm / dotMm) : 0;
+  const textHeightDots = showText ? Math.round(textHeightMm / dotMm) : 0;
+  const textBottomPadDots = showText ? Math.round(textBottomPadMm / dotMm) : 0;
+  const totalDotsH = barHeightDots + barsToTextGapDots + textHeightDots + textBottomPadDots;
+
+  // Build exact SVG rect tags at exact integer dot coordinates to guarantee 100% scanner decodability
+  const rectTags = [];
+  let barWidth = 0;
+  for (let b = 0; b < M; b++) {
+    if (binary[b] === '1') {
+      barWidth++;
+    } else if (barWidth > 0) {
+      const xDots = (b - barWidth) * moduleDots;
+      const wDots = barWidth * moduleDots;
+      rectTags.push(`<rect x="${xDots}" y="0" width="${wDots}" height="${barHeightDots}" />`);
+      barWidth = 0;
+    }
+  }
+  if (barWidth > 0) {
+    const xDots = (M - barWidth) * moduleDots;
+    const wDots = barWidth * moduleDots;
+    rectTags.push(`<rect x="${xDots}" y="0" width="${wDots}" height="${barHeightDots}" />`);
+  }
+
+  const textYDots = barHeightDots + barsToTextGapDots + Math.round(textHeightDots * 0.82);
+  const textFontSizeDots = Math.round(textHeightDots * 0.85);
+
+  const textElement = showText ? `
+    <text x="${totalDotsW / 2}" y="${textYDots}" font-family="Arial, 'Segoe UI', Roboto, sans-serif" font-size="${textFontSizeDots}" font-weight="bold" text-anchor="middle" fill="#000000">${cleanCode}</text>
+  ` : '';
+
+  return `
+    <svg viewBox="0 0 ${totalDotsW} ${totalDotsH}" width="${actualBarcodeWidthMm.toFixed(4)}mm" height="${totalSvgHeightMm.toFixed(4)}mm" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" style="display: block; margin: 0 auto; width: ${actualBarcodeWidthMm.toFixed(4)}mm; height: ${totalSvgHeightMm.toFixed(4)}mm; max-width: 100%;">
+      <g fill="#000000">
+        ${rectTags.join('\n        ')}
+      </g>
+      ${textElement}
+    </svg>
+  `;
 }
 
 /**
@@ -785,162 +1117,228 @@ export function parseDisplayToIsoDate(displayStr) {
  */
 export function renderSingleStickerHtml(item, config, shopData = {}) {
   const sizeDef = STICKER_SIZES[config.size] || STICKER_SIZES['50x25'];
-  const safePadding = parseFloat(config?.safePaddingMm !== undefined ? config.safePaddingMm : 2.5) || 2.5;
-  const usableWidthMm = Math.max(16, sizeDef.width - (safePadding * 2));
-  const usableHeightMm = Math.max(16, sizeDef.height - (safePadding * 2));
-  const fontFamilyCss = getFontFamilyCss(config.fontFamily);
+  const isCompact25 = sizeDef.height <= 26;
+  const isTall50 = sizeDef.height >= 45;
 
+  // SAFE MARGIN: 2 mm on top & sides, 1.2 mm on bottom (38x50 gives 34 x 46.8 mm inner box)
+  // Anchors Shop Name strictly 2mm from top edge, and brings barcode block to 1.2mm from bottom edge
+  const safeMarginTopMm = 2.0;
+  const safeMarginSidesMm = 2.0;
+  const safeMarginBottomMm = 1.2;
+  const usableWidthMm = Math.max(14, sizeDef.width - (safeMarginSidesMm * 2));
+  const usableHeightMm = Math.max(16, sizeDef.height - safeMarginTopMm - safeMarginBottomMm);
+
+  // Explicit font stack with Rupee glyph support
+  const chosenFont = config.fontFamily && config.fontFamily !== 'default'
+    ? getFontFamilyCss(config.fontFamily)
+    : 'Arial, "Segoe UI", Roboto, sans-serif';
+  const fontFamilyCss = `${chosenFont}, Arial, "Segoe UI", Roboto, sans-serif`;
+
+  // Font sizes for compact (<=26mm) vs standard/tall (38-50mm)
+  const baseShopPt = isCompact25 ? 7.0 : 8.0;
+  const baseProdPt = isCompact25 ? 7.5 : 8.0;
+  const basePricePt = isCompact25 ? 8.0 : 9.0;
+  const baseMrpPt = isCompact25 ? 6.5 : 7.0;
+  const baseDatePt = isCompact25 ? 5.5 : 6.5;
+  const addrFontSize = isCompact25 ? '5.5pt' : '6pt';
+
+  const isSerial = !!(item?.isSerialLabel || config?.isSerialLabel);
+
+  // 1. SHOP NAME: bold, 1 line, white-space: nowrap. Start at 8 pt down to 6.5 pt
   const shopName = (config.customShopName || shopData.restaurant_name || shopData.name || 'Ariso Retail Store').trim();
-  const rawAddress = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
-  const isCompact25 = sizeDef.height <= 25;
-  const addressLines = formatStickerAddress(rawAddress, isCompact25 ? 1 : 2);
-  const productName = resolveStickerProductName(item, config);
+  const shopFit = (config.showShopName && shopName)
+    ? fitTextToWidth(shopName, baseShopPt, 6.5, usableWidthMm, true, fontFamilyCss, 1)
+    : null;
 
+  // 2. ADDRESS: 6 pt (5.5pt for 25mm), medium or semi-bold weight (600), centered, MAX 3 LINES (1 line for <=26mm labels).
+  // If > 3 lines, ends with "..." (Omitted for serial labels)
+  const rawAddress = (config.customAddress || shopData.address || shopData.store_address || shopData.restaurant_address || '').trim();
+  const maxAddrLines = isCompact25 ? 1 : 3;
+  const addressLines = (config.showAddress && !isSerial && rawAddress)
+    ? formatStickerAddress(rawAddress, maxAddrLines, usableWidthMm)
+    : [];
+
+  // 3. PRODUCT NAME: bold, 8 pt (7.5pt for 25mm), max 2 lines (1 line for <=26mm), with "..." if longer
+  const productName = resolveStickerProductName(item, config);
+  const prodFit = (config.showProductName && productName)
+    ? fitTextToWidth(productName, baseProdPt, 6.5, usableWidthMm, true, fontFamilyCss, isCompact25 ? 1 : 2)
+    : null;
+
+  // 4 & 5. MRP and OUR PRICE:
+  // Serial labels show: "Rs. 50.00" bold without MRP strike-through
+  // Standard labels show: MRP with line-through and Our Price
   const prices = resolveStickerPrices(item, config);
   const priceVal = prices.salePrice;
   const mrpVal = prices.mrp;
 
+  let showMrpLine = false;
+  let mrpText = '';
+  let showPriceLine = false;
+  let priceText = '';
+
+  if (isSerial) {
+    const rawSerialPrice = (item?.selling_price !== undefined && item?.selling_price !== null && item?.selling_price !== '')
+      ? parseFloat(item.selling_price)
+      : ((item?.price !== undefined && item?.price !== null && item?.price !== '') ? parseFloat(item.price) : priceVal);
+    if (config.showSellingPrice !== false && !isNaN(rawSerialPrice) && rawSerialPrice > 0) {
+      showPriceLine = true;
+      priceText = `Rs. ${rawSerialPrice.toFixed(2)}`;
+    }
+  } else if (config.showMrp && config.showSellingPrice && (priceVal > 0 || mrpVal > 0)) {
+    if (mrpVal > priceVal) {
+      showMrpLine = true;
+      mrpText = `MRP: ₹${mrpVal.toFixed(2)}`;
+      showPriceLine = true;
+      priceText = `Our Price: ₹${priceVal.toFixed(2)}`;
+    } else {
+      showPriceLine = true;
+      const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Price: ';
+      priceText = `${label}₹${priceVal.toFixed(2)}`;
+    }
+  } else if (config.showSellingPrice && priceVal > 0) {
+    showPriceLine = true;
+    const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Our Price: ';
+    priceText = `${label}₹${priceVal.toFixed(2)}`;
+  } else if (config.showMrp && mrpVal > 0) {
+    showPriceLine = true;
+    priceText = `MRP: ₹${mrpVal.toFixed(2)}`;
+  }
+
+  const priceFit = showPriceLine ? fitTextToWidth(priceText, basePricePt, 7.0, usableWidthMm, true, fontFamilyCss, 1) : null;
+  const mrpFit = showMrpLine ? fitTextToWidth(mrpText, baseMrpPt, 6.0, usableWidthMm, true, fontFamilyCss, 1) : null;
+
+  // 6. MFG DATE (and Exp Date): 6.5 pt (5.5pt for 25mm), 1 line (Omitted for serial labels)
   const todayStr = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const rawMfg = config.defaultMfgDate;
   const mfgDate = rawMfg ? formatIsoToDisplayDate(rawMfg) : todayStr;
   const expDate = config.defaultExpDate ? formatIsoToDisplayDate(config.defaultExpDate) : '';
 
-  const hasWeight = config.printWeight && config.weightValue;
+  const dateParts = [];
+  if (!isSerial) {
+    if (config.showMfgDate && mfgDate) dateParts.push(`Mfg: ${mfgDate}`);
+    if (config.showExpDate && expDate) dateParts.push(`Exp: ${expDate}`);
+  }
+  const dateStr = dateParts.join('   ');
+  const dateFit = dateParts.length > 0
+    ? fitTextToWidth(dateStr, baseDatePt, 5.0, usableWidthMm, false, fontFamilyCss, 1)
+    : null;
+
+  // Optional fields (Weight, Size, Color): compact line before barcode (Omitted for serial labels)
+  const hasWeight = !isSerial && config.printWeight && config.weightValue;
   const weightLine = hasWeight ? `Wt: ${config.weightValue} ${config.weightUnit || 'g'}` : '';
 
-  const barcodeValue = (item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
-  const barcodeSvg = config.showBarcode ? generateCode128Svg(barcodeValue, {
-    widthMm: sizeDef.width,
-    usableWidthMm,
-    heightMm: sizeDef.barcodeHeightMm,
-    labelHeightMm: sizeDef.height,
-    dpi: config.dpi || 203,
-    safePaddingMm: safePadding,
-    displayValue: true
-  }) : '';
-
-  const itemSize = resolveItemSize(item, config);
-  const itemColor = resolveItemColor(item, config);
-  const itemWeight = resolveItemWeight(item, config);
-  const showSize = !!config.showSize && !!itemSize;
-  const showColor = !!config.showColor && !!itemColor;
-  const showWeight = !!config.showWeight && !!itemWeight && !hasWeight;
+  const itemSize = !isSerial ? resolveItemSize(item, config) : '';
+  const itemColor = !isSerial ? resolveItemColor(item, config) : '';
+  const itemWeight = !isSerial ? resolveItemWeight(item, config) : '';
+  const showSize = !isSerial && !!config.showSize && !!itemSize;
+  const showColor = !isSerial && !!config.showColor && !!itemColor;
+  const showWeight = !isSerial && !!config.showWeight && !!itemWeight && !hasWeight;
   const displaySize = showSize ? (/^size:\s*/i.test(itemSize) ? itemSize : `Size: ${itemSize}`) : '';
   const displayColor = showColor ? (/^color:\s*/i.test(itemColor) ? itemColor : `Color: ${itemColor}`) : '';
   const displayWeight = showWeight ? (/^(wt|weight|qty|net\s*wt):\s*/i.test(itemWeight) ? itemWeight : `Net Wt: ${itemWeight}`) : '';
 
-  const variantParts = [];
-  if (showWeight) variantParts.push(displayWeight);
-  if (showSize) variantParts.push(displaySize);
-  if (showColor) variantParts.push(displayColor);
-  const variantStr = variantParts.join(' • ');
-
-  // Fit text with 0.25 pt step-down
-  const shopFit = (config.showShopName && shopName)
-    ? fitTextToWidth(shopName, isCompact25 ? 7.5 : 8.5, 5.5, usableWidthMm, true, fontFamilyCss, 1)
+  const optParts = [];
+  if (hasWeight) {
+    optParts.push(weightLine);
+  } else if (showWeight) {
+    optParts.push(displayWeight);
+  }
+  if (showSize) optParts.push(displaySize);
+  if (showColor) optParts.push(displayColor);
+  const optStr = optParts.join(' • ');
+  const optFit = optParts.length > 0
+    ? fitTextToWidth(optStr, baseDatePt, 5.0, usableWidthMm, false, fontFamilyCss, 1)
     : null;
 
-  const fittedAddressLines = (config.showAddress && addressLines.length > 0)
-    ? addressLines.slice(0, isCompact25 ? 1 : 2).map(line => fitTextToWidth(line, isCompact25 ? 6.0 : 7.0, 5.0, usableWidthMm, false, fontFamilyCss, 1).lines[0] || line)
-    : [];
-
-  const prodFit = (config.showProductName && productName)
-    ? fitTextToWidth(productName, isCompact25 ? 7.5 : 8.5, 6.0, usableWidthMm, true, fontFamilyCss, isCompact25 ? 1 : 2)
-    : null;
-
-  const weightFit = hasWeight
-    ? fitTextToWidth(weightLine, 7.0, 5.5, usableWidthMm, true, fontFamilyCss, 1)
-    : null;
-
-  const variantFit = (!hasWeight && variantParts.length > 0)
-    ? fitTextToWidth(variantStr, 7.0, 5.5, usableWidthMm, false, fontFamilyCss, 1)
-    : null;
-
-  const dateParts = [];
-  if (config.showMfgDate && mfgDate) dateParts.push(`Mfg: ${mfgDate}`);
-  if (config.showExpDate && expDate) dateParts.push(`Exp: ${expDate}`);
-  const dateStr = dateParts.join('  ');
-  const dateFit = dateParts.length > 0
-    ? fitTextToWidth(dateStr, 6.5, 5.0, usableWidthMm, false, fontFamilyCss, 1)
-    : null;
-
-  let priceHtml = '';
-  if ((config.showMrp || config.showSellingPrice) && (priceVal > 0 || mrpVal > 0)) {
-    if (config.showMrp && config.showSellingPrice) {
-      if (mrpVal > priceVal) {
-        priceHtml = `
-          <span class="price-mrp" style="text-decoration: line-through !important; color: #444444 !important; font-weight: 700 !important; white-space: nowrap !important; font-size: ${isCompact25 ? '6.5pt' : '7pt'} !important;">MRP: ₹${mrpVal.toFixed(2)}</span>
-          <span class="price-selling" style="font-weight: 900 !important; color: #000000 !important; white-space: nowrap !important; font-size: ${isCompact25 ? '7.5pt' : '8pt'} !important;">Our Price: ₹${priceVal.toFixed(2)}</span>
-        `;
-      } else {
-        const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Price: ';
-        priceHtml = `
-          <span class="price-selling" style="font-weight: 900 !important; color: #000000 !important; white-space: nowrap !important; font-size: ${isCompact25 ? '7.5pt' : '8pt'} !important;">${label}₹${priceVal.toFixed(2)}</span>
-        `;
-      }
-    } else if (config.showSellingPrice) {
-      const label = (prices.hasValidMrp && !prices.hasValidSalePrice) ? 'MRP: ' : 'Our Price: ';
-      priceHtml = `
-        <span class="price-selling" style="font-weight: 900 !important; color: #000000 !important; white-space: nowrap !important; font-size: ${isCompact25 ? '7.5pt' : '8pt'} !important;">${label}₹${priceVal.toFixed(2)}</span>
-      `;
+  // 7. BARCODE BLOCK AT BOTTOM: SVG bars, then human-readable text under them (6 pt bold)
+  // For serial labels: 9 to 11 mm on 50 mm labels (10.0 mm), 8 to 9 mm on 25 mm labels (8.5 mm)
+  // For product labels: 8.5 mm for 50mm, 7.0 mm for 38mm, 6.0 mm for 25mm
+  let effectiveBarcodeHeight = 8.5;
+  if (isSerial) {
+    if (isCompact25) {
+      effectiveBarcodeHeight = 8.5; // 8 to 9 mm for 25 mm labels
+    } else if (sizeDef.height <= 40) {
+      effectiveBarcodeHeight = 8.5; // 8.5 mm for 38 mm labels
     } else {
-      priceHtml = `
-        <span class="price-selling" style="font-weight: 900 !important; color: #000000 !important; white-space: nowrap !important; font-size: ${isCompact25 ? '7.5pt' : '8pt'} !important;">MRP: ₹${mrpVal.toFixed(2)}</span>
-      `;
+      effectiveBarcodeHeight = 10.0; // 9 to 11 mm for 50 mm labels
     }
+  } else if (isCompact25) {
+    effectiveBarcodeHeight = 6.0;
+  } else if (sizeDef.height <= 40) {
+    effectiveBarcodeHeight = 7.0;
+  } else {
+    effectiveBarcodeHeight = 8.5;
   }
 
+  const barcodeValue = (item?.serial_number || item?.barcode || item?.sku || ('PRD' + (item?.id || '001'))).trim();
+  const barcodeSvg = config.showBarcode ? generateCode128Svg(barcodeValue, {
+    widthMm: sizeDef.width,
+    usableWidthMm,
+    heightMm: effectiveBarcodeHeight,
+    labelHeightMm: sizeDef.height,
+    dpi: config.dpi || 203,
+    safePaddingMm: safeMarginSidesMm,
+    displayValue: true,
+    isSerial: isSerial
+  }) : '';
+
   const shopHtml = (shopFit && shopFit.lines.length > 0) ? `
-    <div class="field-shop" style="font-size: ${shopFit.fontSizePt}pt !important; font-weight: 900 !important; text-transform: uppercase !important; letter-spacing: 0.2px !important; width: 100% !important; line-height: 1.1 !important; text-align: center !important; overflow: hidden !important; white-space: nowrap !important;">
+    <div class="field-shop" style="font-size: ${shopFit.fontSizePt}pt !important; font-weight: 800 !important; text-transform: uppercase !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; line-height: 1.15 !important; text-align: center !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0 !important; padding: 0 !important;">
       ${shopFit.lines[0]}
     </div>
   ` : '';
 
-  const addressHtml = (fittedAddressLines.length > 0) ? `
-    <div class="field-address" style="font-size: ${isCompact25 ? '6pt' : '6.5pt'} !important; font-weight: 500 !important; color: #333333 !important; width: 100% !important; line-height: 1.1 !important; text-align: center !important; overflow: hidden !important;">
-      ${fittedAddressLines.map(line => `<div class="address-line">${line}</div>`).join('')}
+  const addressHtml = (addressLines.length > 0) ? `
+    <div class="field-address" style="font-size: 6pt !important; font-weight: 600 !important; line-height: 1.15 !important; text-align: center !important; color: #000000 !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; overflow: hidden !important; display: -webkit-box !important; -webkit-line-clamp: ${maxAddrLines} !important; -webkit-box-orient: vertical !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.15mm 0 !important; padding: 0 !important;">
+      ${addressLines.map(line => `<div class="address-line" style="white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; max-width: 100% !important;">${line}</div>`).join('')}
     </div>
   ` : '';
 
   const productHtml = (prodFit && prodFit.lines.length > 0) ? `
-    <div class="field-product" style="font-size: ${prodFit.fontSizePt}pt !important; font-weight: 800 !important; width: 100% !important; line-height: 1.15 !important; overflow: hidden !important; text-align: center !important;">
-      ${prodFit.lines.map(l => `<div class="product-line" style="white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;">${l}</div>`).join('')}
+    <div class="field-product" style="font-size: ${prodFit.fontSizePt}pt !important; font-weight: 800 !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; line-height: 1.15 !important; overflow: hidden !important; text-align: center !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.15mm 0 !important; padding: 0 !important;">
+      ${prodFit.lines.map(l => `<div class="product-line" style="white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; max-width: 100% !important;">${l}</div>`).join('')}
     </div>
   ` : '';
 
-  const weightHtml = (weightFit && weightFit.lines.length > 0) ? `
-    <div class="field-weight-row" style="font-size: ${weightFit.fontSizePt}pt !important; font-weight: 700 !important; line-height: 1.1 !important; width: 100% !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;">
-      ${weightFit.lines[0]}
+  const mrpHtml = (mrpFit && mrpFit.lines.length > 0) ? `
+    <div class="field-mrp-line" style="font-size: ${mrpFit.fontSizePt}pt !important; font-weight: 600 !important; line-height: 1.15 !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.1mm 0 !important; padding: 0 !important;">
+      <span style="text-decoration: line-through !important; text-decoration-thickness: 0.25mm !important; text-decoration-color: #000000 !important;">${mrpFit.lines[0]}</span>
     </div>
   ` : '';
 
-  const variantHtml = (variantFit && variantFit.lines.length > 0) ? `
-    <div class="field-variant-row" style="font-size: ${variantFit.fontSizePt}pt !important; font-weight: 600 !important; color: #1e293b !important; line-height: 1.1 !important; width: 100% !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;">
-      ${variantFit.lines[0]}
+  const priceHtml = (priceFit && priceFit.lines.length > 0) ? `
+    <div class="field-price-line" style="font-size: ${priceFit.fontSizePt}pt !important; font-weight: 900 !important; line-height: 1.15 !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.1mm 0 !important; padding: 0 !important;">
+      ${priceFit.lines[0]}
+    </div>
+  ` : '';
+
+  const optHtml = (optFit && optFit.lines.length > 0) ? `
+    <div class="field-variant-row" style="font-size: ${optFit.fontSizePt}pt !important; font-weight: 600 !important; line-height: 1.15 !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.1mm 0 !important; padding: 0 !important;">
+      ${optFit.lines[0]}
     </div>
   ` : '';
 
   const dateHtml = (dateFit && dateFit.lines.length > 0) ? `
-    <div class="field-date-row" style="font-size: ${dateFit.fontSizePt}pt !important; font-weight: 600 !important; color: #222222 !important; line-height: 1.1 !important; width: 100% !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important;">
+    <div class="field-date-row" style="font-size: ${dateFit.fontSizePt}pt !important; font-weight: 600 !important; line-height: 1.15 !important; width: 100% !important; max-width: ${usableWidthMm}mm !important; text-align: center !important; white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; color: #000000 !important; flex-shrink: 0 !important; box-sizing: border-box !important; margin: 0.1mm 0 !important; padding: 0 !important;">
       ${dateFit.lines[0]}
     </div>
   ` : '';
 
   const barcodeHtml = (config.showBarcode && barcodeSvg) ? `
-    <div class="field-barcode" style="width: 100% !important; display: flex !important; justify-content: center !important; align-items: center !important; flex-shrink: 0 !important; margin-top: auto !important; padding-top: 0.4mm !important; overflow: hidden !important;">
+    <div class="field-barcode" style="width: 100% !important; max-width: ${sizeDef.width - 2}mm !important; display: flex !important; flex-direction: column !important; justify-content: flex-end !important; align-items: center !important; flex-shrink: 0 !important; margin-top: auto !important; margin-bottom: 0 !important; padding: 0 !important; overflow: hidden !important; box-sizing: border-box !important;">
       ${barcodeSvg}
     </div>
   ` : '';
 
   return `
-    <div class="sticker-card sticker-${config.size}" style="width: ${sizeDef.width}mm !important; height: ${sizeDef.height}mm !important; font-family: ${fontFamilyCss} !important;">
-      <div class="sticker-inner" style="width: 100% !important; height: 100% !important; padding: ${Math.min(safePadding, 1.8)}mm ${safePadding}mm !important; font-family: ${fontFamilyCss} !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; align-items: center !important; text-align: center !important; gap: 0.5mm !important; box-sizing: border-box !important; overflow: hidden !important;">
+    <div class="sticker-card sticker-${config.size} ${isSerial ? 'sticker-serial' : ''}" style="width: ${sizeDef.width}mm !important; height: ${sizeDef.height}mm !important; position: relative !important; box-sizing: border-box !important; overflow: hidden !important; background: #ffffff !important; color: #000000 !important; font-family: ${fontFamilyCss} !important; -webkit-text-size-adjust: none !important; text-rendering: geometricPrecision !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; margin: 0 !important; padding: 0 !important;">
+      <div class="sticker-inner" style="position: absolute !important; top: ${safeMarginTopMm}mm !important; left: ${safeMarginSidesMm}mm !important; width: ${usableWidthMm}mm !important; height: ${usableHeightMm}mm !important; box-sizing: border-box !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; align-items: center !important; text-align: center !important; gap: 0.2mm !important; margin: 0 !important; padding: 0 !important; color: #000000 !important; font-family: ${fontFamilyCss} !important;">
         ${shopHtml}
         ${addressHtml}
         ${productHtml}
-        ${weightHtml}
-        ${variantHtml}
-        ${priceHtml ? `<div class="field-price-row" style="display: flex !important; flex-wrap: wrap !important; justify-content: center !important; align-items: center !important; column-gap: 1.5mm !important; row-gap: 0.2mm !important; width: 100% !important; line-height: 1.15 !important; text-align: center !important;">${priceHtml}</div>` : ''}
+        ${mrpHtml}
+        ${priceHtml}
+        ${optHtml}
         ${dateHtml}
         ${barcodeHtml}
       </div>
@@ -1002,9 +1400,485 @@ export function renderCalibrationStickerHtml(labelPos, sizeDef, config) {
 }
 
 /**
- * Build a full HTML document for printing a single calibration row
+ * Render a single orientation test label for Portrait Sheet calibration
+ * Shows die-cut edge, safe padding area, TOP ↑ marker, FEED ↓ marker, paper dimensions, and crosshairs
  */
-export function buildCalibrationPrintDocument(config, shopData = {}) {
+export function renderOrientationTestStickerHtml(cellTag, sizeDef, config, layout) {
+  const safePadding = parseFloat(config?.safePaddingMm !== undefined ? config.safePaddingMm : 2.5) || 2.5;
+  const usableWidth = (sizeDef.width - 2 * safePadding).toFixed(1);
+  const usableHeight = (sizeDef.height - 2 * safePadding).toFixed(1);
+  const paperW = layout?.paperW || sizeDef.width;
+  const paperH = layout?.paperH || sizeDef.height;
+  const paperName = layout?.paperSizeName || 'USER';
+  const offX = parseFloat(config?.offsetXmm) || 0;
+  const offY = parseFloat(config?.offsetYmm) || 0;
+  const totalLeftOffset = layout?.totalLeftOffset !== undefined ? layout.totalLeftOffset : offX;
+
+  return `
+    <div class="sticker-card calibration-card" style="width: ${sizeDef.width}mm !important; height: ${sizeDef.height}mm !important; border: 0.3mm solid #000000 !important; box-sizing: border-box !important; position: relative !important; overflow: hidden !important; background: #ffffff !important; color: #000000 !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace !important; text-align: center !important;">
+      <!-- INNER SAFE PADDING BOX (DASHED BLUE) -->
+      <div style="position: absolute; top: ${safePadding}mm; left: ${safePadding}mm; width: ${usableWidth}mm; height: ${usableHeight}mm; border: 0.2mm dashed #0284c7; box-sizing: border-box; pointer-events: none; z-index: 1;"></div>
+
+      <!-- TOP ARROW MARKER: TOP ↑ -->
+      <div style="position: absolute; top: 0.8mm; left: 0; width: 100%; text-align: center; font-size: 8pt; font-weight: 900; letter-spacing: 0.5px; line-height: 1;">
+        ▲▲ TOP ↑ OF LABEL ▲▲
+      </div>
+
+      <!-- CENTER DIAGNOSTICS & ALIGNMENT BOX -->
+      <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 88%; text-align: center; z-index: 2; background: rgba(255,255,255,0.95); padding: 1mm 1.2mm; border: 0.2mm solid #000;">
+        <div style="display: inline-block; border: 0.3mm solid #000; padding: 0.4mm 1.5mm; font-size: 8.5pt; font-weight: 900; background: #fff; margin-bottom: 0.4mm;">
+          ${cellTag}
+        </div>
+        <div style="font-size: 7.5pt; font-weight: 800; line-height: 1.15;">
+          ${sizeDef.width}×${sizeDef.height} mm (Portrait)
+        </div>
+        <div style="font-size: 6.5pt; font-weight: 800; color: #0284c7; margin-top: 0.3mm;">
+          Paper: ${paperName} (${paperW}×${paperH} mm)
+        </div>
+        <div style="font-size: 6pt; font-weight: 700; color: #1e293b; margin-top: 0.3mm;">
+          Offsets: X=${offX}mm (Tot: ${totalLeftOffset}mm) | Y=${offY}mm
+        </div>
+        <div style="font-size: 5pt; color: #475569; margin-top: 0.3mm; line-height: 1.05;">
+          Outer: 0.3mm Die-Cut | Dashed: ${safePadding}mm Safe Box<br/>
+          Orientation: UPRIGHT PORTRAIT (0° Rotation)
+        </div>
+      </div>
+
+      <!-- ALIGNMENT CROSSHAIRS -->
+      <div style="position: absolute; top: 50%; left: 0; width: 100%; height: 0.2mm; background: #94a3b8; z-index: 1;"></div>
+      <div style="position: absolute; top: 0; left: 50%; width: 0.2mm; height: 100%; background: #94a3b8; z-index: 1;"></div>
+
+      <!-- FEED DIRECTION MARKER: FEED ↓ -->
+      <div style="position: absolute; bottom: 0.8mm; left: 0; width: 100%; text-align: center; font-size: 7.5pt; font-weight: 900; letter-spacing: 0.5px; line-height: 1;">
+        ▼▼ FEED ↓ DIRECTION ▼▼
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Shared self-contained print auto-trigger script embedded into all blob HTML documents.
+ * - Runs upon window load (or immediately if document.readyState is complete).
+ * - Awaits document.fonts.ready and image decodes with non-blocking fallbacks.
+ * - Triggers window.print() after layout stabilizes (~150ms).
+ * - Guards against duplicate print() calls with window.__arisoPrinted.
+ * - Closes the popup window on afterprint (and cancel) so no blank window remains.
+ * - Exposes window.__triggerArisoPrint for opener-side fallback.
+ */
+export function getBlobPrintScript() {
+  return `<script>
+    (function() {
+      var printed = false;
+      document.title = "";
+
+      function runAutoFit() {
+        try {
+          var inners = document.querySelectorAll('.sticker-inner');
+          inners.forEach(function(inner) {
+            // 1. Ensure each nowrap line fits horizontally within clientWidth
+            var nowrapEls = inner.querySelectorAll('.field-shop, .field-mrp-line, .field-price-line, .field-date-row, .field-variant-row, .address-line, .product-line');
+            nowrapEls.forEach(function(el) {
+              var minPt = 5.0;
+              if (el.classList.contains('field-shop')) minPt = 6.5;
+              else if (el.classList.contains('field-price-line')) minPt = 7.0;
+              else if (el.classList.contains('field-mrp-line')) minPt = 6.0;
+              else if (el.classList.contains('field-product') || el.classList.contains('product-line')) minPt = 6.5;
+
+              var curPt = parseFloat(window.getComputedStyle(el).fontSize) * 0.75;
+              var loop = 0;
+              while (el.scrollWidth > el.clientWidth && curPt > minPt && loop < 30) {
+                curPt -= 0.25;
+                el.style.fontSize = curPt.toFixed(2) + 'pt';
+                loop++;
+              }
+            });
+
+            // 2. Shrink vertical stack in priority order if scrollHeight > clientHeight
+            var attempts = 0;
+            while (inner.scrollHeight > inner.clientHeight && attempts < 60) {
+              attempts++;
+              var shrunk = false;
+
+              // Priority 1: Address
+              var addrEl = inner.querySelector('.field-address');
+              if (addrEl) {
+                var curPt = parseFloat(window.getComputedStyle(addrEl).fontSize) * 0.75;
+                if (curPt > 5.0) {
+                  addrEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 2: Mfg / Exp Date
+              var dateEl = inner.querySelector('.field-date-row');
+              if (dateEl) {
+                var curPt = parseFloat(window.getComputedStyle(dateEl).fontSize) * 0.75;
+                if (curPt > 5.0) {
+                  dateEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 3: Optional variant row (Weight / Size / Color)
+              var varEl = inner.querySelector('.field-variant-row');
+              if (varEl) {
+                var curPt = parseFloat(window.getComputedStyle(varEl).fontSize) * 0.75;
+                if (curPt > 5.0) {
+                  varEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 4: Product Name
+              var prodEl = inner.querySelector('.field-product');
+              if (prodEl) {
+                var curPt = parseFloat(window.getComputedStyle(prodEl).fontSize) * 0.75;
+                if (curPt > 6.5) {
+                  prodEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 5: MRP line
+              var mrpEl = inner.querySelector('.field-mrp-line');
+              if (mrpEl) {
+                var curPt = parseFloat(window.getComputedStyle(mrpEl).fontSize) * 0.75;
+                if (curPt > 6.0) {
+                  mrpEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 6: Barcode height (never below 7.5 mm for tall labels, 5.5 mm for compact; 9.0 mm / 8.0 mm for serial labels)
+              var svgEl = inner.querySelector('.field-barcode svg');
+              if (svgEl) {
+                var curH = parseFloat(svgEl.getAttribute('height')) || parseFloat(svgEl.style.height) || 10;
+                var isSerialInner = inner.closest('.sticker-serial') || (inner.parentElement && inner.parentElement.classList.contains('sticker-serial'));
+                var minBarcodeH = isSerialInner ? (inner.clientHeight > 140 ? 9.0 : 8.0) : (inner.clientHeight > 140 ? 7.5 : 5.5);
+                if (curH > minBarcodeH) {
+                  var newH = Math.max(minBarcodeH, curH - 0.5);
+                  svgEl.setAttribute('height', newH.toFixed(2) + 'mm');
+                  svgEl.style.height = newH.toFixed(2) + 'mm';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 7: Inner gap
+              var gapPx = parseFloat(window.getComputedStyle(inner).gap) || 0;
+              if (gapPx > 0) {
+                inner.style.gap = '0px';
+                shrunk = true;
+                if (inner.scrollHeight <= inner.clientHeight) break;
+              }
+
+              // Priority 8: Shop Name
+              var shopEl = inner.querySelector('.field-shop');
+              if (shopEl) {
+                var curPt = parseFloat(window.getComputedStyle(shopEl).fontSize) * 0.75;
+                if (curPt > 6.5) {
+                  shopEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              // Priority 9: Price line
+              var priceEl = inner.querySelector('.field-price-line');
+              if (priceEl) {
+                var curPt = parseFloat(window.getComputedStyle(priceEl).fontSize) * 0.75;
+                if (curPt > 7.0) {
+                  priceEl.style.fontSize = (curPt - 0.25).toFixed(2) + 'pt';
+                  shrunk = true;
+                  if (inner.scrollHeight <= inner.clientHeight) break;
+                }
+              }
+
+              if (!shrunk) break;
+            }
+          });
+        } catch (fitErr) {
+          console.warn('[Print] Auto-fit notice:', fitErr);
+        }
+      }
+
+      async function triggerAutoPrint() {
+        if (printed || window.__arisoPrinted) return;
+        window.__arisoPrinted = true;
+        printed = true;
+        document.title = "";
+
+        try {
+          if (document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+          }
+        } catch (fontErr) {
+          console.warn('[PrintWindow] Font ready fallback:', fontErr);
+        }
+
+        try {
+          var imgs = Array.from(document.images || []);
+          if (imgs.length > 0) {
+            await Promise.all(imgs.map(function(img) {
+              if (img.complete) return Promise.resolve();
+              return img.decode ? img.decode().catch(function() {}) : new Promise(function(r) { img.onload = img.onerror = r; });
+            }));
+          }
+        } catch (imgErr) {}
+
+        runAutoFit();
+
+        setTimeout(function() {
+          try {
+            document.title = "";
+            window.focus();
+            window.print();
+          } catch (printErr) {
+            console.error('[PrintWindow] window.print() failed:', printErr);
+          }
+        }, 150);
+      }
+
+      window.addEventListener('afterprint', function() {
+        setTimeout(function() {
+          try { window.close(); } catch (e) {}
+        }, 150);
+      }, { once: true });
+
+      if (document.readyState === 'complete') {
+        triggerAutoPrint();
+      } else {
+        window.addEventListener('load', triggerAutoPrint, { once: true });
+      }
+
+      window.__triggerArisoPrint = triggerAutoPrint;
+    })();
+  </script>`;
+}
+
+/**
+ * Render a full-width millimeter calibration ruler across the whole page (0 to W mm)
+ * Features:
+ * - 1 mm tick marks across [0, paperW]
+ * - 5 mm and 10 mm bold numbers
+ * - Diagnostics text banner: "W×H | head | alignment | offsets"
+ */
+export function renderFullWidthRulerSvg(layout, config) {
+  const paperW = layout?.paperW || 104;
+  const paperH = layout?.paperH || 106;
+  const headW = layout?.headW || 104;
+  const linerW = layout?.linerW || 83;
+  const alignment = (layout?.alignment || 'centre').toUpperCase();
+  const offX = parseFloat(config?.offsetXmm) || 0;
+  const offY = parseFloat(config?.offsetYmm) || 0;
+  const totalLeftOffset = layout?.totalLeftOffset !== undefined ? layout.totalLeftOffset : offX;
+  const col0X = layout?.col0X !== undefined ? layout.col0X : layout.getCellPosition(0, 0).x;
+  const col1X = layout?.col1X !== undefined ? layout.col1X : (layout.cols > 1 ? layout.getCellPosition(1, 0).x : col0X);
+  const colText = layout.cols > 1
+    ? `Left: ${col0X.toFixed(1)}mm | Right: ${col1X.toFixed(1)}mm`
+    : `Col 1: ${col0X.toFixed(1)}mm`;
+
+  const rulerH = 15; // 15 mm height
+  const ticks = [];
+  const maxMm = Math.ceil(paperW);
+
+  // Horizontal baseline at y = 10mm
+  ticks.push(`<line x1="0" y1="10" x2="${paperW}" y2="10" stroke="#000000" stroke-width="0.3" />`);
+
+  for (let m = 0; m <= maxMm; m++) {
+    if (m % 10 === 0) {
+      // 10 mm major tick
+      ticks.push(`<line x1="${m}" y1="2" x2="${m}" y2="10" stroke="#000000" stroke-width="0.35" />`);
+      ticks.push(`<text x="${m}" y="1.6" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="2.2" font-weight="900" text-anchor="middle" fill="#000000">${m}</text>`);
+    } else if (m % 5 === 0) {
+      // 5 mm tick
+      ticks.push(`<line x1="${m}" y1="4.5" x2="${m}" y2="10" stroke="#000000" stroke-width="0.25" />`);
+      ticks.push(`<text x="${m}" y="3.8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="1.8" font-weight="700" text-anchor="middle" fill="#000000">${m}</text>`);
+    } else {
+      // 1 mm tick
+      ticks.push(`<line x1="${m}" y1="7" x2="${m}" y2="10" stroke="#000000" stroke-width="0.15" />`);
+    }
+  }
+
+  const diagText = `${paperW}×${paperH} mm | head: ${headW}mm | align: ${alignment} | liner: ${linerW}mm | offsets: X=${offX}mm (tot: ${totalLeftOffset}mm), Y=${offY}mm | ${colText}`;
+
+  return `
+    <svg viewBox="0 0 ${paperW} ${rulerH}" width="${paperW}mm" height="${rulerH}mm" xmlns="http://www.w3.org/2000/svg" style="display: block; width: ${paperW}mm; height: ${rulerH}mm; margin: 0; background: #ffffff;">
+      <rect x="0" y="0" width="${paperW}" height="${rulerH}" fill="#ffffff" />
+      ${ticks.join('\n')}
+      <text x="${paperW / 2}" y="13.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', monospace" font-size="1.8" font-weight="800" text-anchor="middle" fill="#000000">${diagText}</text>
+    </svg>
+  `;
+}
+
+/**
+ * Build a dedicated calibration print document for portrait sheet mode (Orientation Test + Full-Width Ruler)
+ * Features:
+ * - Full-width 0 to W mm ruler across the top
+ * - Calculated cell boundaries for each label on the sheet
+ * - Diagnostics banner: "W×H | head | alignment | offsets"
+ * - Zero margins, top-left anchored
+ */
+export function buildPortraitCalibrationPrintDocument(config, shopData = {}) {
+  const layout = resolveSheetLayout(config);
+  const sizeDef = STICKER_SIZES[config?.size] || STICKER_SIZES['50x25'];
+
+  const cellsHtml = [];
+  for (let r = 0; r < layout.rows; r++) {
+    for (let c = 0; c < layout.cols; c++) {
+      const pos = layout.getCellPosition(c, r);
+      const cellTag = `CELL (Col ${c + 1}, Row ${r + 1})`;
+      const cellHtml = renderOrientationTestStickerHtml(cellTag, sizeDef, config, layout);
+      cellsHtml.push(`
+        <div class="sticker-cell" style="position: absolute !important; left: ${pos.x}mm !important; top: ${pos.y}mm !important; width: ${layout.labelW}mm !important; height: ${layout.labelH}mm !important; box-sizing: border-box !important; overflow: hidden !important;">
+          ${cellHtml}
+        </div>
+      `);
+    }
+  }
+
+  const rulerHtml = `
+    <div class="calibration-ruler" style="position: absolute !important; top: 0 !important; left: 0 !important; width: ${layout.paperW}mm !important; z-index: 10 !important; overflow: hidden !important; box-sizing: border-box !important;">
+      ${renderFullWidthRulerSvg(layout, config)}
+    </div>
+  `;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title> </title>
+  <link rel="stylesheet" href="/fonts/stickerFonts.css">
+  ${getBlobPrintScript()}
+  <style>
+    @page {
+      size: ${layout.paperW}mm ${layout.paperH}mm;
+      margin: 0mm !important;
+    }
+    @page :left {
+      margin: 0mm !important;
+    }
+    @page :right {
+      margin: 0mm !important;
+    }
+    @page :first {
+      margin: 0mm !important;
+    }
+    *, *:before, *:after {
+      box-sizing: border-box !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    @media screen {
+      html {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+      }
+      body {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 24px 0 !important;
+        min-height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 20px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased !important;
+      }
+      .sheet-page {
+        width: ${layout.paperW}mm !important;
+        height: ${layout.paperH}mm !important;
+        background: #ffffff !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+        border-radius: 2px !important;
+        margin: 0 auto 20px auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+      }
+    }
+    @media print {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${layout.paperW}mm !important;
+        height: ${layout.paperH}mm !important;
+        overflow: hidden !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased !important;
+        text-rendering: optimizeLegibility !important;
+      }
+      .sheet-page {
+        position: relative !important;
+        top: 0 !important;
+        left: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${layout.paperW}mm !important;
+        height: ${layout.paperH}mm !important;
+        max-height: ${layout.paperH}mm !important;
+        overflow: hidden !important;
+        box-shadow: none !important;
+        page-break-after: auto !important;
+        break-after: auto !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        box-sizing: border-box !important;
+      }
+    }
+    .sheet {
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      width: ${layout.paperW}mm !important;
+      height: ${layout.paperH}mm !important;
+      max-height: ${layout.paperH}mm !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+    .sticker-cell {
+      position: absolute !important;
+      width: ${layout.labelW}mm !important;
+      height: ${layout.labelH}mm !important;
+      max-height: ${layout.labelH}mm !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+  </style>
+</head>
+<body style="margin: 0 !important; padding: 0 !important;">
+  <div class="sheet-page last-page">
+    <div class="sheet">
+      ${rulerHtml}
+      ${cellsHtml.join('\n')}
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Build legacy landscape calibration print document
+ */
+export function buildLegacyCalibrationPrintDocument(config, shopData = {}) {
   const sizeDef = STICKER_SIZES[config.size] || STICKER_SIZES['50x25'];
   const is2Row = parseInt(config.rows, 10) === 2;
   const cols = is2Row ? 2 : 1;
@@ -1038,40 +1912,79 @@ export function buildCalibrationPrintDocument(config, shopData = {}) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title> </title>
+  <title>Ariso Calibration Print</title>
+  <link rel="stylesheet" href="/fonts/stickerFonts.css">
+  ${getBlobPrintScript()}
   <style>
     @page {
       size: ${printPageW}mm ${printPageH}mm;
-      margin: 0;
+      margin: 0mm !important;
     }
     *, *:before, *:after {
       box-sizing: border-box !important;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    html, body {
-      margin: 0 !important;
-      padding: 0 !important;
-      width: ${printPageW}mm !important;
-      height: ${printPageH}mm !important;
-      background: #ffffff !important;
-      color: #000000 !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
-      overflow: hidden !important;
+    @media screen {
+      html {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+      }
+      body {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 24px 0 !important;
+        min-height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 20px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased !important;
+      }
+      .sheet-page {
+        width: ${printPageW}mm !important;
+        height: ${printPageH}mm !important;
+        background: #ffffff !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+        border-radius: 2px !important;
+        margin: 0 auto 20px auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+      }
     }
-    .sheet-page {
-      width: ${printPageW}mm !important;
-      height: ${printPageH}mm !important;
-      max-height: ${printPageH}mm !important;
-      position: relative !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      overflow: hidden !important;
-      page-break-after: auto !important;
-      break-after: auto !important;
-      page-break-inside: avoid !important;
-      break-inside: avoid !important;
-      box-sizing: border-box !important;
+    @media print {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${printPageW}mm !important;
+        height: auto !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif !important;
+        -webkit-font-smoothing: antialiased !important;
+        text-rendering: optimizeLegibility !important;
+      }
+      .sheet-page {
+        width: ${printPageW}mm !important;
+        height: ${printPageH}mm !important;
+        max-height: ${printPageH}mm !important;
+        position: relative !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        box-shadow: none !important;
+        page-break-after: auto !important;
+        break-after: auto !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        box-sizing: border-box !important;
+      }
     }
     .sheet {
       width: ${pageW}mm !important;
@@ -1120,13 +2033,238 @@ export function buildCalibrationPrintDocument(config, shopData = {}) {
 }
 
 /**
- * Generate full print-ready HTML page with CSS @page rules for roll printing
- * @param {Array} items - List of items with .quantity specified
- * @param {object} config - Sticker configuration
- * @param {object} shopData - Store details
- * @returns {string} Full HTML document
+ * Build a full HTML document for printing a single calibration row or portrait calibration sheet
  */
-export function buildStickerPrintDocument(items, config, shopData = {}) {
+export function buildCalibrationPrintDocument(config, shopData = {}) {
+  if (config?.printMode !== 'legacy_landscape') {
+    return buildPortraitCalibrationPrintDocument(config, shopData);
+  }
+  return buildLegacyCalibrationPrintDocument(config, shopData);
+}
+
+/**
+ * Build a dedicated print document for portrait sheet layout
+ * - Page size is strictly portrait (@page size: paperW paperH)
+ * - Grid of cells (cols x rows) placed at exact mm coordinates
+ * - Upright content in every cell, zero CSS rotation
+ * - Cells never split across pages (break-inside: avoid)
+ * - Sheets break cleanly (page-break-after: always, last-page: auto)
+ * - Odd or unfilled counts leave unused cells completely blank
+ * - No app UI, no app CSS, no borders in normal print
+ */
+export function buildPortraitSheetPrintDocument(items, config, shopData = {}) {
+  const layout = resolveSheetLayout(config);
+  const fontFamilyCss = getFontFamilyCss(config?.fontFamily);
+  const safePadding = parseFloat(config?.safePaddingMm !== undefined ? config.safePaddingMm : 2.5) || 2.5;
+
+  // Flatten items by quantity to get individual sticker instances
+  const stickersList = [];
+  items.forEach((item) => {
+    const count = Math.max(1, parseInt(item.printQty || item.quantity || 1, 10));
+    for (let i = 0; i < count; i++) {
+      stickersList.push(item);
+    }
+  });
+
+  const totalSheets = Math.max(1, Math.ceil(stickersList.length / layout.stickersPerSheet));
+  const sheets = [];
+
+  for (let s = 0; s < totalSheets; s++) {
+    const isLastSheet = s === totalSheets - 1;
+    const cellsHtml = [];
+
+    for (let r = 0; r < layout.rows; r++) {
+      for (let c = 0; c < layout.cols; c++) {
+        const itemIdx = s * layout.stickersPerSheet + r * layout.cols + c;
+        const pos = layout.getCellPosition(c, r);
+
+        if (itemIdx < stickersList.length) {
+          const item = stickersList[itemIdx];
+          const stickerHtml = renderSingleStickerHtml(item, config, shopData);
+          cellsHtml.push(`
+            <div class="sticker-cell" style="position: absolute !important; left: ${pos.x}mm !important; top: ${pos.y}mm !important; width: ${layout.labelW}mm !important; height: ${layout.labelH}mm !important; box-sizing: border-box !important; overflow: hidden !important;">
+              ${stickerHtml}
+            </div>
+          `);
+        } else {
+          // Unfilled cell stays blank without shifting other cells
+          cellsHtml.push(`
+            <div class="sticker-cell sticker-cell-empty" style="position: absolute !important; left: ${pos.x}mm !important; top: ${pos.y}mm !important; width: ${layout.labelW}mm !important; height: ${layout.labelH}mm !important; box-sizing: border-box !important; visibility: hidden !important;"></div>
+          `);
+        }
+      }
+    }
+
+    sheets.push(`
+      <div class="sheet-page ${isLastSheet ? 'last-page' : ''}">
+        <div class="sheet">
+          ${cellsHtml.join('\n')}
+        </div>
+      </div>
+    `);
+  }
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title></title>
+  <link rel="stylesheet" href="/fonts/stickerFonts.css">
+  ${getBlobPrintScript()}
+  <style>
+    @page {
+      size: ${layout.paperW}mm ${layout.paperH}mm;
+      margin: 0 !important;
+    }
+    *, *:before, *:after {
+      box-sizing: border-box !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    @media screen {
+      html {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+      }
+      body {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 24px 0 !important;
+        min-height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 20px !important;
+        font-family: ${fontFamilyCss} !important;
+        -webkit-font-smoothing: antialiased !important;
+      }
+      .sheet-page {
+        width: ${layout.paperW}mm !important;
+        height: ${layout.paperH}mm !important;
+        background: #ffffff !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+        border-radius: 2px !important;
+        margin: 0 auto 20px auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+      }
+    }
+    @media print {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${layout.paperW}mm !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-family: ${fontFamilyCss} !important;
+        -webkit-font-smoothing: antialiased !important;
+        text-rendering: optimizeLegibility !important;
+      }
+      .sheet-page {
+        position: relative !important;
+        top: 0 !important;
+        left: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${layout.paperW}mm !important;
+        height: ${layout.paperH}mm !important;
+        max-height: ${layout.paperH}mm !important;
+        overflow: hidden !important;
+        box-shadow: none !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        box-sizing: border-box !important;
+      }
+      .sheet-page.last-page,
+      .sheet-page:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
+      }
+    }
+    .sheet {
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      width: ${layout.paperW}mm !important;
+      height: ${layout.paperH}mm !important;
+      max-height: ${layout.paperH}mm !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+    .sticker-cell {
+      position: absolute !important;
+      width: ${layout.labelW}mm !important;
+      height: ${layout.labelH}mm !important;
+      max-height: ${layout.labelH}mm !important;
+      background: #ffffff !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
+    }
+    .sticker-cell-empty {
+      visibility: hidden !important;
+    }
+    .sticker-card {
+      width: ${layout.labelW}mm !important;
+      height: ${layout.labelH}mm !important;
+      max-height: ${layout.labelH}mm !important;
+      position: relative !important;
+      background: #ffffff !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+      color: #000000 !important;
+      font-family: Arial, "Segoe UI", Roboto, sans-serif !important;
+      -webkit-text-size-adjust: none !important;
+      text-rendering: geometricPrecision !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      border: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+    .sticker-inner {
+      position: absolute !important;
+      top: 2mm !important;
+      left: 2mm !important;
+      width: calc(${layout.labelW}mm - 4mm) !important;
+      height: calc(${layout.labelH}mm - 3.2mm) !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: flex-start !important;
+      align-items: center !important;
+      text-align: center !important;
+      gap: 0.2mm !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      color: #000000 !important;
+      font-family: Arial, "Segoe UI", Roboto, sans-serif !important;
+    }
+  </style>
+</head>
+<body style="margin: 0 !important; padding: 0 !important;">
+  ${sheets.join('\n')}
+</body>
+</html>`;
+}
+
+/**
+ * Generate full print-ready HTML page for legacy 2-up row printing
+ */
+export function buildLegacyStickerPrintDocument(items, config, shopData = {}) {
   const sizeDef = STICKER_SIZES[config.size] || STICKER_SIZES['50x25'];
   const is2Row = parseInt(config.rows, 10) === 2;
   const cols = is2Row ? 2 : 1;
@@ -1202,46 +2340,84 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
 <html>
 <head>
   <meta charset="utf-8">
-  <title> </title>
+  <title>Ariso Label Print</title>
   <link rel="stylesheet" href="/fonts/stickerFonts.css">
+  ${getBlobPrintScript()}
   <style>
     @page {
       size: ${printPageW}mm ${printPageH}mm;
-      margin: 0;
+      margin: 0mm !important;
     }
     *, *:before, *:after {
       box-sizing: border-box !important;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    html, body {
-      margin: 0 !important;
-      padding: 0 !important;
-      width: ${printPageW}mm !important;
-      height: ${printPageH}mm !important;
-      background: #ffffff !important;
-      color: #000000 !important;
-      font-family: ${fontFamilyCss} !important;
-      overflow: hidden !important;
+    @media screen {
+      html {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+      }
+      body {
+        background-color: #525659 !important;
+        margin: 0 !important;
+        padding: 24px 0 !important;
+        min-height: 100vh !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 20px !important;
+        font-family: ${fontFamilyCss} !important;
+        -webkit-font-smoothing: antialiased !important;
+      }
+      .sheet-page {
+        width: ${printPageW}mm !important;
+        height: ${printPageH}mm !important;
+        background: #ffffff !important;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+        border-radius: 2px !important;
+        margin: 0 auto 20px auto !important;
+        position: relative !important;
+        overflow: hidden !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+      }
     }
-    .sheet-page {
-      width: ${printPageW}mm !important;
-      height: ${printPageH}mm !important;
-      max-height: ${printPageH}mm !important;
-      position: relative !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      overflow: hidden !important;
-      page-break-after: always !important;
-      break-after: page !important;
-      page-break-inside: avoid !important;
-      break-inside: avoid !important;
-      box-sizing: border-box !important;
-    }
-    .sheet-page.last-page,
-    .sheet-page:last-child {
-      page-break-after: auto !important;
-      break-after: auto !important;
+    @media print {
+      html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: ${printPageW}mm !important;
+        height: auto !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+        font-family: ${fontFamilyCss} !important;
+        -webkit-font-smoothing: antialiased !important;
+        text-rendering: optimizeLegibility !important;
+      }
+      .sheet-page {
+        width: ${printPageW}mm !important;
+        height: ${printPageH}mm !important;
+        max-height: ${printPageH}mm !important;
+        position: relative !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        box-shadow: none !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        box-sizing: border-box !important;
+      }
+      .sheet-page.last-page,
+      .sheet-page:last-child {
+        page-break-after: auto !important;
+        break-after: auto !important;
+      }
     }
     .sheet {
       width: ${pageW}mm !important;
@@ -1273,22 +2449,34 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
       background: #ffffff !important;
       overflow: hidden !important;
       box-sizing: border-box !important;
-      font-family: ${fontFamilyCss} !important;
+      color: #000000 !important;
+      font-family: Arial, "Segoe UI", Roboto, sans-serif !important;
+      -webkit-text-size-adjust: none !important;
+      text-rendering: geometricPrecision !important;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      border: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
     }
     .sticker-inner {
-      width: 100% !important;
-      height: 100% !important;
-      max-height: 100% !important;
-      padding: ${Math.min(safePadding, 1.8)}mm ${safePadding}mm !important;
+      position: absolute !important;
+      top: 2mm !important;
+      left: 2mm !important;
+      width: calc(${labelW}mm - 4mm) !important;
+      height: calc(${labelH}mm - 3.2mm) !important;
       box-sizing: border-box !important;
+      overflow: hidden !important;
       display: flex !important;
       flex-direction: column !important;
       justify-content: flex-start !important;
       align-items: center !important;
       text-align: center !important;
-      gap: 0.5mm !important;
-      overflow: hidden !important;
-      font-family: ${fontFamilyCss} !important;
+      gap: 0.2mm !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      color: #000000 !important;
+      font-family: Arial, "Segoe UI", Roboto, sans-serif !important;
     }
   </style>
 </head>
@@ -1296,6 +2484,20 @@ export function buildStickerPrintDocument(items, config, shopData = {}) {
   ${rowsHtml}
 </body>
 </html>`;
+}
+
+/**
+ * Generate full print-ready HTML page with CSS @page rules for roll printing
+ * @param {Array} items - List of items with .quantity specified
+ * @param {object} config - Sticker configuration
+ * @param {object} shopData - Store details
+ * @returns {string} Full HTML document
+ */
+export function buildStickerPrintDocument(items, config, shopData = {}) {
+  if (config?.printMode !== 'legacy_landscape') {
+    return buildPortraitSheetPrintDocument(items, config, shopData);
+  }
+  return buildLegacyStickerPrintDocument(items, config, shopData);
 }
 
 /**
@@ -2022,18 +3224,51 @@ export async function printStickers(items, config, shopData = {}, printerTarget 
     }
   }
 
+  // 2. Local Print Agent Direct TSPL Spooler (Zero-Dialog, Localhost & Production HTTPS Web App)
+  if (!window.electron && printerTarget !== '__browser_print__') {
+    try {
+      const { checkAgentHealth, printViaAgent } = await import('./printAgentService');
+      const health = await checkAgentHealth(1200);
+      if (health.connected) {
+        const target = (printerTarget && printerTarget !== '__browser_print__') ? printerTarget : (health.defaultPrinter || 'TSC TE244');
+        const tsplRes = options.isCalibration
+          ? { tsplPayload: buildCalibrationTsplPayload(config, shopData) }
+          : await buildTsplStickerPayload(items, config, shopData);
+
+        if (tsplRes?.tsplPayload) {
+          const agentRes = await printViaAgent(target, tsplRes.tsplPayload, {
+            docTitle: options.isCalibration ? 'Ariso Calibration Label' : `Ariso Product Labels (${items.length})`
+          });
+          if (agentRes && agentRes.success) {
+            return { success: true, method: 'local-print-agent', printer: target, bytesWritten: agentRes.bytesWritten };
+          }
+        }
+      }
+    } catch (agentErr) {
+      console.warn('[StickerGenerator] Local print agent dispatch skipped/failed:', agentErr);
+    }
+  }
+
   const htmlContent = options.isCalibration
     ? buildCalibrationPrintDocument(config, shopData)
     : buildStickerPrintDocument(items, config, shopData);
 
-  // 2. Electron Desktop Native Silent / Spooler Printing
+  // 3. Electron Desktop Native Silent / Spooler Printing
   const isElectron = !!(window.electron && (typeof window.electron.printSystemSilent === 'function' || typeof window.electron.printStickers === 'function'));
   if (isElectron) {
     try {
-      const rot = getEffectiveRotation(config);
-      const rotInfo = getRotationTransform(rot, rollWidthMm, rollHeightMm, 0, 0);
-      const widthMicrons = Math.round(rotInfo.pageWidthMm * 1000);
-      const heightMicrons = Math.round(rotInfo.pageHeightMm * 1000);
+      const isPortrait = (config?.printMode !== 'legacy_landscape');
+      let widthMicrons, heightMicrons;
+      if (isPortrait) {
+        const layout = resolveSheetLayout(config);
+        widthMicrons = Math.round(layout.paperW * 1000);
+        heightMicrons = Math.round(layout.paperH * 1000);
+      } else {
+        const rot = getEffectiveRotation(config);
+        const rotInfo = getRotationTransform(rot, rollWidthMm, rollHeightMm, 0, 0);
+        widthMicrons = Math.round(rotInfo.pageWidthMm * 1000);
+        heightMicrons = Math.round(rotInfo.pageHeightMm * 1000);
+      }
 
       const printFn = window.electron.printStickers || window.electron.printSystemSilent;
       const res = await printFn(htmlContent, printerTarget, {
@@ -2049,93 +3284,93 @@ export async function printStickers(items, config, shopData = {}, printerTarget 
     }
   }
 
-  // 3. Web Browser Fallback: Isolated offscreen print iframe with font readiness check
+  // 3. Web Browser: Dedicated Blob URL Window Printing (blob: URL style)
+  // Directly opens the print document from a dedicated blob: URL in a dedicated popup window
   return new Promise((resolve, reject) => {
     try {
-      // Remove any prior print iframe to avoid stale DOM or document state caching
-      const oldIframe = document.getElementById('ariso-sticker-print-iframe');
-      if (oldIframe) {
-        oldIframe.remove();
+      let blobUrl = options.blobUrl;
+      if (!blobUrl) {
+        const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+        blobUrl = URL.createObjectURL(blob);
       }
 
-      const iframe = document.createElement('iframe');
-      iframe.id = 'ariso-sticker-print-iframe';
-      iframe.style.position = 'fixed';
-      iframe.style.right = '0';
-      iframe.style.bottom = '0';
-      iframe.style.width = '0';
-      iframe.style.height = '0';
-      iframe.style.border = 'none';
-      iframe.style.opacity = '0.01';
-      iframe.style.pointerEvents = 'none';
-      iframe.style.zIndex = '-9999';
-      document.body.appendChild(iframe);
-
-      const originalDocTitle = document.title;
-      document.title = ' ';
-
-      const restoreTitle = () => {
+      // If opener already pre-opened the popup window in the click tick, write directly into it
+      let win = options.popupWindow;
+      let usedDirectDoc = false;
+      if (!win || win.closed) {
+        win = window.open('about:blank', 'ariso_label_print', 'popup,width=900,height=700');
+      }
+      if (win && !win.closed) {
         try {
-          document.title = originalDocTitle;
-        } catch (e) {}
-      };
-
-      const doc = iframe.contentWindow.document;
-      doc.open();
-      doc.write(htmlContent);
-      doc.close();
-      if (doc) {
-        doc.title = ' ';
+          win.document.open();
+          win.document.write(htmlContent);
+          win.document.close();
+          usedDirectDoc = true;
+        } catch (_) {}
       }
-
-      if (iframe.contentWindow) {
-        iframe.contentWindow.addEventListener('afterprint', restoreTitle);
-      }
-      window.addEventListener('afterprint', restoreTitle, { once: true });
-      setTimeout(restoreTitle, 5000);
-
-      const triggerPrint = async () => {
-        try {
-          if (doc.fonts && doc.fonts.ready) {
-            await doc.fonts.ready;
-          }
-        } catch (fontErr) {}
-
-        // Settle delay to ensure browser computes crisp SVG vectors and CSS page boxes
-        setTimeout(() => {
+      if (!usedDirectDoc && (!win || win.closed || win.location.href === 'about:blank')) {
+        let blobUrl = options.blobUrl;
+        if (!blobUrl) {
+          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+          blobUrl = URL.createObjectURL(blob);
+        }
+        if (!win || win.closed) {
+          win = window.open(blobUrl, 'ariso_label_print', 'popup,width=900,height=700');
+        } else {
           try {
-            iframe.contentWindow.focus();
-            iframe.contentWindow.print();
-            resolve({ success: true, method: 'web-iframe' });
-          } catch (printErr) {
-            console.warn('[StickerGenerator] Iframe print blocked, falling back to window:', printErr);
-            try {
-              const win = window.open('', '_blank', 'width=800,height=600');
-              if (win) {
-                win.document.open();
-                win.document.write(htmlContent);
-                win.document.close();
-                win.document.title = ' ';
-                setTimeout(() => {
-                  win.focus();
-                  win.print();
-                  resolve({ success: true, method: 'web-window' });
-                }, 400);
-              } else {
-                reject(new Error('Print popup was blocked by browser. Please allow popups for this site.'));
-              }
-            } catch (winErr) {
-              reject(winErr);
+            if (win.location.href !== blobUrl) {
+              win.location.href = blobUrl;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (!win || win.closed) {
+        // Popup blocked by browser policy: do NOT fall back to printing the app page
+        resolve({
+          success: false,
+          popupBlocked: true,
+          message: 'Allow pop-ups for this site to print labels'
+        });
+        return;
+      }
+
+      try {
+        win.focus();
+      } catch (_) {}
+
+      // Opener-side coordination: fallback trigger if inline script was blocked by CSP or delayed
+      const triggerFromOpener = () => {
+        try {
+          if (!win || win.closed) return;
+          if (!win.__arisoPrinted) {
+            if (typeof win.__triggerArisoPrint === 'function') {
+              win.__triggerArisoPrint();
+            } else if (typeof win.print === 'function') {
+              win.__arisoPrinted = true;
+              win.focus();
+              win.print();
             }
           }
-        }, 350);
+        } catch (_) {}
       };
 
-      if (iframe.contentWindow.document.readyState === 'complete') {
-        triggerPrint();
-      } else {
-        iframe.onload = triggerPrint;
-      }
+      try {
+        win.addEventListener('load', () => setTimeout(triggerFromOpener, 180), { once: true });
+      } catch (_) {}
+      setTimeout(triggerFromOpener, 450);
+
+      // Clean up blob URL strictly after window has closed
+      const timer = setInterval(() => {
+        if (!win || win.closed) {
+          clearInterval(timer);
+          try {
+            URL.revokeObjectURL(blobUrl);
+          } catch (_) {}
+        }
+      }, 1000);
+
+      resolve({ success: true, method: 'web-window-blob', blobUrl });
     } catch (err) {
       reject(err);
     }
@@ -2145,8 +3380,8 @@ export async function printStickers(items, config, shopData = {}, printerTarget 
 /**
  * Print a single calibration test row (1 page)
  */
-export async function printCalibrationStickers(config, shopData = {}, printerTarget = null) {
-  return printStickers([], config, shopData, printerTarget, { isCalibration: true });
+export async function printCalibrationStickers(config, shopData = {}, printerTarget = null, options = {}) {
+  return printStickers([], config, shopData, printerTarget, { ...options, isCalibration: true });
 }
 
 /**

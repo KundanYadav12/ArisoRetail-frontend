@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Container, Grid, Card, CardContent, Typography, Box, Button, TextField, Select, MenuItem, Dialog, DialogTitle, DialogContent, DialogActions, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, useMediaQuery, IconButton, CircularProgress, Chip, Tooltip, Tabs, Tab, Switch, Alert } from '@mui/material';
-import { Plus, ToggleLeft, ToggleRight, Database, RefreshCw, Users, ShieldAlert, BarChart, Server, Calendar, CheckCircle, Edit2, Trash2, Mail, Send, Key, Palette, Cpu, History, Image as ImageIcon, AlertTriangle } from 'lucide-react';
+import { Plus, ToggleLeft, ToggleRight, Database, RefreshCw, Users, ShieldAlert, BarChart, Server, Calendar, CheckCircle, Edit2, Trash2, Mail, Send, Key, Palette, Cpu, History, Image as ImageIcon, AlertTriangle, Globe } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 import { useNotify } from '../context/NotificationContext';
 import SuperAdminThemeManager from '../components/SuperAdminThemeManager';
 import SuperAdminAiConfigManager from '../components/SuperAdminAiConfigManager';
+import SuperAdminStorefrontManager from '../components/superadmin/SuperAdminStorefrontManager';
 
 export default function SuperAdminPanel({ token }) {
   const { notify, confirmDialog } = useNotify();
@@ -445,6 +446,7 @@ export default function SuperAdminPanel({ token }) {
             <Tab icon={<Cpu size={18} />} iconPosition="start" label="🤖 Google AI Configuration" />
             <Tab icon={<Users size={18} />} iconPosition="start" label="Distributors" />
             <Tab icon={<Key size={18} />} iconPosition="start" label="Licenses" />
+            <Tab icon={<Globe size={18} />} iconPosition="start" label="🌐 Storefronts & Subdomains" />
           </Tabs>
         </Box>
 
@@ -655,6 +657,8 @@ export default function SuperAdminPanel({ token }) {
           <SuperAdminDistributors token={token} />
         ) : saTab === 5 ? (
           <SuperAdminLicenses token={token} />
+        ) : saTab === 6 ? (
+          <SuperAdminStorefrontManager token={token} />
         ) : (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
 

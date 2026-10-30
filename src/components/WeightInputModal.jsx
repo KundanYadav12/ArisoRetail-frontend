@@ -18,6 +18,8 @@ export default function WeightInputModal({
   pricingMode: propPricingMode,
   user = null,
   receiptSettings = null,
+  isPcs = false,
+  showPrice = false,
   onConfirm,
   onClose
 }) {
@@ -25,8 +27,9 @@ export default function WeightInputModal({
   const weightInputRef = useRef(null);
   const rateInputRef = useRef(null);
   const amountInputRef = useRef(null);
+  const enterDebounceRef = useRef(0);
 
-  const [weightValue, setWeightValue] = useState('1.000');
+  const [weightValue, setWeightValue] = useState(isPcs ? '1' : '1.000');
   const [rateValue, setRateValue] = useState('');
   const [amountValue, setAmountValue] = useState('');
   const [lastEditedField, setLastEditedField] = useState('weight'); // 'weight' | 'rate' | 'amount'
@@ -83,7 +86,9 @@ export default function WeightInputModal({
   // Reset state whenever modal opens or product changes
   useEffect(() => {
     if (isOpen && product) {
-      const initW = initialWeightInKg > 0 ? initialWeightInKg.toFixed(3) : '1.000';
+      const initW = isPcs
+        ? (initialWeightInKg > 0 ? String(Math.round(initialWeightInKg)) : '1')
+        : (initialWeightInKg > 0 ? initialWeightInKg.toFixed(3) : '1.000');
       setWeightValue(initW);
 
       const effectiveRate = (initialRate !== null && initialRate !== undefined && !isNaN(parseFloat(initialRate)))
@@ -99,6 +104,7 @@ export default function WeightInputModal({
 
       setLastEditedField('weight');
       setRateError('');
+      enterDebounceRef.current = Date.now();
 
       const timer = setTimeout(() => {
         if (weightInputRef.current) {
@@ -108,7 +114,7 @@ export default function WeightInputModal({
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [isOpen, product, initialWeightInKg, initialRate, menuRate]);
+  }, [isOpen, product, initialWeightInKg, initialRate, menuRate, isPcs]);
 
   // Handle global F5 and F6 shortcuts inside modal
   useEffect(() => {
@@ -121,7 +127,7 @@ export default function WeightInputModal({
           weightInputRef.current.focus();
           weightInputRef.current.select();
         }
-      } else if (e.key === 'F6' && canEditRate) {
+      } else if (e.key === 'F6' && (showPrice || canEditRate)) {
         e.preventDefault();
         e.stopPropagation();
         if (rateInputRef.current) {
@@ -132,7 +138,7 @@ export default function WeightInputModal({
     };
     window.addEventListener('keydown', handleKeyNav, true);
     return () => window.removeEventListener('keydown', handleKeyNav, true);
-  }, [isOpen, canEditRate]);
+  }, [isOpen, canEditRate, showPrice]);
 
   if (!isOpen || !product) return null;
 
@@ -195,11 +201,16 @@ export default function WeightInputModal({
     return parseFloat(weightValue) === parseFloat(val);
   };
 
-  // Weight input handler
+  // Weight / Quantity input handler
   const handleWeightChange = (e) => {
     let raw = e.target.value;
     if (raw.startsWith('-') || parseFloat(raw) < 0) raw = '0';
-    const clean = sanitizePositiveNumberString(raw, true);
+    let clean = '';
+    if (isPcs) {
+      clean = raw.replace(/[^0-9]/g, '');
+    } else {
+      clean = sanitizePositiveNumberString(raw, true);
+    }
     setWeightValue(clean);
     setLastEditedField('weight');
 
@@ -261,10 +272,69 @@ export default function WeightInputModal({
     if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (!isWeightEmptyOrZero && !isOverStock && !rateError && !isRateEmptyOrZero) {
-        handleConfirm();
+
+      // Debounce protection against rapid double Enter
+      if (Date.now() - enterDebounceRef.current < 150) {
+        return;
       }
-      return;
+
+      // Check if quantity/weight is empty, zero or invalid
+      if (isWeightEmptyOrZero) {
+        notify?.warning(
+          isPcs ? 'Please enter a valid quantity greater than 0.' : 'Please enter a valid weight greater than 0 kg.',
+          'Invalid Value'
+        );
+        if (weightInputRef.current) {
+          weightInputRef.current.focus();
+          weightInputRef.current.select();
+        }
+        return;
+      }
+
+      if (isOverStock) {
+        notify?.warning(
+          isPcs
+            ? `Requested ${numericWeight} ${product.unit || 'pcs'} exceeds available stock (${availableStock} ${product.unit || 'pcs'}).`
+            : `Requested ${weightInKg.toFixed(3)} kg exceeds available stock (${availableStock.toFixed(3)} kg).`,
+          'Stock Limit Exceeded',
+          5000
+        );
+        return;
+      }
+
+      const activeEl = document.activeElement;
+      const isFocusedInRate = activeEl === rateInputRef.current || e.target === rateInputRef.current;
+
+      // In Q+P flow (showPrice=true):
+      if (showPrice) {
+        if (!isFocusedInRate) {
+          // 1st Enter: Move focus to the price/rate input (selected)
+          enterDebounceRef.current = Date.now();
+          if (rateInputRef.current) {
+            rateInputRef.current.focus();
+            rateInputRef.current.select();
+          }
+          return;
+        } else {
+          // 2nd Enter (while focused in price/rate): Validate rate and add to cart
+          const err = validateRate(rateValue);
+          if (err || isRateEmptyOrZero) {
+            setRateError(err || 'Rate cannot be empty');
+            notify?.warning(err || 'Rate cannot be empty', 'Invalid Rate');
+            if (rateInputRef.current) {
+              rateInputRef.current.focus();
+              rateInputRef.current.select();
+            }
+            return;
+          }
+          handleConfirm();
+          return;
+        }
+      } else {
+        // In Q only flow (showPrice=false): Single Enter adds item to cart with menu price
+        handleConfirm();
+        return;
+      }
     }
 
     if (e.key === 'Escape') {
@@ -282,7 +352,7 @@ export default function WeightInputModal({
       return;
     }
 
-    if (e.key === 'F6' && canEditRate) {
+    if (e.key === 'F6' && showPrice) {
       e.preventDefault();
       if (rateInputRef.current) {
         rateInputRef.current.focus();
@@ -294,42 +364,59 @@ export default function WeightInputModal({
 
   const handleConfirm = () => {
     if (isWeightEmptyOrZero) {
-      notify?.warning('Please enter a valid weight greater than 0 kg.', 'Invalid Weight');
+      notify?.warning(
+        isPcs ? 'Please enter a valid quantity greater than 0.' : 'Please enter a valid weight greater than 0 kg.',
+        'Invalid Value'
+      );
+      if (weightInputRef.current) {
+        weightInputRef.current.focus();
+        weightInputRef.current.select();
+      }
       return;
     }
 
-    const err = validateRate(rateValue);
-    if (err) {
-      setRateError(err);
-      notify?.warning(err, 'Invalid Rate');
-      if (rateInputRef.current) rateInputRef.current.focus();
-      return;
+    if (showPrice) {
+      const err = validateRate(rateValue);
+      if (err || isRateEmptyOrZero) {
+        setRateError(err || 'Rate cannot be empty');
+        notify?.warning(err || 'Rate cannot be empty', 'Invalid Rate');
+        if (rateInputRef.current) {
+          rateInputRef.current.focus();
+          rateInputRef.current.select();
+        }
+        return;
+      }
     }
 
     if (isOverStock) {
       notify?.warning(
-        `Requested ${weightInKg.toFixed(3)} kg exceeds available stock (${availableStock.toFixed(3)} kg).`,
+        isPcs
+          ? `Requested ${numericWeight} ${product.unit || 'pcs'} exceeds available stock (${availableStock} ${product.unit || 'pcs'}).`
+          : `Requested ${weightInKg.toFixed(3)} kg exceeds available stock (${availableStock.toFixed(3)} kg).`,
         'Stock Limit Exceeded',
         5000
       );
       return;
     }
 
-    const finalRate = parseFloat(rateValue);
+    const finalRate = showPrice ? parseFloat(rateValue) : menuRate;
     const finalAmount = parseFloat(calculatedTotal);
+    const finalQty = isPcs ? numericWeight : weightInKg;
 
     onConfirm({
       product,
-      weightInKg,
-      displayWeight: weightInKg,
-      unit: 'kg',
+      weightInKg: isPcs ? 0 : weightInKg,
+      displayWeight: finalQty,
+      quantity: finalQty,
+      unit: isPcs ? (product.unit || product.base_unit || 'pcs') : (product.base_unit || product.unit || 'kg'),
       pricePerBaseUnit: finalRate,
       price: finalRate,
       unit_price: finalRate,
       original_rate: menuRate,
       unit_rate: finalRate,
       rate_overridden: isRateOverridden,
-      calculatedTotal: finalAmount
+      calculatedTotal: finalAmount,
+      isPcs
     });
 
     if (typeof onClose === 'function') {
@@ -337,7 +424,7 @@ export default function WeightInputModal({
     }
   };
 
-  const isFormValid = !isWeightEmptyOrZero && !isOverStock && !isRateEmptyOrZero && !rateError;
+  const isFormValid = !isWeightEmptyOrZero && !isOverStock && (!showPrice || (!isRateEmptyOrZero && !rateError));
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -348,7 +435,7 @@ export default function WeightInputModal({
             <h2 style={styles.productName}>{product.name}</h2>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
               <p style={styles.priceSub}>
-                Menu Rate: <strong>₹{menuRate.toFixed(2)}</strong> per {(product.base_unit === 'pcs' || product.unit === 'pcs') ? 'kg' : (product.base_unit || product.unit || 'kg')}
+                Menu Rate: <strong>₹{menuRate.toFixed(2)}</strong> per {isPcs ? (product.unit || 'pcs') : (product.base_unit || product.unit || 'kg')}
                 {currentPricingMode === 'wholesale' && (
                   <span style={{ marginLeft: 6, fontSize: '10px', backgroundColor: '#38BDF8', color: '#0F172A', padding: '1px 5px', borderRadius: '4px', fontWeight: 800 }}>
                     WHOLESALE
@@ -367,7 +454,9 @@ export default function WeightInputModal({
                     border: `1px solid ${availableStock <= 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.3)'}`
                   }}
                 >
-                  {availableStock <= 0 ? 'Out of Stock (0 kg)' : `Stock: ${availableStock.toFixed(3)} kg`}
+                  {availableStock <= 0
+                    ? (isPcs ? 'Out of Stock (0)' : 'Out of Stock (0 kg)')
+                    : (isPcs ? `Stock: ${Math.floor(availableStock)} ${product.unit || 'pcs'}` : `Stock: ${availableStock.toFixed(3)} kg`)}
                 </span>
               )}
             </div>
@@ -375,11 +464,11 @@ export default function WeightInputModal({
           <button style={styles.closeBtn} onClick={onClose} title="Close (Esc)"><X size={18} /></button>
         </div>
 
-        {/* Input Section 1: Weight Input (Kg) */}
+        {/* Input Section 1: Weight or Quantity Input */}
         <div style={styles.inputSection}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <label style={styles.label}>Enter Weight (Kg) (F5):</label>
-            <span style={{ fontSize: '11px', color: '#94A3B8' }}>Scale unit: kg</span>
+            <label style={styles.label}>{isPcs ? 'Enter Quantity (F5):' : 'Enter Weight (Kg) (F5):'}</label>
+            <span style={{ fontSize: '11px', color: '#94A3B8' }}>{isPcs ? `Unit: ${product.unit || 'pcs'}` : 'Scale unit: kg'}</span>
           </div>
           <div style={styles.inputRow}>
             <input
@@ -394,143 +483,151 @@ export default function WeightInputModal({
               }}
               type="number"
               min="0"
-              step="any"
+              step={isPcs ? "1" : "any"}
               value={weightValue}
               onChange={handleWeightChange}
               onFocus={handleSelectAllOnFocus}
               onClick={handleSelectAllOnClick}
               onMouseUp={handleSelectAllOnMouseUp}
-              placeholder="0.000"
+              placeholder={isPcs ? "1" : "0.000"}
               autoFocus
             />
-            <div style={styles.unitBadge}>KG</div>
+            <div style={styles.unitBadge}>{isPcs ? (product.unit || 'PCS').toUpperCase() : 'KG'}</div>
           </div>
 
           {isOverStock && (
             <div style={styles.stockWarningBox}>
               <AlertTriangle size={15} color="#ef4444" style={{ flexShrink: 0 }} />
-              <span>Requested {weightInKg.toFixed(3)} kg exceeds available stock of {availableStock.toFixed(3)} kg</span>
+              <span>
+                {isPcs
+                  ? `Requested ${numericWeight} ${product.unit || 'pcs'} exceeds available stock of ${availableStock} ${product.unit || 'pcs'}`
+                  : `Requested ${weightInKg.toFixed(3)} kg exceeds available stock of ${availableStock.toFixed(3)} kg`}
+              </span>
             </div>
           )}
           {isWeightEmptyOrZero && !isOverStock && (
             <div style={styles.validationWarningBox}>
               <AlertTriangle size={14} color="#F59E0B" style={{ flexShrink: 0 }} />
-              <span>Please enter a weight greater than 0 kg to add to cart</span>
+              <span>{isPcs ? 'Please enter a valid quantity greater than 0' : 'Please enter a weight greater than 0 kg to add to cart'}</span>
             </div>
           )}
         </div>
 
-        {/* Preset Quick Weight Buttons */}
-        <div style={{ marginBottom: '14px' }}>
-          <label style={styles.smallLabel}>QUICK WEIGHT PRESETS:</label>
-          <div style={styles.presetGrid}>
-            {[
-              { val: '0.250', label: '250 g' },
-              { val: '0.500', label: '500 g' },
-              { val: '0.750', label: '750 g' },
-              { val: '1.000', label: '1 kg' },
-              { val: '1.250', label: '1.25 kg' },
-              { val: '2.500', label: '2.5 kg' },
-              { val: '5.000', label: '5 kg' },
-            ].map((p) => {
-              const active = isPresetActive(p.val);
-              return (
-                <button
-                  key={p.label}
-                  type="button"
-                  style={{
-                    ...styles.presetBtn,
-                    ...(active ? styles.presetActive : {})
-                  }}
-                  onClick={() => handlePresetSelect(p.val)}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
+        {/* Preset Quick Weight Buttons (Only for Weight Items) */}
+        {!isPcs && (
+          <div style={{ marginBottom: '14px' }}>
+            <label style={styles.smallLabel}>QUICK WEIGHT PRESETS:</label>
+            <div style={styles.presetGrid}>
+              {[
+                { val: '0.250', label: '250 g' },
+                { val: '0.500', label: '500 g' },
+                { val: '0.750', label: '750 g' },
+                { val: '1.000', label: '1 kg' },
+                { val: '1.250', label: '1.25 kg' },
+                { val: '2.500', label: '2.5 kg' },
+                { val: '5.000', label: '5 kg' },
+              ].map((p) => {
+                const active = isPresetActive(p.val);
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    style={{
+                      ...styles.presetBtn,
+                      ...(active ? styles.presetActive : {})
+                    }}
+                    onClick={() => handlePresetSelect(p.val)}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Input Section 2: Rate (₹ / kg) (Current Bill Line Only) */}
-        <div style={styles.inputSection}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-            <label style={styles.label}>
-              Rate (₹ / kg) {canEditRate ? '(F6):' : '(Read-only):'}
-            </label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {isRateOverridden && (
-                <span style={styles.rateEditedBadge}>
-                  Rate edited (Orig: ₹{menuRate.toFixed(2)})
+        {/* Input Section 2: Rate (Only when showPrice is true) */}
+        {showPrice && (
+          <div style={styles.inputSection}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <label style={styles.label}>
+                Rate (₹ / {isPcs ? (product.unit || 'unit') : 'kg'}) {canEditRate ? '(F6):' : '(Read-only):'}
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {isRateOverridden && (
+                  <span style={styles.rateEditedBadge}>
+                    Rate edited (Orig: ₹{menuRate.toFixed(2)})
+                  </span>
+                )}
+                {canEditRate && isRateOverridden && (
+                  <button
+                    type="button"
+                    style={styles.resetRateBtn}
+                    onClick={handleResetRate}
+                    title="Reset rate back to current menu rate"
+                  >
+                    <RotateCcw size={12} /> Reset to menu rate
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div style={styles.inputRow}>
+              <input
+                ref={rateInputRef}
+                style={{
+                  ...styles.input,
+                  backgroundColor: canEditRate ? '#0F172A' : '#1E293B',
+                  cursor: canEditRate ? 'text' : 'not-allowed',
+                  border: rateError
+                    ? '2px solid #EF4444'
+                    : isRateOverridden
+                    ? '2px solid #F59E0B'
+                    : '2px solid #334155'
+                }}
+                type="number"
+                min="0"
+                step="0.01"
+                readOnly={!canEditRate}
+                value={rateValue}
+                onChange={handleRateChange}
+                onFocus={handleSelectAllOnFocus}
+                onClick={handleSelectAllOnClick}
+                onMouseUp={handleSelectAllOnMouseUp}
+                placeholder="0.00"
+              />
+              <div style={styles.unitBadge}>
+                {canEditRate ? `₹ / ${isPcs ? (product.unit || 'UNIT').toUpperCase() : 'KG'}` : <Lock size={14} color="#94A3B8" />}
+              </div>
+            </div>
+
+            {rateError && (
+              <div style={styles.errorBox}>
+                <AlertTriangle size={14} color="#EF4444" style={{ flexShrink: 0 }} />
+                <span>{rateError}</span>
+              </div>
+            )}
+
+            {isBelowCost && !rateError && (
+              <div style={styles.belowCostWarningBox}>
+                <AlertTriangle size={14} color="#F59E0B" style={{ flexShrink: 0 }} />
+                <span>
+                  Rate (₹{effectiveRate.toFixed(2)}) is below purchase cost (₹{costPrice.toFixed(2)}).
+                  {rateLimitMode === 'warning' ? ' (Warning only)' : ''}
                 </span>
-              )}
-              {canEditRate && isRateOverridden && (
-                <button
-                  type="button"
-                  style={styles.resetRateBtn}
-                  onClick={handleResetRate}
-                  title="Reset rate back to current menu rate"
-                >
-                  <RotateCcw size={12} /> Reset to menu rate
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
+        )}
 
-          <div style={styles.inputRow}>
-            <input
-              ref={rateInputRef}
-              style={{
-                ...styles.input,
-                backgroundColor: canEditRate ? '#0F172A' : '#1E293B',
-                cursor: canEditRate ? 'text' : 'not-allowed',
-                border: rateError
-                  ? '2px solid #EF4444'
-                  : isRateOverridden
-                  ? '2px solid #F59E0B'
-                  : '2px solid #334155'
-              }}
-              type="number"
-              min="0"
-              step="0.01"
-              readOnly={!canEditRate}
-              value={rateValue}
-              onChange={handleRateChange}
-              onFocus={handleSelectAllOnFocus}
-              onClick={handleSelectAllOnClick}
-              onMouseUp={handleSelectAllOnMouseUp}
-              placeholder="0.00"
-            />
-            <div style={styles.unitBadge}>
-              {canEditRate ? '₹ / KG' : <Lock size={14} color="#94A3B8" />}
-            </div>
-          </div>
-
-          {rateError && (
-            <div style={styles.errorBox}>
-              <AlertTriangle size={14} color="#EF4444" style={{ flexShrink: 0 }} />
-              <span>{rateError}</span>
-            </div>
-          )}
-
-          {isBelowCost && !rateError && (
-            <div style={styles.belowCostWarningBox}>
-              <AlertTriangle size={14} color="#F59E0B" style={{ flexShrink: 0 }} />
-              <span>
-                Rate (₹{effectiveRate.toFixed(2)}) is below purchase cost (₹{costPrice.toFixed(2)}).
-                {rateLimitMode === 'warning' ? ' (Warning only)' : ''}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Calculated Amount Box with Two-Way Live Editing */}
+        {/* Calculated Amount Box */}
         <div style={styles.summaryCard}>
           <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>Total Weight:</span>
-            <span style={styles.summaryVal}>{weightInKg.toFixed(3)} KG</span>
+            <span style={styles.summaryLabel}>{isPcs ? 'Total Quantity:' : 'Total Weight:'}</span>
+            <span style={styles.summaryVal}>{isPcs ? `${numericWeight} ${product.unit || 'pcs'}` : `${weightInKg.toFixed(3)} KG`}</span>
           </div>
           <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>Rate per Kg:</span>
+            <span style={styles.summaryLabel}>Rate per {isPcs ? (product.unit || 'unit') : 'kg'}:</span>
             <span style={styles.summaryVal}>
               ₹{effectiveRate.toFixed(2)}
               {isRateOverridden && (
@@ -543,34 +640,43 @@ export default function WeightInputModal({
 
           <div style={styles.divider} />
 
-          {/* Amount input row allows direct editing to back-calculate rate */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={styles.totalLabel}>CALCULATED AMOUNT (₹):</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹</span>
-              <input
-                ref={amountInputRef}
-                type="number"
-                min="0"
-                step="0.01"
-                disabled={!canEditRate || isWeightEmptyOrZero}
-                value={amountValue}
-                onChange={handleAmountChange}
-                onFocus={handleSelectAllOnFocus}
-                onClick={handleSelectAllOnClick}
-                onMouseUp={handleSelectAllOnMouseUp}
-                placeholder="0.00"
-                style={{
-                  ...styles.amountInput,
-                  cursor: canEditRate && !isWeightEmptyOrZero ? 'text' : 'default'
-                }}
-                title={canEditRate ? 'Edit amount directly to back-calculate rate' : 'Calculated amount'}
-              />
+          {showPrice ? (
+            <>
+              {/* Amount input row allows direct editing to back-calculate rate */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={styles.totalLabel}>CALCULATED AMOUNT (₹):</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '18px', fontWeight: '900', color: '#10B981' }}>₹</span>
+                  <input
+                    ref={amountInputRef}
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    disabled={!canEditRate || isWeightEmptyOrZero}
+                    value={amountValue}
+                    onChange={handleAmountChange}
+                    onFocus={handleSelectAllOnFocus}
+                    onClick={handleSelectAllOnClick}
+                    onMouseUp={handleSelectAllOnMouseUp}
+                    placeholder="0.00"
+                    style={{
+                      ...styles.amountInput,
+                      cursor: canEditRate && !isWeightEmptyOrZero ? 'text' : 'default'
+                    }}
+                    title={canEditRate ? 'Edit amount directly to back-calculate rate' : 'Calculated amount'}
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '4px', textAlign: 'right' }}>
+                amount = {isPcs ? 'qty' : 'weight'} × rate (rate back-calculates if amount is typed)
+              </div>
+            </>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={styles.totalLabel}>TOTAL AMOUNT:</span>
+              <span style={{ fontSize: '20px', fontWeight: '900', color: '#10B981' }}>₹{calculatedTotal}</span>
             </div>
-          </div>
-          <div style={{ fontSize: '10.5px', color: '#64748B', marginTop: '4px', textAlign: 'right' }}>
-            amount = weight × rate (rate back-calculates if amount is typed)
-          </div>
+          )}
         </div>
 
         {/* Action Buttons */}
@@ -592,13 +698,13 @@ export default function WeightInputModal({
             onClick={handleConfirm}
           >
             {isOverStock ? (
-              <><AlertTriangle size={16} /> Exceeds Stock ({availableStock.toFixed(3)} kg max)</>
+              <><AlertTriangle size={16} /> Exceeds Stock ({isPcs ? `${availableStock} max` : `${availableStock.toFixed(3)} kg max`})</>
             ) : isWeightEmptyOrZero ? (
-              <><ShoppingCart size={16} /> Enter Weight (Kg)</>
-            ) : rateError ? (
+              <><ShoppingCart size={16} /> {isPcs ? 'Enter Quantity' : 'Enter Weight (Kg)'}</>
+            ) : (showPrice && rateError) ? (
               <><AlertTriangle size={16} /> Fix Invalid Rate</>
             ) : initialWeightInKg > 0 ? (
-              <><Scale size={16} /> Update Weight (₹{calculatedTotal})</>
+              <><Scale size={16} /> {isPcs ? `Update Quantity (₹${calculatedTotal})` : `Update Weight (₹${calculatedTotal})`}</>
             ) : (
               <><ShoppingCart size={16} /> Add to Cart (Enter) • ₹{calculatedTotal}</>
             )}

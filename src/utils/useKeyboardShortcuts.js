@@ -25,6 +25,9 @@ export function useKeyboardShortcuts(shortcuts = {}, deps = []) {
       } else if (ctrlKey && (key === '/' || key === '?')) {
         actionKey = 'Ctrl+/';
         event.preventDefault();
+      } else if ((ctrlKey || event.altKey) && key.toLowerCase() === 'o') {
+        actionKey = ctrlKey ? 'Ctrl+O' : 'Alt+O';
+        event.preventDefault();
       } else if (key === '?') {
         // Only trigger '?' shortcut if user is not currently typing inside a text input
         const activeTag = document.activeElement?.tagName;

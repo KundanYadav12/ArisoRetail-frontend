@@ -352,7 +352,7 @@ export default function DayEndDashboard({ user, token }) {
               <CheckCircle size={28} style={{ color: '#4f46e5' }} /> Day End & Cash Closing
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Petpooja-Style Daily Sales, Payment Modes & Cash Drawer Reconciliation
+              Daily Sales, Payment Modes & Cash Drawer Reconciliation
             </Typography>
           </Box>
 
