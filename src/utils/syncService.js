@@ -1,5 +1,6 @@
 import { db } from './offlineDb.js';
 import { getBaseUrl, apiFetch } from './api.js';
+import { setTenantItem, getTenantItem } from './storageNamespace.js';
 
 let syncInterval = null;
 let isSyncingInProgress = false;
@@ -103,20 +104,24 @@ export class SyncService {
       // 3. Atomically persist into Dexie IndexedDB and dual-cache to localStorage
       await db.transaction('rw', [db.menu_items, db.categories, db.settings, db.printers, db.financial_accounts, db.payment_account_mappings, db.expense_categories], async () => {
         // Save Menu items
-        if (downwardData.menu_items && Array.isArray(downwardData.menu_items) && downwardData.menu_items.length > 0) {
+        if (downwardData.menu_items && Array.isArray(downwardData.menu_items)) {
           await db.menu_items.clear();
-          await db.menu_items.bulkPut(downwardData.menu_items);
+          if (downwardData.menu_items.length > 0) {
+            await db.menu_items.bulkPut(downwardData.menu_items);
+          }
           try {
-            localStorage.setItem('ariso_offline_menu_items', JSON.stringify(downwardData.menu_items));
+            setTenantItem('ariso_offline_menu_items', JSON.stringify(downwardData.menu_items));
           } catch (e) {}
         }
 
         // Save Categories
-        if (downwardData.categories && Array.isArray(downwardData.categories) && downwardData.categories.length > 0) {
+        if (downwardData.categories && Array.isArray(downwardData.categories)) {
           await db.categories.clear();
-          await db.categories.bulkPut(downwardData.categories);
+          if (downwardData.categories.length > 0) {
+            await db.categories.bulkPut(downwardData.categories);
+          }
           try {
-            localStorage.setItem('ariso_offline_categories', JSON.stringify(downwardData.categories));
+            setTenantItem('ariso_offline_categories', JSON.stringify(downwardData.categories));
           } catch (e) {}
         }
 
@@ -124,22 +129,24 @@ export class SyncService {
         if (downwardData.receipt_settings) {
           await db.settings.put({ key: 'receipt_settings', value: downwardData.receipt_settings });
           try {
-            localStorage.setItem('ariso_offline_receipt_settings', JSON.stringify(downwardData.receipt_settings));
+            setTenantItem('ariso_offline_receipt_settings', JSON.stringify(downwardData.receipt_settings));
           } catch (e) {}
         }
         if (downwardData.profile) {
           await db.settings.put({ key: 'restaurant_profile', value: downwardData.profile });
           try {
-            localStorage.setItem('ariso_offline_restaurant_profile', JSON.stringify(downwardData.profile));
+            setTenantItem('ariso_offline_restaurant_profile', JSON.stringify(downwardData.profile));
           } catch (e) {}
         }
 
         // Save Printers
-        if (downwardData.printers && Array.isArray(downwardData.printers) && downwardData.printers.length > 0) {
+        if (downwardData.printers && Array.isArray(downwardData.printers)) {
           await db.printers.clear();
-          await db.printers.bulkPut(downwardData.printers);
+          if (downwardData.printers.length > 0) {
+            await db.printers.bulkPut(downwardData.printers);
+          }
           try {
-            localStorage.setItem('ariso_offline_printers', JSON.stringify(downwardData.printers));
+            setTenantItem('ariso_offline_printers', JSON.stringify(downwardData.printers));
           } catch (e) {}
         }
 

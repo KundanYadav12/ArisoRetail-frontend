@@ -2152,6 +2152,143 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
     }
   };
 
+  const handlePrintDuplicateReceipt = async (targetOrder) => {
+    if (!targetOrder || !targetOrder.id) {
+      notify.error('No order selected for reprint.', 'Reprint Error');
+      return;
+    }
+
+    try {
+      let orderPayload = null;
+      let orderItems = [];
+
+      // 1. Try server reprint endpoint to increment reprint count and get enriched items
+      try {
+        const res = await apiFetch(`/api/orders/${targetOrder.id}/reprint`, { method: 'POST' });
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data?.order) {
+            orderPayload = {
+              ...data.order,
+              is_duplicate: true,
+              reprint_count: data.order.reprint_count || 1
+            };
+            orderItems = data.items || [];
+          }
+        }
+      } catch (apiErr) {
+        console.warn('[Reprint API Warning]:', apiErr.message);
+      }
+
+      // 2. Fallback: if server reprint endpoint returned non-200 or was unreachable, fetch order directly
+      if (!orderPayload || orderItems.length === 0) {
+        try {
+          const detRes = await apiFetch(`/api/orders/${targetOrder.id}`);
+          if (detRes && detRes.ok) {
+            const detData = await detRes.json();
+            orderPayload = {
+              ...(detData.order || detData),
+              is_duplicate: true,
+              reprint_count: ((detData.order || detData).reprint_count || 0) + 1
+            };
+            orderItems = detData.items || [];
+          }
+        } catch (_) {}
+      }
+
+      // 3. Dual fallback: use targetOrder itself from row
+      if (!orderPayload) {
+        orderPayload = {
+          ...targetOrder,
+          is_duplicate: true,
+          reprint_count: (targetOrder.reprint_count || 0) + 1
+        };
+        orderItems = targetOrder.items || [];
+      }
+
+      // 4. Resolve printer name in Electron environment (hardware USB printer detection fallback)
+      let targetPrinterName = receiptSettings?.default_printer_name || '';
+      if (!targetPrinterName && window.electron && window.electron.getPrinters) {
+        try {
+          const sysList = await window.electron.getPrinters();
+          if (Array.isArray(sysList) && sysList.length > 0) {
+            const virtualKeywords = ['microsoft print to pdf', 'onenote', 'xps', 'fax', 'pdf', 'nul:', 'portprompt'];
+            const physicalPrinters = sysList.filter(p => {
+              const n = (p.name || '').toLowerCase();
+              const port = (p.portName || '').toLowerCase();
+              const drv = (p.driverName || '').toLowerCase();
+              return !virtualKeywords.some(v => n.includes(v) || port.includes(v) || drv.includes(v)) && !p.workOffline;
+            });
+            const bestSys = physicalPrinters.find(p => p.isHardwareConnected) ||
+                            physicalPrinters.find(p => p.isDefault) ||
+                            physicalPrinters.find(p => /tp\s*\d|pos|receipt|thermal|rp\s*\d|xp-?80/i.test(p.name)) ||
+                            physicalPrinters[0] ||
+                            sysList[0];
+            if (bestSys && bestSys.name) {
+              targetPrinterName = bestSys.name;
+            }
+          }
+        } catch (_) {}
+      }
+
+      const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinterName) ? '58mm' : (receiptSettings?.paper_size || '80mm');
+      let printed = false;
+      let lastPrintErr = null;
+
+      // 5. Execute local thermal dispatch with 3-tier fallback
+      if (window.electron) {
+        // Tier 1: ESC/POS Thermal Raw Buffer Spool
+        if (window.electron.printThermalReceipt) {
+          try {
+            await window.electron.printThermalReceipt(targetPrinterName, orderPayload, orderItems, user || {}, receiptSettings);
+            printed = true;
+          } catch (tErr) {
+            lastPrintErr = tErr;
+            console.warn('[Reprint Thermal Native Failed, trying Raw ESC/POS]:', tErr.message);
+          }
+        }
+
+        // Tier 2: Windows Raw Spooler
+        if (!printed && window.electron.printWindowsRaw) {
+          try {
+            const rawEscPos = generateLocalEscPosReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+            await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
+            printed = true;
+          } catch (rErr) {
+            lastPrintErr = rErr;
+            console.warn('[Reprint Raw Failed, trying Silent HTML]:', rErr.message);
+          }
+        }
+
+        // Tier 3: Silent Chromium HTML Printing
+        if (!printed && window.electron.printSystemSilent) {
+          try {
+            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+            await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
+            printed = true;
+          } catch (sErr) {
+            lastPrintErr = sErr;
+            console.warn('[Reprint Silent HTML Failed]:', sErr.message);
+          }
+        }
+
+        if (!printed) {
+          throw lastPrintErr || new Error('Thermal printer failed to print duplicate receipt.');
+        }
+      } else {
+        // Web Browser Flow
+        const htmlReceipt = generateLocalHtmlReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+        printHtmlSilentlyViaIframe(htmlReceipt);
+        printed = true;
+      }
+
+      notify.success(`Duplicate receipt #${orderPayload.unique_order_number || orderPayload.order_number || targetOrder.id} printed.`, 'Reprint Success');
+    } catch (err) {
+      console.error('[Reprint Error]', err);
+      notify.error(err.message || 'Failed to print duplicate receipt.', 'Reprint Error');
+    }
+  };
+
   const handleOpenAddMenu = () => {
     setDialogType('add_menu');
     setSelectedEntity(null);
@@ -2204,6 +2341,25 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
 
     setDialogOpen(true);
   };
+
+  // Handle navigation from POS empty state to auto-open Add Menu or Bulk Import modal
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('ariso_open_add_menu_modal') === 'true') {
+        sessionStorage.removeItem('ariso_open_add_menu_modal');
+        setActiveTab(0);
+        setTimeout(() => {
+          handleOpenAddMenu();
+        }, 150);
+      } else if (sessionStorage.getItem('ariso_open_bulk_import_modal') === 'true') {
+        sessionStorage.removeItem('ariso_open_bulk_import_modal');
+        setActiveTab(0);
+        setTimeout(() => {
+          setBulkImportOpen(true);
+        }, 150);
+      }
+    } catch (_) {}
+  }, []);
 
   const handleOpenEditMenu = (item) => {
     setDialogType('edit_menu');
@@ -6393,41 +6549,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                               <IconButton
                                 size="small"
                                 color="warning"
-                                onClick={async () => {
-                                  try {
-                                    const res = await apiFetch(`/api/orders/${order.id}/reprint`, { method: 'POST' });
-                                    if (res.ok) {
-                                      const reprintData = await res.json();
-                                      notify.success('Receipt duplicate enqueued to thermal printer.', 'Reprint Success');
-                                      if (reprintData?.order && reprintData?.items) {
-                                        const orderPayload = {
-                                          ...reprintData.order,
-                                          is_duplicate: true,
-                                          reprint_count: (reprintData.order.reprint_count || 0) + 1
-                                        };
-                                        const targetPrinterName = receiptSettings?.default_printer_name || '';
-                                        const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinterName) ? '58mm' : '80mm';
-                                        if (window.electron?.printThermalReceipt) {
-                                          await window.electron.printThermalReceipt(targetPrinterName, orderPayload, reprintData.items, user || {}, receiptSettings);
-                                        } else if (window.electron?.printWindowsRaw) {
-                                          const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                          await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
-                                        } else if (window.electron?.printSystemSilent) {
-                                          const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                          await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
-                                        } else {
-                                          const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                          printHtmlSilentlyViaIframe(htmlReceipt);
-                                        }
-                                      }
-                                    } else {
-                                      const err = await res.json();
-                                      notify.error(err.message || 'Reprint failed.', 'Reprint Error');
-                                    }
-                                  } catch (err) {
-                                    notify.error('Failed to dispatch reprint.', 'Error');
-                                  }
-                                }}
+                                onClick={() => handlePrintDuplicateReceipt(order)}
                               >
                                 <Printer size={16} />
                               </IconButton>
@@ -6579,41 +6701,7 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
                             size="small"
                             color="warning"
                             title="Reprint Receipt"
-                            onClick={async () => {
-                              try {
-                                const res = await apiFetch(`/api/orders/${order.id}/reprint`, { method: 'POST' });
-                                if (res.ok) {
-                                  const reprintData = await res.json();
-                                  notify.success('Receipt duplicate enqueued.', 'Reprint Success');
-                                  if (reprintData?.order && reprintData?.items) {
-                                    const orderPayload = {
-                                      ...reprintData.order,
-                                      is_duplicate: true,
-                                      reprint_count: (reprintData.order.reprint_count || 0) + 1
-                                    };
-                                    const targetPrinterName = receiptSettings?.default_printer_name || '';
-                                    const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinterName) ? '58mm' : '80mm';
-                                    if (window.electron?.printThermalReceipt) {
-                                      await window.electron.printThermalReceipt(targetPrinterName, orderPayload, reprintData.items, user || {}, receiptSettings);
-                                    } else if (window.electron?.printWindowsRaw) {
-                                      const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                      await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
-                                    } else if (window.electron?.printSystemSilent) {
-                                      const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                      await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
-                                    } else {
-                                      const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-                                      printHtmlSilentlyViaIframe(htmlReceipt);
-                                    }
-                                  }
-                                } else {
-                                  const err = await res.json();
-                                  notify.error(err.message || 'Reprint failed.', 'Reprint Error');
-                                }
-                              } catch (err) {
-                                notify.error('Failed to dispatch reprint.', 'Error');
-                              }
-                            }}
+                            onClick={() => handlePrintDuplicateReceipt(order)}
                           >
                             <Printer size={15} />
                           </IconButton>
@@ -8569,19 +8657,11 @@ export default function AdminPanel({ token, user, initialTab = 0, isSalesmanView
               <Button
                 variant="contained"
                 color="warning"
-                onClick={() => {
-                  try {
-                    const htmlReceipt = generateLocalHtmlReceipt(selectedHistoryOrder.order, selectedHistoryOrder.items, user || {}, receiptSettings);
-                    printHtmlSilentlyViaIframe(htmlReceipt);
-                    notify.success('Bill receipt sent to printer.', 'Print Receipt');
-                  } catch (err) {
-                    notify.error('Failed to generate receipt.', 'Print Error');
-                  }
-                }}
+                onClick={() => handlePrintDuplicateReceipt(selectedHistoryOrder.order || selectedHistoryOrder)}
                 sx={{ fontWeight: 800, textTransform: 'none' }}
                 startIcon={<Printer size={16} />}
               >
-                Print Receipt
+                Print Receipt Duplicate
               </Button>
               <Button
                 variant="outlined"

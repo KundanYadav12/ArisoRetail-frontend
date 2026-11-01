@@ -206,40 +206,115 @@ export default function CashierDashboard({ user, token, onLogout }) {
 
   const handleReprintOrder = async (orderId) => {
     try {
-      const res = await apiFetch(`/api/orders/${orderId}/reprint`, {
-        method: 'POST'
-      });
-      if (res.ok) {
-        const reprintData = await res.json();
-        notify.success('Receipt reprint duplicate enqueued.', 'Reprint Done', 1000);
-        if (reprintData?.order && reprintData?.items) {
-          const orderPayload = {
-            ...reprintData.order,
-            is_duplicate: true,
-            reprint_count: (reprintData.order.reprint_count || 0) + 1
-          };
-          const targetPrinter = receiptSettings?.default_printer_name || '';
-          const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinter) ? '58mm' : '80mm';
-          if (window.electron?.printThermalReceipt) {
-            await window.electron.printThermalReceipt(targetPrinter, orderPayload, reprintData.items, user || {}, receiptSettings);
-          } else if (window.electron?.printWindowsRaw) {
-            const rawEscPos = generateLocalEscPosReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-            await window.electron.printWindowsRaw(targetPrinter, safeUtf8ToBase64(rawEscPos));
-          } else if (window.electron?.printSystemSilent) {
-            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-            await window.electron.printSystemSilent(htmlReceipt, targetPrinter, { paperSize: effectivePaperSize });
-          } else {
-            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, reprintData.items, user || {}, receiptSettings);
-            printHtmlSilentlyViaIframe(htmlReceipt);
+      let orderPayload = null;
+      let orderItems = [];
+
+      try {
+        const res = await apiFetch(`/api/orders/${orderId}/reprint`, { method: 'POST' });
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data?.order) {
+            orderPayload = {
+              ...data.order,
+              is_duplicate: true,
+              reprint_count: data.order.reprint_count || 1
+            };
+            orderItems = data.items || [];
           }
         }
-      } else {
-        const err = await res.json();
-        notify.error(err.message || 'Reprint failed.', 'Reprint Error');
+      } catch (apiErr) {
+        console.warn('[Reprint API Warning]:', apiErr.message);
       }
+
+      // Fallback: fetch order directly if reprint endpoint failed
+      if (!orderPayload || orderItems.length === 0) {
+        try {
+          const detRes = await apiFetch(`/api/orders/${orderId}`);
+          if (detRes && detRes.ok) {
+            const detData = await detRes.json();
+            orderPayload = {
+              ...(detData.order || detData),
+              is_duplicate: true,
+              reprint_count: ((detData.order || detData).reprint_count || 0) + 1
+            };
+            orderItems = detData.items || [];
+          }
+        } catch (_) {}
+      }
+
+      if (!orderPayload) {
+        throw new Error('Order details could not be retrieved for reprint.');
+      }
+
+      // Resolve target thermal printer
+      let targetPrinter = receiptSettings?.default_printer_name || '';
+      if (!targetPrinter && window.electron && window.electron.getPrinters) {
+        try {
+          const sysList = await window.electron.getPrinters();
+          if (Array.isArray(sysList) && sysList.length > 0) {
+            const virtualKeywords = ['microsoft print to pdf', 'onenote', 'xps', 'fax', 'pdf', 'nul:', 'portprompt'];
+            const physicalPrinters = sysList.filter(p => {
+              const n = (p.name || '').toLowerCase();
+              const port = (p.portName || '').toLowerCase();
+              const drv = (p.driverName || '').toLowerCase();
+              return !virtualKeywords.some(v => n.includes(v) || port.includes(v) || drv.includes(v)) && !p.workOffline;
+            });
+            const bestSys = physicalPrinters.find(p => p.isHardwareConnected) ||
+                            physicalPrinters.find(p => p.isDefault) ||
+                            physicalPrinters.find(p => /tp\s*\d|pos|receipt|thermal|rp\s*\d|xp-?80/i.test(p.name)) ||
+                            physicalPrinters[0] ||
+                            sysList[0];
+            if (bestSys && bestSys.name) {
+              targetPrinter = bestSys.name;
+            }
+          }
+        } catch (_) {}
+      }
+
+      const effectivePaperSize = is2InchPaper(receiptSettings, targetPrinter) ? '58mm' : (receiptSettings?.paper_size || '80mm');
+      let printed = false;
+      let lastErr = null;
+
+      if (window.electron) {
+        if (window.electron.printThermalReceipt) {
+          try {
+            await window.electron.printThermalReceipt(targetPrinter, orderPayload, orderItems, user || {}, receiptSettings);
+            printed = true;
+          } catch (tErr) {
+            lastErr = tErr;
+          }
+        }
+        if (!printed && window.electron.printWindowsRaw) {
+          try {
+            const rawEscPos = generateLocalEscPosReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+            await window.electron.printWindowsRaw(targetPrinter, safeUtf8ToBase64(rawEscPos));
+            printed = true;
+          } catch (rErr) {
+            lastErr = rErr;
+          }
+        }
+        if (!printed && window.electron.printSystemSilent) {
+          try {
+            const htmlReceipt = generateLocalHtmlReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+            await window.electron.printSystemSilent(htmlReceipt, targetPrinter, { paperSize: effectivePaperSize });
+            printed = true;
+          } catch (sErr) {
+            lastErr = sErr;
+          }
+        }
+        if (!printed) {
+          throw lastErr || new Error('Thermal printer failed to print duplicate receipt.');
+        }
+      } else {
+        const htmlReceipt = generateLocalHtmlReceipt(orderPayload, orderItems, user || {}, receiptSettings);
+        printHtmlSilentlyViaIframe(htmlReceipt);
+        printed = true;
+      }
+
+      notify.success('Receipt reprint duplicate printed successfully.', 'Reprint Done', 2500);
     } catch (err) {
       console.error(err);
-      notify.error('Failed to reprint receipt.', 'Printer Error');
+      notify.error(err.message || 'Failed to reprint receipt.', 'Printer Error');
     }
   };
 

@@ -67,7 +67,7 @@ import {
 } from '../utils/api';
 import { db } from '../utils/offlineDb';
 import { SyncService } from '../utils/syncService';
-import { seedDefaultOfflineDataIfNeeded } from '../utils/offlineAuthService';
+import { getTenantItem, setTenantItem } from '../utils/storageNamespace';
 import {
   generateLocalHtmlReceipt,
   generateLocalEscPosReceipt,
@@ -188,6 +188,7 @@ export default function POS({
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProductIndex, setSelectedProductIndex] = useState(0);
@@ -216,6 +217,32 @@ export default function POS({
     }
   });
   const pricingMode = propPricingMode !== undefined ? propPricingMode : localPricingMode;
+  const userRole = String(user?.role || '').toLowerCase();
+  const canManageMenu = ['admin', 'manager', 'owner', 'super_admin', 'superadmin'].includes(userRole);
+
+  const handleNavigateToAddMenuItem = useCallback(() => {
+    try {
+      sessionStorage.setItem('ariso_open_add_menu_modal', 'true');
+      localStorage.setItem('ariso_open_add_menu_modal', 'true');
+    } catch (_) {}
+    if (typeof onNavigate === 'function') {
+      onNavigate('admin');
+    } else {
+      window.location.hash = '#/admin?tab=0';
+    }
+  }, [onNavigate]);
+
+  const handleNavigateToBulkImport = useCallback(() => {
+    try {
+      sessionStorage.setItem('ariso_open_bulk_import_modal', 'true');
+      localStorage.setItem('ariso_open_bulk_import_modal', 'true');
+    } catch (_) {}
+    if (typeof onNavigate === 'function') {
+      onNavigate('admin');
+    } else {
+      window.location.hash = '#/admin?tab=0';
+    }
+  }, [onNavigate]);
 
   const handleSwitchPricingMode = useCallback((newMode) => {
     if (newMode === pricingMode) return;
@@ -585,54 +612,55 @@ export default function POS({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [menuVersion, categoryVersion]);
 
-  const loadData = async () => {
+  const loadData = async (forceRetry = false) => {
+    if (forceRetry) {
+      setLoading(true);
+      setLoadError(false);
+    }
+
+    let localItems = [];
+    let localCats = [];
+
     // 1. Instant Local Offline Load from Dexie IndexedDB (< 50ms)
     try {
-      let [localCats, localItems, localReceipt, localPrinters] = await Promise.all([
+      let [dbCats, dbItems, localReceipt, localPrinters] = await Promise.all([
         db.categories.toArray().catch(() => []),
         db.menu_items.toArray().catch(() => []),
         db.settings.get('receipt_settings').catch(() => null),
         db.printers.toArray().catch(() => [])
       ]);
 
-      // Dual-layer fallback: check localStorage if IndexedDB returned empty
-      if (!localCats || localCats.length === 0) {
+      localCats = Array.isArray(dbCats) ? dbCats : [];
+      localItems = Array.isArray(dbItems) ? dbItems : [];
+
+      // Dual-layer fallback: check tenant-namespaced localStorage if IndexedDB returned empty
+      if (localCats.length === 0) {
         try {
-          const lsCats = localStorage.getItem('ariso_offline_categories');
+          const lsCats = getTenantItem('ariso_offline_categories');
           if (lsCats) localCats = JSON.parse(lsCats);
         } catch (e) {}
       }
-      if (!localItems || localItems.length === 0) {
+      if (localItems.length === 0) {
         try {
-          const lsItems = localStorage.getItem('ariso_offline_menu_items');
+          const lsItems = getTenantItem('ariso_offline_menu_items');
           if (lsItems) localItems = JSON.parse(lsItems);
         } catch (e) {}
       }
       if (!localReceipt?.value) {
         try {
-          const lsRec = localStorage.getItem('ariso_offline_receipt_settings');
+          const lsRec = getTenantItem('ariso_offline_receipt_settings');
           if (lsRec) localReceipt = { value: JSON.parse(lsRec) };
         } catch (e) {}
       }
       if (!localPrinters || localPrinters.length === 0) {
         try {
-          const lsPrn = localStorage.getItem('ariso_offline_printers');
+          const lsPrn = getTenantItem('ariso_offline_printers');
           if (lsPrn) localPrinters = JSON.parse(lsPrn);
         } catch (e) {}
       }
 
-      if ((!localCats || localCats.length === 0) && (!localItems || localItems.length === 0)) {
-        await seedDefaultOfflineDataIfNeeded();
-        [localCats, localItems, localReceipt, localPrinters] = await Promise.all([
-          db.categories.toArray().catch(() => []),
-          db.menu_items.toArray().catch(() => []),
-          db.settings.get('receipt_settings').catch(() => null),
-          db.printers.toArray().catch(() => [])
-        ]);
-      }
-
-      if (localCats && localCats.length > 0) setCategories(localCats);
-      if (localItems && localItems.length > 0) setMenuItems(localItems);
+      setCategories(Array.isArray(localCats) ? localCats : []);
+      setMenuItems(Array.isArray(localItems) ? localItems : []);
       if (localReceipt?.value) setReceiptSettings(localReceipt.value);
       if (localPrinters && localPrinters.length > 0) setPrintersList(localPrinters);
 
@@ -658,18 +686,38 @@ export default function POS({
         fetchPrinters(token)
       ]);
 
+      let menuFetchOk = false;
+
       if (cats.status === 'fulfilled' && cats.value) {
         const catList = Array.isArray(cats.value) ? cats.value : (cats.value?.categories || []);
-        if (catList.length > 0) setCategories(catList);
+        setCategories(catList);
+        try {
+          setTenantItem('ariso_offline_categories', JSON.stringify(catList));
+        } catch (_) {}
       }
 
       if (menu.status === 'fulfilled' && menu.value) {
         const itemList = Array.isArray(menu.value) ? menu.value : (menu.value?.items || []);
-        if (itemList.length > 0) setMenuItems(itemList);
+        setMenuItems(itemList);
+        menuFetchOk = true;
+        setLoadError(false);
+        try {
+          setTenantItem('ariso_offline_menu_items', JSON.stringify(itemList));
+        } catch (_) {}
       }
 
       if (receiptData.status === 'fulfilled' && receiptData.value) {
         setReceiptSettings(receiptData.value);
+        try {
+          setTenantItem('ariso_offline_receipt_settings', JSON.stringify(receiptData.value));
+        } catch (_) {}
+      }
+
+      // If menu request failed and we have no cached items, set loadError
+      if (!menuFetchOk && menu.status === 'rejected') {
+        if (!localItems || localItems.length === 0) {
+          setLoadError(true);
+        }
       }
 
       let loadedPrns = [];
@@ -679,12 +727,12 @@ export default function POS({
         loadedPrns = await db.printers.toArray().catch(() => []);
       }
 
-      // Auto-detect Windows physical printers if none configured
-      if (loadedPrns.length === 0 && window.electron && window.electron.getPrinters) {
+      // In Desktop Application (Electron), auto-detect and prioritize connected Windows physical thermal printers
+      if (window.electron && window.electron.getPrinters) {
         try {
           const sysList = await window.electron.getPrinters();
           if (Array.isArray(sysList) && sysList.length > 0) {
-            const virtualKeywords = ['microsoft print to pdf', 'onenote', 'xps', 'fax', 'pdf', 'nul:'];
+            const virtualKeywords = ['microsoft print to pdf', 'onenote', 'xps', 'fax', 'pdf', 'nul:', 'portprompt'];
 
             const physicalPrinters = sysList.filter(p => {
               const n = (p.name || '').toLowerCase();
@@ -694,21 +742,27 @@ export default function POS({
               return !isVirtual && !p.workOffline;
             });
 
-            const bestSys = physicalPrinters.find(p => p.isDefault) ||
+            // Prioritize connected hardware (isHardwareConnected) -> thermal name heuristics -> default
+            const bestSys = physicalPrinters.find(p => p.isHardwareConnected) ||
+                            physicalPrinters.find(p => p.isDefault) ||
+                            physicalPrinters.find(p => /tp\s*\d|pos|receipt|thermal|rp\s*\d|xp-?80/i.test(p.name)) ||
                             physicalPrinters[0] ||
-                            sysList.find(p => p.isDefault) ||
                             sysList[0];
 
             if (bestSys && bestSys.name) {
-              loadedPrns = [{
-                id: 'sys-default',
+              const hardwarePrn = {
+                id: 'sys-hardware-default',
                 name: bestSys.name,
                 type: 'usb',
                 role: 'both',
-                paper_width: 80,
+                paper_width: bestSys.paperWidth || 80,
                 is_default_receipt: 1,
                 is_default_kot: 1
-              }];
+              };
+
+              // Put connected physical hardware printer at top of list
+              const filtered = loadedPrns.filter(p => (p.name || '').toLowerCase() !== (bestSys.name || '').toLowerCase());
+              loadedPrns = [hardwarePrn, ...filtered];
             }
           }
         } catch (sysErr) {
@@ -2524,8 +2578,47 @@ export default function POS({
       try {
         if (window.electron) {
           const targetPrinterName = receiptSettings?.default_printer_name || defaultReceiptPrn?.name || '';
-          const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
-          await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
+          let printed = false;
+          let lastErr = null;
+
+          // 1. Native ESC/POS Thermal Buffer Dispatch to Windows Spooler (<100ms)
+          if (window.electron.printThermalReceipt) {
+            try {
+              await window.electron.printThermalReceipt(targetPrinterName, orderData, cartItems, user || {}, receiptSettings);
+              printed = true;
+            } catch (pErr) {
+              lastErr = pErr;
+              console.warn('[POS Thermal Print Failed, trying Raw ESC/POS fallback]:', pErr.message);
+            }
+          }
+
+          // 2. Direct Raw ESC/POS Spooler Fallback
+          if (!printed && window.electron.printWindowsRaw) {
+            try {
+              const rawEscPos = generateLocalEscPosReceipt(orderData, cartItems, user || {}, receiptSettings);
+              await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
+              printed = true;
+            } catch (rawErr) {
+              lastErr = rawErr;
+              console.warn('[POS Raw Print Failed, trying Silent HTML fallback]:', rawErr.message);
+            }
+          }
+
+          // 3. Silent Chromium HTML Print Fallback
+          if (!printed && window.electron.printSystemSilent) {
+            try {
+              const htmlReceipt = generateLocalHtmlReceipt(orderData, cartItems, user || {}, receiptSettings);
+              await window.electron.printSystemSilent(htmlReceipt, targetPrinterName, { paperSize: effectivePaperSize });
+              printed = true;
+            } catch (sysErr) {
+              lastErr = sysErr;
+              console.warn('[POS Silent HTML Print Failed]:', sysErr.message);
+            }
+          }
+
+          if (!printed) {
+            throw lastErr || new Error('Thermal receipt printing failed on Windows.');
+          }
         } else {
           // Web Application Flow (Browser + LAN Thermal Printer connected to same Wi-Fi/network)
           const targetPrn = (defaultReceiptPrn?.ip_address ? defaultReceiptPrn : null) ||
@@ -2604,8 +2697,44 @@ export default function POS({
       try {
         if (window.electron) {
           const targetPrinterName = defaultKotPrn?.name || receiptSettings?.default_printer_name || '';
-          const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
-          await window.electron.printSystemSilent(htmlKot, targetPrinterName, { paperSize: effectivePaperSize });
+          let kotPrinted = false;
+          let lastKotErr = null;
+
+          if (window.electron.printThermalKot) {
+            try {
+              await window.electron.printThermalKot(targetPrinterName, orderData, cartItems, receiptSettings);
+              kotPrinted = true;
+            } catch (kErr) {
+              lastKotErr = kErr;
+              console.warn('[POS Thermal KOT Failed, trying Raw fallback]:', kErr.message);
+            }
+          }
+
+          if (!kotPrinted && window.electron.printWindowsRaw) {
+            try {
+              const rawEscPos = generateLocalEscPosKot(orderData, cartItems, receiptSettings);
+              await window.electron.printWindowsRaw(targetPrinterName, safeUtf8ToBase64(rawEscPos));
+              kotPrinted = true;
+            } catch (rawErr) {
+              lastKotErr = rawErr;
+              console.warn('[POS Raw KOT Failed, trying Silent HTML fallback]:', rawErr.message);
+            }
+          }
+
+          if (!kotPrinted && window.electron.printSystemSilent) {
+            try {
+              const htmlKot = generateLocalHtmlKot(orderData, cartItems, receiptSettings);
+              await window.electron.printSystemSilent(htmlKot, targetPrinterName, { paperSize: effectivePaperSize });
+              kotPrinted = true;
+            } catch (sysErr) {
+              lastKotErr = sysErr;
+              console.warn('[POS Silent HTML KOT Failed]:', sysErr.message);
+            }
+          }
+
+          if (!kotPrinted) {
+            throw lastKotErr || new Error('Thermal KOT printing failed on Windows.');
+          }
         } else {
           // Web Application Flow for KOT (Browser + LAN Kitchen Thermal Printer)
           const isLan = (defaultKotPrn?.type === 'lan' || defaultKotPrn?.type === 'network' || !!defaultKotPrn?.ip_address) && !!defaultKotPrn?.ip_address;
@@ -3306,7 +3435,7 @@ export default function POS({
             </button>
           </div>
 
-          {/* TOP CATEGORY PILLS RAIL (Visible when categoryLayout === 'horizontal' OR on Mobile) */}
+            {/* TOP CATEGORY PILLS RAIL (Visible when categoryLayout === 'horizontal' OR on Mobile) */}
           <div
             style={styles.categoryRail}
             className="pos-category-rail"
@@ -3327,7 +3456,7 @@ export default function POS({
             >
               {t('allProducts')} ({menuItems.length})
             </button>
-            {categories.map((cat) => {
+            {categories.length > 0 && menuItems.length > 0 && categories.map((cat) => {
               const count = menuItems.filter(i => i.category_id === cat.id).length;
               return (
                 <button
@@ -3368,7 +3497,7 @@ export default function POS({
                   </div>
                 </button>
 
-                {categories.map((cat) => {
+                {categories.length > 0 && menuItems.length > 0 && categories.map((cat) => {
                   const isSelected = selectedCategory?.id === cat.id;
                   const catItemCount = menuItems.filter(i => i.category_id === cat.id).length;
                   return (
@@ -3400,6 +3529,100 @@ export default function POS({
               <div style={styles.loadingBox}>
                 <RotateCw size={26} className="spin" style={{ color: colors.accentOrange, marginBottom: 8 }} />
                 <p>Loading retail items...</p>
+              </div>
+            ) : loadError ? (
+              <div style={styles.emptyProductsBox}>
+                <AlertTriangle size={36} strokeWidth={1.5} style={{ color: '#EF4444', marginBottom: 12 }} />
+                <p style={{ fontWeight: '700', fontSize: '16px', color: colors.textPrimary, marginBottom: 6 }}>
+                  Couldn't load items. Retry
+                </p>
+                <p style={{ fontSize: '13px', color: colors.textSecondary, marginBottom: 16 }}>
+                  Failed to fetch latest catalog from server.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => loadData(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '9px 18px',
+                    borderRadius: '8px',
+                    backgroundColor: colors.accentOrange,
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: '700',
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <RotateCw size={14} /> Retry
+                </button>
+              </div>
+            ) : menuItems.length === 0 ? (
+              <div style={styles.emptyProductsBox}>
+                <div style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: '50%',
+                  backgroundColor: isDark ? 'rgba(249, 115, 22, 0.15)' : '#FFF7ED',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 16
+                }}>
+                  <PackagePlus size={28} style={{ color: colors.accentOrange }} />
+                </div>
+                <p style={{ fontWeight: '700', fontSize: '16px', color: colors.textPrimary, marginBottom: 6, textAlign: 'center', maxWidth: 420 }}>
+                  No items in your menu yet. Please add items to start billing.
+                </p>
+                {canManageMenu ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={handleNavigateToAddMenuItem}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '10px 20px',
+                        borderRadius: '8px',
+                        backgroundColor: colors.accentOrange,
+                        color: '#FFFFFF',
+                        border: 'none',
+                        fontWeight: '700',
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        boxShadow: '0 2px 6px rgba(249, 115, 22, 0.35)'
+                      }}
+                    >
+                      <PlusCircle size={16} /> Add Menu Item
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNavigateToBulkImport}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '10px 18px',
+                        borderRadius: '8px',
+                        backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                        color: colors.textPrimary,
+                        border: `1px solid ${colors.borderColor}`,
+                        fontWeight: '700',
+                        fontSize: '13px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Layers size={16} /> Bulk import menu
+                    </button>
+                  </div>
+                ) : (
+                  <p style={{ fontSize: '13px', color: colors.textSecondary, marginTop: 4, textAlign: 'center' }}>
+                    No items available. Ask your admin to add menu items.
+                  </p>
+                )}
               </div>
             ) : filteredProducts.length === 0 ? (
               <div style={styles.emptyProductsBox}>

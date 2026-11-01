@@ -15,68 +15,12 @@ export async function hashPassword(password) {
 }
 
 /**
- * Seed default offline store profile, categories, items, and receipt settings if database is empty.
+ * Production never seeds demo, sample, or mock items/categories.
+ * Accounts start completely empty and show their own genuine data.
  */
 export async function seedDefaultOfflineDataIfNeeded() {
-  try {
-    const catCount = await db.categories.count().catch(() => 0);
-    if (catCount === 0) {
-      const defaultCategories = [
-        { id: 1, name: 'General', sequence: 1 },
-        { id: 2, name: 'Groceries', sequence: 2 },
-        { id: 3, name: 'Snacks & Beverages', sequence: 3 },
-        { id: 4, name: 'Dairy & Bakery', sequence: 4 },
-        { id: 5, name: 'Household', sequence: 5 }
-      ];
-      await db.categories.bulkPut(defaultCategories);
-    }
-
-    const menuCount = await db.menu_items.count().catch(() => 0);
-    if (menuCount === 0) {
-      const sampleItems = [
-        { id: 1, name: 'Sample Item 1', price: 100, selling_price: 100, cost_price: 80, sku: 'SKU-001', barcode: '8901001', category_id: 1, category_name: 'General', current_stock: 50 },
-        { id: 2, name: 'Sample Item 2', price: 250, selling_price: 250, cost_price: 200, sku: 'SKU-002', barcode: '8901002', category_id: 2, category_name: 'Groceries', current_stock: 30 },
-        { id: 3, name: 'Cold Drink 500ml', price: 40, selling_price: 40, cost_price: 32, sku: 'SKU-003', barcode: '8901003', category_id: 3, category_name: 'Snacks & Beverages', current_stock: 100 },
-        { id: 4, name: 'Bread Loaf', price: 45, selling_price: 45, cost_price: 35, sku: 'SKU-004', barcode: '8901004', category_id: 4, category_name: 'Dairy & Bakery', current_stock: 25 },
-        { id: 5, name: 'Mineral Water 1L', price: 20, selling_price: 20, cost_price: 14, sku: 'SKU-005', barcode: '8901005', category_id: 3, category_name: 'Snacks & Beverages', current_stock: 60 }
-      ];
-      await db.menu_items.bulkPut(sampleItems);
-    }
-
-    const receiptSetting = await db.settings.get('receipt_settings').catch(() => null);
-    if (!receiptSetting) {
-      await db.settings.put({
-        key: 'receipt_settings',
-        value: {
-          store_name: 'Ariso Retail Store',
-          restaurant_name: 'Ariso Retail Store',
-          address: 'Main Market, Local Terminal',
-          phone: '+91 9876543210',
-          gstin: '',
-          cart_position: 'right',
-          paper_width: 80,
-          header_message: 'Welcome to Ariso Retail',
-          thank_you_message: 'Thank you for shopping with us!',
-          footer_message: 'Please visit again',
-          terms_conditions: 'Items once sold can be exchanged within 7 days with original invoice.'
-        }
-      });
-    }
-
-    const profileSetting = await db.settings.get('restaurant_profile').catch(() => null);
-    if (!profileSetting) {
-      await db.settings.put({
-        key: 'restaurant_profile',
-        value: {
-          name: 'Ariso Retail Store',
-          currency_symbol: '₹',
-          tax_rate: 0
-        }
-      });
-    }
-  } catch (err) {
-    console.warn('[OfflineDB] Error seeding default offline data:', err);
-  }
+  // No-op in production: strictly forbidden to seed sample data into tenant databases
+  return;
 }
 
 /**
@@ -99,7 +43,7 @@ export async function cacheUserCredentials(user, password, accessToken = '', ref
       refresh_token: refreshToken || '',
       role: user.role || 'admin',
       name: user.name || cleanUsername,
-      restaurant_id: user.restaurant_id || 1,
+      restaurant_id: user.restaurant_id !== undefined && user.restaurant_id !== null ? Number(user.restaurant_id) : null,
       restaurant_name: user.restaurant_name || 'Ariso Retail POS',
       raw_user_payload: JSON.stringify(user),
       updated_at: new Date().toISOString()

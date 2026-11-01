@@ -4,6 +4,7 @@
  */
 import { db } from './offlineDb.js';
 import { SyncService } from './syncService.js';
+import { setTenantItem, getTenantItem } from './storageNamespace.js';
 
 export function normalizeApiUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
@@ -460,15 +461,15 @@ export async function downloadFile(endpoint, defaultFilename = 'export.xlsx', op
 }
 
 export async function fetchMobileMenu(token) {
-  // Fast offline return
+  // Fast offline return (tenant-isolated)
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     try {
       const cached = await db.menu_items.toArray();
-      if (cached && cached.length > 0) return cached;
+      if (cached && Array.isArray(cached)) return cached;
     } catch (e) {
       console.warn('[Dexie Menu Read Error]', e);
     }
-    const local = localStorage.getItem('ariso_offline_menu_items');
+    const local = getTenantItem('menu_items');
     return local ? JSON.parse(local) : [];
   }
 
@@ -476,15 +477,20 @@ export async function fetchMobileMenu(token) {
     const res = await apiFetch('/api/menu', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const menuList = await res.json();
-      if (Array.isArray(menuList) && menuList.length > 0) {
-        db.menu_items.clear().then(() => {
-          db.menu_items.bulkPut(menuList);
-        }).catch(err => console.warn('[IndexedDB] Failed to cache menu:', err.message));
-        try {
-          localStorage.setItem('ariso_offline_menu_items', JSON.stringify(menuList));
-        } catch (e) {}
+      const safeList = Array.isArray(menuList) ? menuList : (menuList?.items || []);
+      // STRICT TENANT ISOLATION: Always overwrite tenant DB and storage with fresh response
+      try {
+        await db.menu_items.clear();
+        if (safeList.length > 0) {
+          await db.menu_items.bulkPut(safeList);
+        }
+      } catch (err) {
+        console.warn('[IndexedDB] Failed to cache menu:', err.message);
       }
-      return menuList;
+      try {
+        setTenantItem('menu_items', safeList);
+      } catch (e) {}
+      return safeList;
     }
   } catch (err) {
     console.warn('[API Fetch Menu Fallback] Offline, reading local DB/Storage:', err.message);
@@ -492,22 +498,22 @@ export async function fetchMobileMenu(token) {
 
   try {
     const items = await db.menu_items.toArray();
-    if (items && items.length > 0) return items;
+    if (items && Array.isArray(items)) return items;
   } catch (e) {}
-  const local = localStorage.getItem('ariso_offline_menu_items');
+  const local = getTenantItem('menu_items');
   return local ? JSON.parse(local) : [];
 }
 
 export async function fetchMobileCategories(token) {
-  // Fast offline return
+  // Fast offline return (tenant-isolated)
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     try {
       const cached = await db.categories.toArray();
-      if (cached && cached.length > 0) return cached;
+      if (cached && Array.isArray(cached)) return cached;
     } catch (e) {
       console.warn('[Dexie Categories Read Error]', e);
     }
-    const local = localStorage.getItem('ariso_offline_categories');
+    const local = getTenantItem('categories');
     return local ? JSON.parse(local) : [];
   }
 
@@ -515,15 +521,20 @@ export async function fetchMobileCategories(token) {
     const res = await apiFetch('/api/categories', token ? { headers: { Authorization: `Bearer ${token}` } } : {});
     if (res.ok) {
       const categories = await res.json();
-      if (Array.isArray(categories) && categories.length > 0) {
-        db.categories.clear().then(() => {
-          db.categories.bulkPut(categories);
-        }).catch(err => console.warn('[IndexedDB] Failed to cache categories:', err.message));
-        try {
-          localStorage.setItem('ariso_offline_categories', JSON.stringify(categories));
-        } catch (e) {}
+      const safeCats = Array.isArray(categories) ? categories : (categories?.categories || []);
+      // STRICT TENANT ISOLATION: Always overwrite tenant DB and storage with fresh response
+      try {
+        await db.categories.clear();
+        if (safeCats.length > 0) {
+          await db.categories.bulkPut(safeCats);
+        }
+      } catch (err) {
+        console.warn('[IndexedDB] Failed to cache categories:', err.message);
       }
-      return categories;
+      try {
+        setTenantItem('categories', safeCats);
+      } catch (e) {}
+      return safeCats;
     }
   } catch (err) {
     console.warn('[API Fetch Categories Fallback] Offline, reading local DB/Storage:', err.message);
@@ -531,9 +542,9 @@ export async function fetchMobileCategories(token) {
 
   try {
     const cats = await db.categories.toArray();
-    if (cats && cats.length > 0) return cats;
+    if (cats && Array.isArray(cats)) return cats;
   } catch (e) {}
-  const local = localStorage.getItem('ariso_offline_categories');
+  const local = getTenantItem('categories');
   return local ? JSON.parse(local) : [];
 }
 

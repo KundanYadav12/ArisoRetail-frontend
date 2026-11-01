@@ -43,6 +43,7 @@ import { applyThemeToCssVariables } from './utils/themePresets';
 
 import { LanguageProvider } from './locales/LanguageContext';
 import { SyncService } from './utils/syncService';
+import { runCacheIsolationMigration } from './utils/storageNamespace';
 import retailLogo from './assets/retail-logo.png';
 
 const VALID_VIEWS = [
@@ -205,6 +206,14 @@ export default function App() {
       window.removeEventListener('popstate', handleUrlChange);
       window.removeEventListener('hashchange', handleUrlChange);
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      runCacheIsolationMigration();
+    } catch (migErr) {
+      console.warn('[Cache Isolation Migration Error]:', migErr);
+    }
   }, []);
 
   const [themeMode, setThemeMode] = useState('light');
@@ -925,8 +934,8 @@ export default function App() {
     </Dialog>
   );
 
-  // 0. Public Customer Storefront (Subdomain or ?store= query param)
-  if (storeSubdomain && !isStaffLoginMode) {
+  // 0. Public Customer Storefront (Subdomain or ?store= query param for unauthenticated users)
+  if (storeSubdomain && !isStaffLoginMode && (!token || !user)) {
     return (
       <NotificationProvider>
         <ThemeProvider theme={muiTheme}>
