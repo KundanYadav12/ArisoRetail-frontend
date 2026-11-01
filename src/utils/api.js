@@ -5,21 +5,60 @@
 import { db } from './offlineDb.js';
 import { SyncService } from './syncService.js';
 
+export function normalizeApiUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let url = rawUrl.trim();
+  if (!url) return '';
+
+  // If no protocol is provided, determine protocol
+  if (!/^https?:\/\//i.test(url)) {
+    const isLocalOrIp = /^localhost(:|\/|$)/i.test(url) || /^127\.0\.0\.1(:|\/|$)/.test(url) || /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:|\/|$)/.test(url);
+    url = (isLocalOrIp ? 'http://' : 'https://') + url;
+  } else {
+    // If protocol was explicitly http://, check if it's a domain that enforces HTTPS
+    try {
+      const parsed = new URL(url);
+      const isLocalOrIp = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parsed.hostname);
+      if (!isLocalOrIp && parsed.protocol === 'http:') {
+        parsed.protocol = 'https:';
+        url = parsed.toString();
+      }
+    } catch (_) {
+      if (!url.includes('localhost') && !url.includes('127.0.0.1') && !/http:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(url)) {
+        url = url.replace(/^http:\/\//i, 'https://');
+      }
+    }
+  }
+
+  // Remove trailing slashes
+  url = url.replace(/\/+$/, '');
+
+  // Ensure ends with /api
+  if (!url.endsWith('/api')) {
+    url = url + '/api';
+  }
+
+  return url;
+}
+
 export function getBaseUrl() {
   if (typeof window !== 'undefined') {
     const isDesktopApp = !!window.electron || !!window.electronAPI || window.location.protocol === 'file:';
     const isLocal = isDesktopApp || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (isLocal) {
-      const custom = localStorage.getItem('ARISO_API_SERVER_URL');
-      if (custom && custom.trim()) {
-        return custom.trim().replace(/\/+$/, '');
-      }
-      return 'http://localhost:5005/api';
-    }
-
+    
     const custom = localStorage.getItem('ARISO_API_SERVER_URL');
     if (custom && custom.trim()) {
-      return custom.trim().replace(/\/+$/, '');
+      const normalized = normalizeApiUrl(custom.trim());
+      if (normalized !== custom) {
+        try {
+          localStorage.setItem('ARISO_API_SERVER_URL', normalized);
+        } catch (_) {}
+      }
+      return normalized;
+    }
+
+    if (isLocal) {
+      return 'http://localhost:5005/api';
     }
 
     // Dynamic origin detection for web production (e.g., https://retail.arisotechnologies.com)
@@ -31,7 +70,7 @@ export function getBaseUrl() {
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
     const envUrl = String(import.meta.env.VITE_API_URL).trim();
     if (envUrl.startsWith('http://') || envUrl.startsWith('https://')) {
-      return envUrl.replace(/\/+$/, '');
+      return normalizeApiUrl(envUrl);
     }
   }
   
@@ -39,17 +78,18 @@ export function getBaseUrl() {
 }
 
 export function setCustomBaseUrl(url) {
-  if (!url) {
+  if (!url || !url.trim()) {
     localStorage.removeItem('ARISO_API_SERVER_URL');
   } else {
-    localStorage.setItem('ARISO_API_SERVER_URL', url.trim().replace(/\/+$/, ''));
+    const normalized = normalizeApiUrl(url);
+    localStorage.setItem('ARISO_API_SERVER_URL', normalized);
   }
 }
 
 export const API_BASE_URL = getBaseUrl();
 
 export function getApiUrl(endpoint, customBase = null) {
-  const base = customBase ? customBase.replace(/\/+$/, '') : getBaseUrl();
+  const base = customBase ? normalizeApiUrl(customBase) : getBaseUrl();
   if (!endpoint) return base;
   if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
     return endpoint;
@@ -108,9 +148,15 @@ const processQueue = (error, token = null) => {
  * runs strictly ONCE across all concurrent or in-flight requests.
  */
 let isForceLoggingOut = false;
+let lastLoginTimestamp = 0;
 
 export function resetForceLogoutFlag() {
   isForceLoggingOut = false;
+}
+
+export function markLoginSuccess() {
+  lastLoginTimestamp = Date.now();
+  resetForceLogoutFlag();
 }
 
 export function isForcedLoggingOut() {
@@ -121,6 +167,21 @@ export function isForcedLoggingOut() {
  * Clear local credentials and notify app of session termination
  */
 export function handleSessionExpired(reason = null) {
+  // If user successfully authenticated within the last 5 seconds, ignore stale 401s from pending requests
+  if (Date.now() - lastLoginTimestamp < 5000) {
+    console.warn('[API Auth] Ignored session expired trigger within grace period of recent login');
+    return;
+  }
+
+  // Check if current token is an offline mode token
+  try {
+    const currentToken = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
+    if (currentToken && String(currentToken).startsWith('OFFLINE_TOKEN_')) {
+      console.warn('[API Auth] Ignored session expired trigger for local offline token');
+      return;
+    }
+  } catch (_) {}
+
   // If forced logout is already initiated, ignore any subsequent or concurrent triggers
   if (isForceLoggingOut) {
     return;
@@ -152,6 +213,7 @@ export async function apiFetch(url, options = {}) {
   const fullUrl = getApiUrl(url);
   const token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token');
   const refreshToken = localStorage.getItem('ARISO_RETAIL_REFRESH_TOKEN') || localStorage.getItem('pos_refresh_token');
+  const isOfflineToken = token && String(token).startsWith('OFFLINE_TOKEN_');
 
   const headers = {
     ...(options.headers || {})
@@ -185,6 +247,7 @@ export async function apiFetch(url, options = {}) {
   }
 
   let response;
+  let isFallbackResponse = false;
   try {
     response = await fetch(fullUrl, fetchOptions);
     if (timeoutId) clearTimeout(timeoutId);
@@ -199,6 +262,7 @@ export async function apiFetch(url, options = {}) {
         const localTimeout = localController ? setTimeout(() => localController.abort(), 2000) : null;
         response = await fetch(localFallbackUrl, { ...fetchOptions, signal: localController?.signal });
         if (localTimeout) clearTimeout(localTimeout);
+        isFallbackResponse = true;
       } catch (localErr) {
         throw netErr;
       }
@@ -223,6 +287,24 @@ export async function apiFetch(url, options = {}) {
 
   // Handle 401 Unauthorized (Expired or Invalid Access Token)
   if (response.status === 401 && !isAuthEndpoint) {
+    // 1. If this 401 came from a local fallback server, do NOT expire the remote cloud session
+    if (isFallbackResponse) {
+      console.warn('[API Network Failover] Fallback gateway returned 401 - preserving primary session');
+      return response;
+    }
+
+    // 2. If token is an offline mode session token, do NOT expire session
+    if (isOfflineToken) {
+      console.warn('[API Auth] Received 401 for local offline mode token - keeping local session active');
+      return response;
+    }
+
+    // 3. If user logged in within the last 5 seconds, ignore stale 401s
+    if (Date.now() - lastLoginTimestamp < 5000) {
+      console.warn('[API Auth] Ignored 401 within grace period of recent login');
+      return response;
+    }
+
     if (isForceLoggingOut) {
       return response; // Already forced logging out - ignore any concurrent 401 responses
     }
@@ -311,8 +393,8 @@ export async function apiFetch(url, options = {}) {
         processQueue(new Error('Silent token refresh failed'), null);
         isRefreshing = false;
 
-        // Explicitly terminate session if refresh token is expired or unauthorized on server
-        if (!isForceLoggingOut) {
+        // Explicitly terminate session if refresh token is rejected by the server
+        if (!isForceLoggingOut && (refreshRes.status === 401 || refreshRes.status === 403)) {
           if (rData && rData.code === 'LOGGED_IN_ELSEWHERE') {
             handleSessionExpired('LOGGED_IN_ELSEWHERE');
           } else if (rData && rData.code === 'USER_INACTIVE') {

@@ -25,6 +25,7 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import { apiFetch, resolveImageUrl } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
+import { getMerchantStoreUrl } from '../../utils/storeUrls';
 
 export default function ShareStoreQrTab({ token, restaurantId, storeSettings }) {
   const { notify } = useNotify();
@@ -32,7 +33,7 @@ export default function ShareStoreQrTab({ token, restaurantId, storeSettings }) 
   const qrRef = useRef(null);
 
   const subdomain = storeSettings?.subdomain;
-  const storeUrl = subdomain ? `https://${subdomain}.arisopos.in` : '';
+  const storeUrl = getMerchantStoreUrl(subdomain, storeSettings?.domain);
   const storeName = storeSettings?.name || 'Retail Store';
   const themeColor = storeSettings?.store_theme_color || '#ea580c';
 

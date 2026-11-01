@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Eye, EyeOff, Server, Globe, Laptop, Settings, Check, KeyRound } from 'lucide-react';
 import OTPVerification from './OTPVerification';
 import LicenseRegisterModal from '../components/LicenseRegisterModal';
-import { getApiUrl, getBaseUrl, setCustomBaseUrl } from '../utils/api';
+import { getApiUrl, getBaseUrl, setCustomBaseUrl, normalizeApiUrl, markLoginSuccess, resetForceLogoutFlag } from '../utils/api';
 import { cacheUserCredentials, verifyOfflineLogin } from '../utils/offlineAuthService';
 import { SyncService } from '../utils/syncService';
 import arisoLogo from '../assets/retail-logo.png';
@@ -25,16 +25,20 @@ export default function Login({ onLoginSuccess }) {
 
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('ariso_remember_me') !== 'false');
 
-  // Auto-focus email input on mount and load remembered email
+  // Auto-focus email input on mount, normalize saved server, and load remembered email
   useEffect(() => {
-    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    if (isLocal) {
-      const savedServer = localStorage.getItem('ARISO_API_SERVER_URL');
-      if (savedServer && !savedServer.includes('localhost') && !savedServer.includes('127.0.0.1')) {
-        localStorage.removeItem('ARISO_API_SERVER_URL');
-        setCurrentServerUrl('http://localhost:5005/api');
-        setCustomServerInput('');
+    const savedServer = localStorage.getItem('ARISO_API_SERVER_URL');
+    if (savedServer && savedServer.trim()) {
+      const normalized = normalizeApiUrl(savedServer.trim());
+      if (normalized !== savedServer) {
+        try {
+          localStorage.setItem('ARISO_API_SERVER_URL', normalized);
+        } catch (_) {}
       }
+      setCurrentServerUrl(normalized);
+      setCustomServerInput(normalized);
+    } else {
+      setCurrentServerUrl(getBaseUrl());
     }
 
     const savedIdentifier = localStorage.getItem('ariso_remembered_identifier');
@@ -51,8 +55,10 @@ export default function Login({ onLoginSuccess }) {
   const [ownerEmail, setOwnerEmail] = useState('');
 
   const handleSelectServer = (url) => {
-    setCustomBaseUrl(url);
+    const normalized = normalizeApiUrl(url);
+    setCustomBaseUrl(normalized);
     setCurrentServerUrl(getBaseUrl());
+    setCustomServerInput(normalized);
     setServerModalOpen(false);
     setError('');
   };
@@ -60,13 +66,7 @@ export default function Login({ onLoginSuccess }) {
   const handleSaveCustomServer = (e) => {
     e.preventDefault();
     if (!customServerInput.trim()) return;
-    let url = customServerInput.trim();
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'http://' + url;
-    }
-    if (!url.endsWith('/api')) {
-      url = url.replace(/\/+$/, '') + '/api';
-    }
+    const url = normalizeApiUrl(customServerInput.trim());
     handleSelectServer(url);
   };
 
@@ -91,6 +91,7 @@ export default function Login({ onLoginSuccess }) {
           localStorage.removeItem('ariso_remembered_identifier');
         }
 
+        markLoginSuccess();
         onLoginSuccess(offlineSession.user, offlineSession.accessToken);
         return true;
       }
@@ -150,6 +151,7 @@ export default function Login({ onLoginSuccess }) {
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
+    resetForceLogoutFlag();
     const cleanIdentifier = (email || 'admin').trim().toLowerCase();
     if (!cleanIdentifier || !password) {
       setError('Please fill in your registered email or username and password.');
@@ -238,6 +240,7 @@ export default function Login({ onLoginSuccess }) {
         // Preload offline data
         SyncService.syncDownward(data.accessToken).catch(() => {});
 
+        markLoginSuccess();
         onLoginSuccess(data.user, data.accessToken);
         return;
       }
@@ -278,7 +281,9 @@ export default function Login({ onLoginSuccess }) {
     );
   }
 
-  const isCloud = currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org') || currentServerUrl.includes('https://');
+  const isArisoPos = currentServerUrl.includes('arisopos.in');
+  const isArisoTech = currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org');
+  const isCloud = isArisoPos || isArisoTech || currentServerUrl.startsWith('https://');
   const isLocal = currentServerUrl.includes('localhost') || currentServerUrl.includes('127.0.0.1');
 
   return (
@@ -555,7 +560,7 @@ export default function Login({ onLoginSuccess }) {
             title="Click to change POS Server Connection"
           >
             <Server size={12} color="#0284c7" />
-            <span>Server: {isCloud ? 'Cloud' : isLocal ? 'Localhost' : 'Custom'}</span>
+            <span>Server: {isArisoPos ? 'arisopos.in' : isArisoTech ? 'Cloud' : isLocal ? 'Localhost' : 'Custom'}</span>
             <Settings size={11} color="#64748b" />
           </button>
 
@@ -600,7 +605,7 @@ export default function Login({ onLoginSuccess }) {
             backgroundColor: '#ffffff',
             borderRadius: '14px',
             width: '100%',
-            maxWidth: '400px',
+            maxWidth: '420px',
             padding: '24px',
             boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
             border: '1px solid #e2e8f0'
@@ -617,7 +622,33 @@ export default function Login({ onLoginSuccess }) {
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-              {/* Cloud Option */}
+              {/* Ariso POS Cloud (arisopos.in) Option */}
+              <button
+                type="button"
+                onClick={() => handleSelectServer('https://arisopos.in/api')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: isArisoPos ? '2px solid #0284c7' : '1px solid #cbd5e1',
+                  backgroundColor: isArisoPos ? '#f0f9ff' : '#ffffff',
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Globe size={18} color="#0284c7" />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>Ariso POS Cloud (arisopos.in)</div>
+                    <div style={{ fontSize: '11px', color: '#64748b' }}>https://arisopos.in/api</div>
+                  </div>
+                </div>
+                {isArisoPos && <Check size={16} color="#0284c7" />}
+              </button>
+
+              {/* Ariso Tech Cloud Option */}
               <button
                 type="button"
                 onClick={() => handleSelectServer('https://retail.arisotechnologies.com/api')}
@@ -627,8 +658,8 @@ export default function Login({ onLoginSuccess }) {
                   justifyContent: 'space-between',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: (currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) ? '2px solid #0284c7' : '1px solid #cbd5e1',
-                  backgroundColor: (currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) ? '#f0f9ff' : '#ffffff',
+                  border: (isArisoTech && !isArisoPos) ? '2px solid #0284c7' : '1px solid #cbd5e1',
+                  backgroundColor: (isArisoTech && !isArisoPos) ? '#f0f9ff' : '#ffffff',
                   cursor: 'pointer',
                   textAlign: 'left'
                 }}
@@ -636,11 +667,11 @@ export default function Login({ onLoginSuccess }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <Globe size={18} color="#0284c7" />
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>Cloud Server (Production)</div>
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: '#0f172a' }}>Ariso Tech Cloud (Production)</div>
                     <div style={{ fontSize: '11px', color: '#64748b' }}>https://retail.arisotechnologies.com/api</div>
                   </div>
                 </div>
-                {(currentServerUrl.includes('arisotechnologies.com') || currentServerUrl.includes('duckdns.org')) && <Check size={16} color="#0284c7" />}
+                {(isArisoTech && !isArisoPos) && <Check size={16} color="#0284c7" />}
               </button>
 
               {/* Localhost Option */}
@@ -653,8 +684,8 @@ export default function Login({ onLoginSuccess }) {
                   justifyContent: 'space-between',
                   padding: '10px 14px',
                   borderRadius: '8px',
-                  border: currentServerUrl.includes('localhost') ? '2px solid #16a34a' : '1px solid #cbd5e1',
-                  backgroundColor: currentServerUrl.includes('localhost') ? '#f0fdf4' : '#ffffff',
+                  border: isLocal ? '2px solid #16a34a' : '1px solid #cbd5e1',
+                  backgroundColor: isLocal ? '#f0fdf4' : '#ffffff',
                   cursor: 'pointer',
                   textAlign: 'left'
                 }}
@@ -666,7 +697,7 @@ export default function Login({ onLoginSuccess }) {
                     <div style={{ fontSize: '11px', color: '#64748b' }}>http://localhost:5005/api</div>
                   </div>
                 </div>
-                {currentServerUrl.includes('localhost') && <Check size={16} color="#16a34a" />}
+                {isLocal && <Check size={16} color="#16a34a" />}
               </button>
             </div>
 

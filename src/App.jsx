@@ -59,10 +59,25 @@ const VALID_VIEWS = [
   'superadmin'
 ];
 
+const RESERVED_PLATFORM_SUBDOMAINS = new Set([
+  'www', 'api', 'admin', 'superadmin', 'app', 'pos', 'retail', 'mail', 'smtp',
+  'console', 'dashboard', 'staff', 'billing', 'inventory'
+]);
+
+const RESERVED_PLATFORM_ROOTS = [
+  'arisopos.in',
+  'arisotechnologies.com',
+  'duckdns.org',
+  'ngrok-free.app',
+  'ngrok.io',
+  'loca.lt',
+  'trycloudflare.com'
+];
+
 const detectStoreSubdomain = () => {
   if (typeof window === 'undefined') return null;
 
-  // 1. Explicit query parameter (for local testing e.g. http://localhost:5173/?store=rampal)
+  // 1. Explicit query parameter (for local testing e.g. http://localhost:5173/?store=rampal or https://arisoretail.duckdns.org/?store=rampal)
   const sp = new URLSearchParams(window.location.search);
   const qpStore = sp.get('store') || sp.get('subdomain');
   if (qpStore && qpStore.trim()) {
@@ -79,29 +94,50 @@ const detectStoreSubdomain = () => {
 
   // 3. Subdomain extraction from hostname (e.g. rampal.arisopos.in or rampal.localhost)
   const hostname = window.location.hostname.toLowerCase();
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname === 'localhost') {
+  if (!hostname || /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname === 'localhost') {
     return null;
   }
 
-  const parts = hostname.split('.');
-  if (hostname.endsWith('.arisopos.in')) {
-    if (parts.length >= 3) {
-      const sub = parts[0];
-      const reserved = ['www', 'api', 'admin', 'superadmin', 'app', 'pos', 'mail', 'smtp'];
-      if (!reserved.includes(sub)) {
-        return sub;
-      }
+  // 4. Check for merchant subdomain on arisoretail.duckdns.org (e.g. rampal.arisoretail.duckdns.org)
+  if (hostname.endsWith('.arisoretail.duckdns.org')) {
+    const sub = hostname.slice(0, -'.arisoretail.duckdns.org'.length).split('.')[0];
+    if (sub && !RESERVED_PLATFORM_SUBDOMAINS.has(sub)) {
+      return sub;
     }
-  } else if (hostname.endsWith('.localhost')) {
-    if (parts.length >= 2 && parts[0] !== 'localhost' && parts[0] !== 'www') {
+    return null;
+  }
+
+  // 5. Check for merchant subdomain on arisopos.in (e.g. rampal.arisopos.in)
+  if (hostname.endsWith('.arisopos.in')) {
+    const sub = hostname.slice(0, -'.arisopos.in'.length).split('.')[0];
+    if (sub && !RESERVED_PLATFORM_SUBDOMAINS.has(sub)) {
+      return sub;
+    }
+    return null;
+  }
+
+  // 6. Check for local dev subdomains (e.g. rampal.localhost)
+  if (hostname.endsWith('.localhost')) {
+    const parts = hostname.split('.');
+    if (parts.length >= 2 && parts[0] !== 'localhost' && !RESERVED_PLATFORM_SUBDOMAINS.has(parts[0])) {
       return parts[0];
     }
-  } else {
-    // 4. Custom merchant domain support (e.g. parkashstore.com, www.parkashstore.com, nimal.in, sham.store)
-    const platformRoots = ['arisopos.in', 'arisotechnologies.com'];
-    if (!platformRoots.includes(hostname) && hostname.includes('.')) {
-      return hostname;
-    }
+    return null;
+  }
+
+  // 7. Check if hostname belongs to platform roots (e.g. arisoretail.duckdns.org, retail.arisotechnologies.com)
+  const isPlatformHost = RESERVED_PLATFORM_ROOTS.some(
+    root => hostname === root || hostname.endsWith('.' + root)
+  );
+
+  if (isPlatformHost) {
+    // Platform host (POS, Admin, DDNS tunnel, etc.) -> not a merchant custom storefront
+    return null;
+  }
+
+  // 8. Custom merchant domain support (e.g. parkashstore.com, www.parkashstore.com, nimal.in, sham.store)
+  if (hostname.includes('.')) {
+    return hostname;
   }
 
   return null;
@@ -208,8 +244,17 @@ export default function App() {
     reason: null
   });
   const isHandlingSessionExpiryRef = useRef(false);
+  const tokenRef = useRef(token);
+  const userRef = useRef(user);
+
+  useEffect(() => {
+    tokenRef.current = token;
+    userRef.current = user;
+  }, [token, user]);
 
   const handleDismissSessionConflict = () => {
+    isHandlingSessionExpiryRef.current = false;
+    resetForceLogoutFlag();
     setSessionConflictModal({ open: false, message: '', reason: null });
     try {
       window.history.replaceState(null, '', '#/login');
@@ -338,6 +383,9 @@ export default function App() {
       if (!savedToken || !savedUser) {
         return;
       }
+      if (savedToken.startsWith('OFFLINE_TOKEN_')) {
+        return;
+      }
 
       try {
         const parsedUser = JSON.parse(savedUser);
@@ -378,7 +426,6 @@ export default function App() {
     const handleSessionExpired = (e) => {
       // Guard: strictly ensure the forced-logout flow executes only ONCE
       if (isHandlingSessionExpiryRef.current) return;
-      isHandlingSessionExpiryRef.current = true;
 
       const reason = e?.detail?.reason;
       let msg = 'You have been logged out because your account was logged in from another device.';
@@ -387,6 +434,8 @@ export default function App() {
       } else if (reason === 'TOKEN_EXPIRED') {
         msg = 'Your session has expired. Please sign in again.';
       }
+
+      const wasLoggedIn = Boolean(tokenRef.current && userRef.current);
 
       // 1. Cancel background auto-sync and intervals immediately
       try {
@@ -420,12 +469,15 @@ export default function App() {
       setToken('');
       setCurrentView('pos');
 
-      // 5. Present the single modal dialog on top of the Login view
-      setSessionConflictModal({
-        open: true,
-        message: msg,
-        reason
-      });
+      // 5. Present modal ONLY if user was actively logged in
+      if (wasLoggedIn) {
+        isHandlingSessionExpiryRef.current = true;
+        setSessionConflictModal({
+          open: true,
+          message: msg,
+          reason
+        });
+      }
     };
 
     const handleTokenRefreshed = (e) => {
