@@ -1,5 +1,5 @@
 import { db } from './offlineDb.js';
-import { API_BASE_URL, apiFetch } from './api.js';
+import { getBaseUrl, apiFetch } from './api.js';
 
 let syncInterval = null;
 let isSyncingInProgress = false;
@@ -21,10 +21,11 @@ export class SyncService {
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       return false;
     }
+    const baseUrl = getBaseUrl();
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${API_BASE_URL}/health`, {
+      const res = await fetch(`${baseUrl}/health`, {
         method: 'GET',
         signal: controller.signal
       });
@@ -35,7 +36,7 @@ export class SyncService {
       try {
         const controller2 = new AbortController();
         const timeoutId2 = setTimeout(() => controller2.abort(), 3500);
-        const res2 = await fetch(`${API_BASE_URL}/settings/receipt`, {
+        const res2 = await fetch(`${baseUrl}/settings/receipt`, {
           method: 'GET',
           signal: controller2.signal
         });
@@ -54,6 +55,10 @@ export class SyncService {
   static async downloadLatestCatalog(token) {
     if (!token) {
       token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '';
+    }
+    if (token && String(token).startsWith('OFFLINE_TOKEN_')) {
+      console.log('[SyncService] Offline token detected - skipping cloud catalog download');
+      return;
     }
 
     try {

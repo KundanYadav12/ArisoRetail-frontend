@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
+import { getMerchantStoreUrl } from '../../utils/storeUrls';
 
 const PRESET_COLORS = [
   '#ea580c', // Orange (Default Ariso)
@@ -154,7 +155,9 @@ export default function OnlineStoreSettingsTab({ token, onPreviewStore }) {
     );
   }
 
-  const storeUrl = settings?.store_url || (settings?.subdomain ? `https://${settings.subdomain}.arisopos.in` : 'Subdomain not assigned yet');
+  const storeUrl = settings?.subdomain 
+    ? getMerchantStoreUrl(settings.subdomain, settings.domain) 
+    : 'Subdomain not assigned yet';
 
   return (
     <Box component="form" onSubmit={handleSave}>

@@ -49,9 +49,14 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import { apiFetch } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
+import { getMerchantStoreUrl } from '../../utils/storeUrls';
 
 export default function SuperAdminStorefrontManager({ token }) {
   const { notify, confirmDialog } = useNotify();
+
+  const activeBaseDomain = typeof window !== 'undefined' && window.location.hostname.includes('duckdns.org')
+    ? 'arisoretail.duckdns.org'
+    : 'arisopos.in';
 
   const [loading, setLoading] = useState(true);
   const [stores, setStores] = useState([]);
@@ -137,7 +142,7 @@ export default function SuperAdminStorefrontManager({ token }) {
 
     const isConfirmed = await confirmDialog({
       title: 'Confirm Subdomain Assignment',
-      message: `Are you sure you want to assign "https://${subdomainStatus.subdomain}.arisopos.in" to ${selectedMerchant.name}? Any previous subdomain will be replaced.`,
+      message: `Are you sure you want to assign "https://${subdomainStatus.subdomain}.${activeBaseDomain}" to ${selectedMerchant.name}? Any previous subdomain will be replaced.`,
       confirmText: 'Assign Subdomain'
     });
 
@@ -397,10 +402,14 @@ export default function SuperAdminStorefrontManager({ token }) {
             ) : (
               filteredStores.map((merchant) => {
                 const hasSubdomain = Boolean(merchant.subdomain);
-                const hasCustomDomain = Boolean(merchant.custom_domain?.domain);
-                const storeUrl = merchant.custom_domain?.is_active && merchant.custom_domain?.verification_status === 'verified'
-                  ? `https://${merchant.custom_domain.domain}`
-                  : merchant.store_url;
+                const storeUrl = merchant.subdomain || merchant.custom_domain?.domain
+                  ? getMerchantStoreUrl(
+                      merchant.subdomain,
+                      merchant.custom_domain?.is_active && merchant.custom_domain?.verification_status === 'verified'
+                        ? merchant.custom_domain?.domain
+                        : null
+                    )
+                  : null;
 
                 return (
                   <TableRow key={merchant.id} hover>
@@ -601,7 +610,7 @@ export default function SuperAdminStorefrontManager({ token }) {
                 endAdornment: (
                   <InputAdornment position="end">
                     <Typography variant="body2" sx={{ fontWeight: 700, color: '#64748B' }}>
-                      .arisopos.in
+                      .{activeBaseDomain}
                     </Typography>
                   </InputAdornment>
                 )
@@ -618,7 +627,7 @@ export default function SuperAdminStorefrontManager({ token }) {
             ) : subdomainStatus ? (
               subdomainStatus.available ? (
                 <Typography variant="caption" sx={{ color: '#16a34a', fontWeight: 800, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <CheckCircle2 size={14} /> Subdomain "{subdomainStatus.subdomain}.arisopos.in" is valid & available!
+                  <CheckCircle2 size={14} /> Subdomain "{subdomainStatus.subdomain}.{activeBaseDomain}" is valid & available! (Also active on "{subdomainStatus.subdomain}.{activeBaseDomain === 'arisopos.in' ? 'arisoretail.duckdns.org' : 'arisopos.in'}")
                 </Typography>
               ) : (
                 <Typography variant="caption" sx={{ color: '#dc2626', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 0.5 }}>
