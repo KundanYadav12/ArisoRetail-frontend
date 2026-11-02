@@ -402,6 +402,7 @@ export default function SuperAdminStorefrontManager({ token }) {
             ) : (
               filteredStores.map((merchant) => {
                 const hasSubdomain = Boolean(merchant.subdomain);
+                const hasCustomDomain = Boolean(merchant.custom_domain && merchant.custom_domain.domain);
                 const storeUrl = merchant.subdomain || merchant.custom_domain?.domain
                   ? getMerchantStoreUrl(
                       merchant.subdomain,
