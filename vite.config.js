@@ -8,6 +8,13 @@ export default defineConfig({
     target: 'esnext',
     sourcemap: false
   },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'dexie'
+    ]
+  },
   server: {
     port: 3000,
     watch: {

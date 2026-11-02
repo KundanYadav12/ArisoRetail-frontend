@@ -3,7 +3,7 @@ import {
   ThemeProvider, createTheme, CssBaseline, Box, AppBar, Toolbar,
   Typography, Button, IconButton, useMediaQuery, Menu, MenuItem, Chip,
   Tooltip, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider,
-  Dialog, DialogTitle, DialogContent, DialogActions
+  Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress
 } from '@mui/material';
 // Clean Vite HMR trigger
 import MenuIcon from '@mui/icons-material/Menu';
@@ -24,15 +24,19 @@ import VerifiedIcon from '@mui/icons-material/Verified';
 
 import Login from './pages/Login';
 import POSScreen from './pages/POS';
-import CashierDashboard from './pages/CashierDashboard';
-import DayEndDashboard from './components/day_end/DayEndDashboard';
-import PaymentReconciliationSuite from './components/finance/PaymentReconciliationSuite';
-import { ArrowRightLeft, Tag, ChevronDown, MoreHorizontal, X, ShieldAlert, AlertTriangle } from 'lucide-react';
-import AdminPanel from './pages/AdminPanel';
-import SuperAdminPanel from './pages/SuperAdminPanel';
-import SuperBillItems from './pages/SuperBillItems';
-import SuperBillBilling from './pages/SuperBillBilling';
-import StorefrontApp from './storefront/StorefrontApp';
+import { ArrowRightLeft, Tag, ChevronDown, MoreHorizontal, X, ShieldAlert, AlertTriangle, Rocket } from 'lucide-react';
+import AppUpdateModal from './components/AppUpdateModal';
+import { checkAppVersionUpdate } from './utils/updateService';
+
+// Code-split heavy views to prevent network congestion & ERR_INSUFFICIENT_RESOURCES
+const AdminPanel = React.lazy(() => import('./pages/AdminPanel'));
+const SuperAdminPanel = React.lazy(() => import('./pages/SuperAdminPanel'));
+const StorefrontApp = React.lazy(() => import('./storefront/StorefrontApp'));
+const CashierDashboard = React.lazy(() => import('./pages/CashierDashboard'));
+const DayEndDashboard = React.lazy(() => import('./components/day_end/DayEndDashboard'));
+const PaymentReconciliationSuite = React.lazy(() => import('./components/finance/PaymentReconciliationSuite'));
+const SuperBillBilling = React.lazy(() => import('./pages/SuperBillBilling'));
+const SuperBillItems = React.lazy(() => import('./pages/SuperBillItems'));
 import ChangePasswordModal from './components/ChangePasswordModal';
 import LanguageSelectorModal from './components/LanguageSelectorModal';
 import KeyboardHelpModal from './components/KeyboardHelpModal';
@@ -156,10 +160,20 @@ export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || '');
   const [currentView, setCurrentView] = useState(() => {
     try {
-      // 1. Check URL hash (e.g. #/inventory, #/admin, #pos)
+      const savedUserStr = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
+      let parsedUser = null;
+      if (savedUserStr) {
+        try { parsedUser = JSON.parse(savedUserStr); } catch (_) {}
+      }
+      const isSuper = parsedUser && (parsedUser.role === 'super_admin' || parsedUser.role === 'superadmin');
+
+      // 1. Check URL hash (e.g. #/inventory, #/admin, #pos, #superadmin)
       if (typeof window !== 'undefined' && window.location.hash) {
         const cleanHash = window.location.hash.replace(/^#\/?/, '').split('?')[0].split('/')[0].trim().toLowerCase();
         if (cleanHash && VALID_VIEWS.includes(cleanHash)) {
+          if (isSuper && (cleanHash === 'pos' || cleanHash === 'cashier')) {
+            return 'superadmin';
+          }
           return cleanHash;
         }
       }
@@ -168,20 +182,31 @@ export default function App() {
         const sp = new URLSearchParams(window.location.search);
         const qp = (sp.get('view') || sp.get('page') || '').toLowerCase().trim();
         if (qp && VALID_VIEWS.includes(qp)) {
+          if (isSuper && (qp === 'pos' || qp === 'cashier')) {
+            return 'superadmin';
+          }
           return qp;
         }
       }
-      // 3. Check localStorage for previously viewed screen
+
+      // 3. Superadmin always opens Superadmin Dashboard by default
+      if (isSuper) {
+        return 'superadmin';
+      }
+
+      // 4. Warehouse Manager check
+      if (parsedUser && parsedUser.role === 'warehouse_manager') {
+        const savedView = localStorage.getItem('ARISO_RETAIL_CURRENT_VIEW') || localStorage.getItem('ariso_current_view');
+        if (savedView && VALID_VIEWS.includes(savedView) && savedView !== 'pos') {
+          return savedView;
+        }
+        return 'warehouse';
+      }
+
+      // 5. Check localStorage for previously viewed screen for store staff
       const savedView = localStorage.getItem('ARISO_RETAIL_CURRENT_VIEW') || localStorage.getItem('ariso_current_view');
       if (savedView && VALID_VIEWS.includes(savedView)) {
         return savedView;
-      }
-      // 4. Role-based fallback
-      const saved = localStorage.getItem('ARISO_RETAIL_USER') || localStorage.getItem('pos_user');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.role === 'super_admin' || parsed.role === 'superadmin') return 'superadmin';
-        if (parsed.role === 'warehouse_manager') return 'warehouse';
       }
     } catch (e) {}
     return 'pos';
@@ -220,6 +245,64 @@ export default function App() {
   const [posFocusMode, setPosFocusMode] = useState(() => localStorage.getItem('pos_focus_mode') === 'true');
   const [languageModalVisible, setLanguageModalVisible] = useState(false);
   const [keyboardHelpVisible, setKeyboardHelpVisible] = useState(false);
+
+  // Application Version Management & Auto-Update States
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+
+  const triggerManualUpdateCheck = async () => {
+    try {
+      const res = await checkAppVersionUpdate('windows');
+      if (res?.update_available) {
+        setUpdateInfo(res);
+        setUpdateModalOpen(true);
+      } else {
+        alert(res?.message || 'You are on the latest version of Ariso Retail POS.');
+      }
+    } catch (err) {
+      console.warn('[Manual Update Check Failed]', err);
+    }
+  };
+
+  useEffect(() => {
+    const startupTimer = setTimeout(async () => {
+      try {
+        const res = await checkAppVersionUpdate('windows');
+        if (res?.update_available) {
+          setUpdateInfo(res);
+          setUpdateModalOpen(true);
+        }
+      } catch (_) {}
+    }, 3500);
+
+    const intervalTimer = setInterval(async () => {
+      try {
+        const res = await checkAppVersionUpdate('windows');
+        if (res?.update_available) {
+          setUpdateInfo(res);
+          setUpdateModalOpen(true);
+        }
+      } catch (_) {}
+    }, 60 * 60 * 1000);
+
+    const handleRemoteUpdateNotice = async () => {
+      try {
+        const res = await checkAppVersionUpdate('windows');
+        if (res?.update_available) {
+          setUpdateInfo(res);
+          setUpdateModalOpen(true);
+        }
+      } catch (_) {}
+    };
+
+    window.addEventListener('ariso_check_update', handleRemoteUpdateNotice);
+
+    return () => {
+      clearTimeout(startupTimer);
+      clearInterval(intervalTimer);
+      window.removeEventListener('ariso_check_update', handleRemoteUpdateNotice);
+    };
+  }, []);
 
   // Shared POS / SuperBill Cart & Checkout States (restored on refresh)
   const [cart, setCart] = useState(() => {
@@ -414,8 +497,10 @@ export default function App() {
               localStorage.setItem('ARISO_RETAIL_USER', JSON.stringify(data.user));
               localStorage.setItem('pos_user', JSON.stringify(data.user));
             }
-            // Background preload / sync catalog
-            SyncService.downloadLatestCatalog(savedToken).catch(() => {});
+            // Background preload / sync catalog (store tenants only)
+            if (!['super_admin', 'superadmin'].includes(data.user?.role)) {
+              SyncService.downloadLatestCatalog(savedToken).catch(() => {});
+            }
           } else if (res && (res.status === 401 || res.status === 403)) {
             console.warn('[Session Sync] Server returned status', res.status, '- session is expired or invalid. Resetting to login.');
             handleLogout();
@@ -934,16 +1019,23 @@ export default function App() {
     </Dialog>
   );
 
-  // 0. Public Customer Storefront (Subdomain or ?store= query param for unauthenticated users)
-  if (storeSubdomain && !isStaffLoginMode && (!token || !user)) {
+  // 0. Public Customer Storefront (Subdomain or ?store= query param)
+  if (storeSubdomain && !isStaffLoginMode) {
     return (
       <NotificationProvider>
         <ThemeProvider theme={muiTheme}>
           <CssBaseline />
-          <StorefrontApp
-            subdomain={storeSubdomain}
-            onOpenStaffLogin={() => setIsStaffLoginMode(true)}
-          />
+          <React.Suspense fallback={
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 2, bgcolor: '#f8fafc' }}>
+              <CircularProgress color="primary" />
+              <Typography variant="body2" color="text.secondary">Loading store...</Typography>
+            </Box>
+          }>
+            <StorefrontApp
+              subdomain={storeSubdomain}
+              onOpenStaffLogin={() => setIsStaffLoginMode(true)}
+            />
+          </React.Suspense>
         </ThemeProvider>
       </NotificationProvider>
     );
@@ -1423,6 +1515,9 @@ export default function App() {
                       {themeMode === 'light' ? <Brightness4Icon fontSize="small" /> : <Brightness7Icon fontSize="small" />}
                       {themeMode === 'light' ? 'Dark Mode' : 'Light Mode'}
                     </MenuItem>
+                    <MenuItem onClick={() => { setAnchorElUserMenu(null); triggerManualUpdateCheck(); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem' }}>
+                      <Rocket size={18} color="#ea580c" /> Check for Updates
+                    </MenuItem>
                     <Divider sx={{ my: 0.5 }} />
                     <MenuItem onClick={() => { setAnchorElUserMenu(null); handleLogout(); }} sx={{ borderRadius: 1.5, py: 0.9, gap: 1.25, fontSize: '0.85rem', color: 'error.main', fontWeight: 600 }}>
                       <LogOutIcon fontSize="small" /> Logout
@@ -1853,31 +1948,48 @@ export default function App() {
 
           {/* View Content */}
           <Box ref={contentLockRef} sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
+            <React.Suspense fallback={
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 300 }}>
+                <CircularProgress />
+              </Box>
+            }>
             {currentView === 'pos' && (
-              <POSScreen
-                user={user}
-                token={token}
-                onLogout={handleLogout}
-                isFocusMode={posFocusMode}
-                onFocusModeChange={handleFocusModeChange}
-                cart={cart}
-                setCart={setCart}
-                discountType={discountType}
-                setDiscountType={setDiscountType}
-                discountValue={discountValue}
-                setDiscountValue={setDiscountValue}
-                paymentMode={paymentMode}
-                setPaymentMode={setPaymentMode}
-                taxType={taxType}
-                setTaxType={setTaxType}
-                receiptSettings={receiptSettings}
-                setReceiptSettings={setReceiptSettings}
-                pricingMode={pricingMode}
-                onPricingModeChange={handleGlobalPricingModeChange}
-                onNavigate={setCurrentView}
-                netStatus={netStatus}
-                onManualSync={() => SyncService.triggerManualSync(token)}
-              />
+              isSuperAdmin && !user?.restaurant_id ? (
+                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', p: 4, textAlign: 'center' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 800, mb: 1, color: 'primary.main' }}>Super Administrator Mode</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 480, mb: 3 }}>
+                    The POS Terminal is designed for store staff and requires an active store tenant context. Please use the Superadmin Dashboard to manage stores, tenants, and application updates.
+                  </Typography>
+                  <Button variant="contained" onClick={() => setCurrentView('superadmin')}>
+                    Go to Superadmin Dashboard
+                  </Button>
+                </Box>
+              ) : (
+                <POSScreen
+                  user={user}
+                  token={token}
+                  onLogout={handleLogout}
+                  isFocusMode={posFocusMode}
+                  onFocusModeChange={handleFocusModeChange}
+                  cart={cart}
+                  setCart={setCart}
+                  discountType={discountType}
+                  setDiscountType={setDiscountType}
+                  discountValue={discountValue}
+                  setDiscountValue={setDiscountValue}
+                  paymentMode={paymentMode}
+                  setPaymentMode={setPaymentMode}
+                  taxType={taxType}
+                  setTaxType={setTaxType}
+                  receiptSettings={receiptSettings}
+                  setReceiptSettings={setReceiptSettings}
+                  pricingMode={pricingMode}
+                  onPricingModeChange={handleGlobalPricingModeChange}
+                  onNavigate={setCurrentView}
+                  netStatus={netStatus}
+                  onManualSync={() => SyncService.triggerManualSync(token)}
+                />
+              )
             )}
             {currentView === 'superbill_billing' && user?.feature_superbill && (
               <Box sx={{ flex: 1, height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
@@ -1972,9 +2084,15 @@ export default function App() {
                 </Button>
               </Box>
             )}
+            </React.Suspense>
           </Box>
         </Box>
         {renderSessionConflictDialog()}
+        <AppUpdateModal
+          open={updateModalOpen}
+          updateInfo={updateInfo}
+          onClose={() => setUpdateModalOpen(false)}
+        />
       </ThemeProvider>
       </DataRefreshProvider>
       </NotificationProvider>

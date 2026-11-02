@@ -141,6 +141,16 @@ export function DataRefreshProvider({ children, token }) {
       if (!unmountedRef.current) setSettingsVersion(v => v + 1);
     });
 
+    es.addEventListener('app_version_published', (e) => {
+      console.log('[DataRefresh] Application update published by Superadmin. Triggering update check...');
+      try {
+        const payload = e.data ? JSON.parse(e.data) : {};
+        window.dispatchEvent(new CustomEvent('ariso_check_update', { detail: payload }));
+      } catch (_) {
+        window.dispatchEvent(new CustomEvent('ariso_check_update'));
+      }
+    });
+
     es.onerror = () => {
       if (unmountedRef.current) return;
       setIsConnected(false);
