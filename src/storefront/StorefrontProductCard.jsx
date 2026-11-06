@@ -9,7 +9,7 @@ import {
   Chip
 } from '@mui/material';
 import { Plus, Minus, Image as ImageIcon } from 'lucide-react';
-import { resolveImageUrl } from './storefrontApi';
+import { resolveImageUrl, resolveThumbnailUrl } from './storefrontApi';
 
 export default function StorefrontProductCard({
   product,
@@ -108,8 +108,10 @@ export default function StorefrontProductCard({
         {product.image_url ? (
           <Box
             component="img"
-            src={resolveImageUrl(product.image_url)}
+            src={resolveThumbnailUrl ? resolveThumbnailUrl(product.image_url) : resolveImageUrl(product.image_url)}
             alt={product.name}
+            loading="lazy"
+            decoding="async"
             sx={{
               maxWidth: '85%',
               maxHeight: '85%',

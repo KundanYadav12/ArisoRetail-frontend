@@ -130,6 +130,18 @@ export function resolveImageUrl(path) {
   return `${host}${formattedPath}`;
 }
 
+export function resolveThumbnailUrl(path) {
+  if (!path) return '';
+  const full = resolveImageUrl(path);
+  if (!full || full.startsWith('data:') || full.startsWith('blob:') || full.startsWith('file:')) {
+    return full;
+  }
+  if (full.includes('-thumb.')) {
+    return full;
+  }
+  return full.includes('?') ? `${full}&thumb=1` : `${full}?thumb=1`;
+}
+
 let isRefreshing = false;
 let failedQueue = [];
 
@@ -239,8 +251,12 @@ export async function apiFetch(url, options = {}) {
     headers
   };
 
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
   // Attach timeout controller if no custom signal provided to prevent hanging requests when network is dead
-  const timeoutMs = options.timeout !== undefined ? options.timeout : (fullUrl.includes('/printers') ? 10000 : 4500);
+  // For binary/FormData file uploads, default to no timeout (0) to allow large packages to finish uploading safely
+  const defaultTimeout = isFormData ? 0 : (fullUrl.includes('/printers') ? 15000 : 25000);
+  const timeoutMs = options.timeout !== undefined ? options.timeout : defaultTimeout;
   const controller = typeof AbortController !== 'undefined' && !options.signal && timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   if (controller) {
@@ -254,8 +270,19 @@ export async function apiFetch(url, options = {}) {
     if (timeoutId) clearTimeout(timeoutId);
   } catch (netErr) {
     if (timeoutId) clearTimeout(timeoutId);
-    // Automatic Network Failover to Local Gateway when internet or cloud fails
-    if (!fullUrl.includes('localhost') && !fullUrl.includes('127.0.0.1')) {
+
+    const isDesktopApp = typeof window !== 'undefined' && (!!window.electron || !!window.electronAPI || window.location.protocol === 'file:');
+    const isHttpsWeb = typeof window !== 'undefined' && window.location.protocol === 'https:' && !isDesktopApp;
+    const isAbort = netErr && (netErr.name === 'AbortError' || netErr.message?.includes('aborted'));
+
+    // Automatic Network Failover to Local Gateway ONLY when:
+    // 1. Not an explicit abort/timeout cancellation
+    // 2. Not a FormData upload (cannot route aborted large binary uploads to localhost)
+    // 3. Not in HTTPS web browser (browsers block mixed content HTTP to localhost)
+    // 4. Target is not already localhost/127.0.0.1
+    const canFallback = !isAbort && !isFormData && !isHttpsWeb && !fullUrl.includes('localhost') && !fullUrl.includes('127.0.0.1');
+
+    if (canFallback) {
       const localFallbackUrl = fullUrl.replace(/^https?:\/\/[^\/]+/, 'http://localhost:5005');
       try {
         console.warn(`[API Network Failover] Cloud connection lost. Route fallback -> ${localFallbackUrl}`);

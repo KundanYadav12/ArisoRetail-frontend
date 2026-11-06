@@ -5,9 +5,9 @@
  * and order status tracking.
  */
 
-import { getApiUrl, resolveImageUrl } from '../utils/api';
+import { getApiUrl, resolveImageUrl, resolveThumbnailUrl } from '../utils/api';
 
-export { resolveImageUrl };
+export { resolveImageUrl, resolveThumbnailUrl };
 
 export async function resolveStorefront(subdomain) {
   const url = getApiUrl(`/api/store/resolve/${encodeURIComponent(subdomain)}`);
