@@ -1,7 +1,7 @@
 import { apiFetch } from './api';
 
-const CURRENT_DESKTOP_VERSION = '1.0.0';
-const CURRENT_MOBILE_VERSION = '1.0.0';
+const CURRENT_DESKTOP_VERSION = '1.1.0';
+const CURRENT_MOBILE_VERSION = '1.1.0';
 
 /**
  * Get the currently installed version

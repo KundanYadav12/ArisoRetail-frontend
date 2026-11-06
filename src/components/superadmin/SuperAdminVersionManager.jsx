@@ -11,7 +11,7 @@ import {
   AlertTriangle, ShieldAlert, Download, Copy, Trash2, Edit2,
   ExternalLink, FileCode, Clock, Tag
 } from 'lucide-react';
-import { apiFetch } from '../../utils/api';
+import { apiFetch, getApiUrl } from '../../utils/api';
 import { useNotify } from '../../context/NotificationContext';
 
 export default function SuperAdminVersionManager({ token }) {
@@ -132,28 +132,73 @@ export default function SuperAdminVersionManager({ token }) {
 
       if (packageSourceTab === 0 && selectedFile) {
         formData.append('package', selectedFile);
+
+        // Upload using XMLHttpRequest for real-time progress events and unrestricted payload upload time
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          const targetUrl = getApiUrl('/api/superadmin/app-versions');
+          const token = localStorage.getItem('ARISO_RETAIL_TOKEN') || localStorage.getItem('pos_token') || sessionStorage.getItem('token');
+
+          xhr.open('POST', targetUrl, true);
+          if (token) {
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+          }
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && event.total > 0) {
+              const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
+              setUploadProgress(percent);
+            }
+          };
+
+          xhr.onload = () => {
+            let resJson = {};
+            try {
+              resJson = JSON.parse(xhr.responseText || '{}');
+            } catch (_) {}
+
+            if (xhr.status >= 200 && xhr.status < 300) {
+              setUploadProgress(100);
+              notify(resJson.message || 'Version published successfully!', 'success');
+              setCreateOpen(false);
+              fetchVersions();
+              resolve(resJson);
+            } else {
+              const errMsg = resJson.error || resJson.message ||
+                (xhr.status === 413 ? 'Package file too large for server. Check server upload limits.' : `Server error: ${xhr.status}`);
+              reject(new Error(errMsg));
+            }
+          };
+
+          xhr.onerror = () => {
+            reject(new Error('Network error during file upload. Please verify server connection and reverse-proxy upload limits.'));
+          };
+
+          xhr.send(formData);
+        });
       } else {
         formData.append('download_url', formDownloadUrl.trim());
         if (formChecksum.trim()) {
           formData.append('checksum_sha256', formChecksum.trim());
         }
-      }
 
-      setUploadProgress(40);
-      const res = await apiFetch('/api/superadmin/app-versions', {
-        method: 'POST',
-        body: formData
-      });
+        setUploadProgress(50);
+        const res = await apiFetch('/api/superadmin/app-versions', {
+          method: 'POST',
+          body: formData,
+          timeout: 60000
+        });
 
-      setUploadProgress(90);
-      const resJson = await res.json();
+        setUploadProgress(100);
+        const resJson = await res.json();
 
-      if (res.ok) {
-        notify(resJson.message || 'Version published successfully!', 'success');
-        setCreateOpen(false);
-        fetchVersions();
-      } else {
-        notify(resJson.error || 'Failed to create application version.', 'error');
+        if (res.ok) {
+          notify(resJson.message || 'Version published successfully!', 'success');
+          setCreateOpen(false);
+          fetchVersions();
+        } else {
+          notify(resJson.error || 'Failed to create application version.', 'error');
+        }
       }
     } catch (err) {
       notify(`Upload failed: ${err.message}`, 'error');

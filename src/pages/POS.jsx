@@ -54,6 +54,7 @@ import {
   fetchPrinters,
   createOrder,
   resolveImageUrl,
+  resolveThumbnailUrl,
   fetchCustomers,
   fetchPendingOrders,
   confirmPendingOrder,
@@ -3681,11 +3682,13 @@ export default function POS({
                       onContextMenu={(e) => handleProductContextMenu(product, e)}
                       onClick={(e) => handleProductClick(product, e)}
                     >
-                      {/* Product Image Tile */}
+                      {/* Product Image Tile (Optimized Thumbnail & Lazy Loaded) */}
                       {product.image_url && (
                         <img
-                          src={resolveImageUrl(product.image_url)}
+                          src={resolveThumbnailUrl ? resolveThumbnailUrl(product.image_url) : resolveImageUrl(product.image_url)}
                           alt={product.name}
+                          loading="lazy"
+                          decoding="async"
                           style={{
                             position: 'absolute',
                             top: 0,
@@ -3697,11 +3700,9 @@ export default function POS({
                             pointerEvents: 'none',
                           }}
                           onError={(e) => {
-                            const raw = String(product.image_url || '').trim();
-                            const clean = raw.startsWith('/') ? raw.slice(1) : raw;
                             if (!e.currentTarget.dataset.retried) {
                               e.currentTarget.dataset.retried = 'true';
-                              e.currentTarget.src = './' + clean;
+                              e.currentTarget.src = resolveImageUrl(product.image_url);
                             } else {
                               e.currentTarget.style.display = 'none';
                             }
